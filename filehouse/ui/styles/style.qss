@@ -1,0 +1,28 @@
+/* Clean modern styling for FileHouse */
+
+QTreeView, QTableView, QPlainTextEdit {
+    font-size: 13px;
+    selection-background-color: #2675bf;
+    selection-color: #ffffff;
+}
+
+QTableView {
+    gridline-color: #e0e0e0;
+}
+
+QHeaderView::section {
+    padding: 4px 8px;
+    font-weight: 500;
+}
+
+QSplitter::handle {
+    background-color: #d0d0d0;
+}
+
+QSplitter::handle:horizontal {
+    width: 2px;
+}
+
+QStatusBar {
+    font-size: 12px;
+}
