@@ -282,7 +282,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is planned and not started.
 
 ### Phase 0: skeleton and integration basics
 
@@ -358,10 +358,89 @@ The tests use `/dev/shm` as the second file system when it is one, and also alwa
 - **Properties** (Alt+Return) reads one file with `core/properties.py` and adds up folders on a worker thread, links not followed. For several items it shows the totals. It is read only.
 - **Remembered** in `$XDG_CONFIG_HOME/filehouse/filehouse.conf`: window size (saved when a window closes), view mode and whether hidden files are shown.
 
+### Phase 6: the new design
+
+The design is six pictures in `desing/` (not in git): a wide window with three panes, and a narrow window with its menus and sheets. This phase brings the app to that design. It is split into steps that each leave the app usable, ordered so that restyling what exists comes first and new behaviour after.
+
+The custom title bar in the pictures is **not** part of this phase. It is a decision of its own, in issue #9; every step below works under KWin's normal title bar.
+
+**Theme in this phase.** Everything the design needs is already in the shell's `theme.json` (`docs/THEME.md` in the shell repo), so nothing has to be added to the theme:
+
+- **Icon tiles** take their colours from `colors.palette` (green, blue, orange, yellow, red, purple, cyan, indigo), which the theme provides "for categories and decoration". The app decides which place and which kind of file gets which palette colour; the colour values are the shell's. A tile is the palette colour at low opacity with the icon in the full colour.
+- **Selection, focus and the progress bar** use `colors.accent`, which the user picks in the shell's settings, with `colors.onAccent` on top of it. Status colours come from `success`, `warning` and `danger`, never from the palette.
+- **Corners** use `radius.small`, `medium` and `large`. These follow the user's corner roundness setting, so the window only looks as round as the pictures when the shell is set to "Round". The app does not hard-code the pictures' radii.
+- **Light scheme.** The shell has an experimental light mode and exports `scheme` with matching colours. Nothing in the app may assume a dark background: translucent overlays (hover, dividers) are derived from the text colour, not from white.
+- **Reader.** `integration/theme.py` currently defaults `palette` to empty and keeps whatever entries the file has without checking them. It gets the full default palette and the same colour check as the other colours, so the tiles work with no theme file.
+
+**6a. Restyle what exists.** No new behaviour.
+
+- Toolbar as rounded groups: back/forward/up, the breadcrumb, the action icons (copy, move, rename, trash), the list/grid switch.
+- Sidebar as a rounded card: a coloured icon tile per place, and a "Devices" heading above the drives.
+- List rows: taller, with an icon tile per file and a rounded highlight for the selection.
+- Menus: an icon per entry, shortcuts on the right, "Move to trash" in the danger colour.
+- Status bar text: "11 items · Dock.qml selected".
+
+**Done when:** the wide window matches the picture apart from the title bar, the details pane and the columns.
+
+**6b. Columns and list menus.**
+
+- Columns Name, Permissions (`rwxr-xr-x`), Modified, Size. Type moves to the details pane.
+- Modified as "Today, 10:42", "Yesterday", a weekday within the last week, then a date.
+- Size of a folder as "24 items", counted in the background after the folder is listed, so listing stays fast.
+- Folder menu: Select all, Sort by, View.
+
+**Done when:** a folder of 10 000 files still lists as fast as before, and the counts fill in afterwards.
+
+**6c. Details pane.**
+
+- A pane on the right for the selection: icon, name, type, modified, size, owner, the permissions grid (read, write, run for owner, group, others) and an Open button.
+- With nothing selected it shows the open folder; with several items, their count and total size.
+- It reuses `core/properties.py` and the folder measuring from phase 5. The Properties dialog stays for now and is removed once the pane covers everything it shows.
+
+**Done when:** selecting a file shows its details without opening a dialog.
+
+**6d. Jobs in the status bar.**
+
+- The status bar shows the running job as one line: title, progress bar, percentage; with several jobs, the count.
+- Clicking it opens the existing operations panel, which stays the place for cancel, retry, details and for failures. A failed job or a waiting question opens the panel by itself.
+
+**Done when:** a copy shows in the status bar as in the picture, and nothing the panel does today is lost.
+
+**6e. Narrow window.**
+
+- Below a width to be chosen, the window changes layout: the sidebar becomes an icon rail, the breadcrumb shortens to "… › parent › folder", the action icons move to a floating bar at the bottom, and the details pane becomes a sheet that slides up.
+- A "⋯" button opens the folder menu.
+
+**Done when:** resizing the window across the width switches between the two layouts without losing the selection or the place in the list.
+
+**6f. Small additions from the menus.**
+
+- Copy path.
+- Open terminal here (the default terminal; hidden when none is found).
+- New file.
+- A usage bar per drive in the sidebar.
+- "Move" in the toolbar: move the selection to a folder that is picked.
+
+**6g. Changing permissions.**
+
+- The four presets from the pictures, from the Permissions submenu and the lock button: Private 600, Shared 664, Make executable 755, Read-only 444.
+- It changes files, so it goes through the core with the same error type and tests as every other operation.
+
+**Left for later:** search (the field in the toolbar) and Compress. Both are on the "Later" list already, and both are features of their own.
+
+**Open questions for this phase**
+
+1. ~~Colours of the icon tiles~~ Decided: from the theme's `colors.palette`, see "Theme in this phase". Which colour goes with which place and file type is fixed in the app.
+2. **Folder presets.** 600 or 444 on a folder makes it impossible to open. Do folders get their own presets (700, 775, 755, 555), and is a preset applied to what is inside a folder as well?
+3. **The permissions grid.** Is it only a display, or are the dots switches?
+4. **The width at which the layout changes**, and whether the user can force one layout.
+5. **Properties dialog.** Remove it when the details pane is done, or keep it for several items?
+6. **New file.** An empty file with a typed name, or a list of templates as the submenu arrow suggests?
+
 ### Later
 
 - Live theme updates (file watch on the theme directory).
-- Optional custom titlebar when the shell is detected (#21 comment).
+- Custom title bar: a decision of its own, see issue #9 (and #21 comment in the shell repo).
 - Recent files written to the freedesktop recent-files list, for the shell's launcher (#24, point 4).
 - A notification for a job that finished while the window was hidden (#24, point 7).
 - Undo for rename, move and trash.
@@ -382,3 +461,5 @@ The tests use `/dev/shm` as the second file system when it is one, and also alwa
 2. ~~A job with skipped items~~ Decided: `failed` when items were skipped after an error; conflict skips still end as `done`.
 3. ~~Closing with running jobs~~ Decided: closing the last window offers "Keep running", "Cancel N operations" and "Don't close"; the process exits when the jobs have ended.
 4. ~~The app's real name and app id~~ Decided: `filehouse`.
+5. **Custom title bar:** issue #9.
+6. The open questions listed under phase 6.
