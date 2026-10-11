@@ -181,7 +181,9 @@ This is the part that has to be right. Every user action that changes files beco
 2. **Running.** Execute steps in order. Files copy with `Gio.File.copy(..., progress_callback, cancellable)`, without `OVERWRITE` unless the user chose Replace. Progress is bytes done over bytes planned, so one large file doesn't stall the bar.
 3. **Finishing.** The job reports `done` only when every step finished. Anything else is `cancelled` or `failed`.
 
-**Moves.** Call `Gio.File.move` with `G_FILE_COPY_NO_FALLBACK_FOR_MOVE` first, so Gio never does its own copy-and-delete. On the same file system that is an atomic rename. If it fails with `NOT_SUPPORTED` (different file system), the job does a copy of that item and deletes the source only after the copy of that item completed. A cancelled or failed cross-device move therefore never loses data: each source is either still in place or fully at the destination.
+**Moves.** Call `Gio.File.move` with `G_FILE_COPY_NO_FALLBACK_FOR_MOVE` first, so Gio never does its own copy-and-delete. On the same file system that is an atomic rename. If it fails with `NOT_SUPPORTED` (different file system), the job copies per file: each source file is deleted as soon as its own copy has completed, so the move needs no free space beyond the file in progress. Source directories are removed last, and only when empty (never recursively), so a folder holding skipped, failed or unmoved files stays in place. A cancelled or failed cross-device move therefore never loses data: each source file is either still in place or fully at the destination, but a folder may end up split between the two. Running the move again picks up the rest.
+
+**Symlinks.** A symbolic link is copied as a link, never followed. The planner classifies items with `query_info(..., NOFOLLOW_SYMLINKS)`, so a link to a folder is one "copy link" step and the planner never walks into it. Copy uses `Gio.File.copy` with `NOFOLLOW_SYMLINKS`, so the new link has the same target text (a relative link may point somewhere else, or nowhere, from its new place). A same-device move renames the link; a cross-device move copies the link and then deletes the source link, never its target. Trash and permanent delete act on the link, not the target. A link counts as zero bytes for progress.
 
 **Cancel.** Each job has a `Gio.Cancellable`. Cancelling:
 
@@ -189,7 +191,7 @@ This is the part that has to be right. Every user action that changes files beco
 - reports `cancelled` with a summary: "Cancelled after 5 of 12 files" for copy and move, "Moved 5 of 12 files to the trash" for trash;
 - is acknowledged in the UI within a fraction of a second, even mid-file, because `Gio.File.copy` checks the cancellable between chunks.
 
-**Errors.** Every failure is an `OperationError(path, step, message)`, built from the `GLib.Error` with a readable message ("permission denied", "no space left on device", "file name too long"). On an error the job pauses in *waiting for user* and the app asks: Skip, Skip all, Retry, or Cancel. Skipped items are counted, and a job that finishes with skips ends as `done` with "Copied 10 of 12 files, 2 skipped" in its text. **Open decision:** whether a job with skips should end as `done` or `failed`. The rule "never imply it finished when it did not" suggests `failed`, or a `done` whose title states the skips.
+**Errors.** Every failure is an `OperationError(path, step, message)`, built from the `GLib.Error` with a readable message ("permission denied", "no space left on device", "file name too long"). On an error the job pauses in *waiting for user* and the app asks: Skip, Skip all, Retry, or Cancel. Skipped items are counted, and a job that finishes with skipped errors ends as `failed` with "Copied 10 of 12 files, 2 skipped" in its text, and Retry is offered for the skipped items. Items skipped by choosing Skip in the conflict dialog are intentional and don't count: a job whose only skips are conflict skips still ends as `done`.
 
 **Conflicts.** When a destination exists: Replace, Skip, Keep both (append " (2)" before the extension), each with an "apply to all" option. Replace on a folder merges, it doesn't delete the existing folder. Conflicts are found during planning where possible, so the user answers before the long part starts.
 
@@ -291,11 +293,12 @@ Each phase ends with something usable and checked by hand. The core gets tests f
 - pytest suite against temporary folders, covering at least:
   - copy and move of nested folders, with byte-based progress;
   - cancel mid-file removes only the partial file and reports how far it got;
-  - a cross-device move cancelled or failed halfway leaves every source either in place or complete at the destination (use a tmpfs or a second temporary mount when available, otherwise force the copy-and-delete path);
+  - a cross-device move cancelled or failed halfway leaves every source file either in place or complete at the destination, a folder may be split between the two, and a source directory that still holds files is not removed (use a tmpfs or a second temporary mount when available, otherwise force the copy-and-delete path);
   - a permission error names the file;
   - copying a folder into itself fails during planning;
   - Keep both picks a free name;
-  - `done` is never reported when any step was skipped or failed (whatever the decision above).
+  - copy and move of a file link, a folder link, a broken link and a link to a parent folder: each is copied as a link, the planner doesn't recurse into it, and the target is never read or changed (including after a cross-device move deletes the source link);
+  - `done` is never reported when any step failed or was skipped after an error; the job ends as `failed`. Items skipped through a conflict choice don't prevent `done`.
 
 **Done when:** the suite passes; no UI yet.
 
@@ -342,6 +345,6 @@ Each phase ends with something usable and checked by hand. The core gets tests f
 ## Open decisions
 
 1. ~~Widgets or Qt Quick~~ Decided: Qt Widgets.
-2. **A job with skipped items:** `done` with the skips in its title, or `failed`. Decide before phase 2.
+2. ~~A job with skipped items~~ Decided: `failed` when items were skipped after an error; conflict skips still end as `done`.
 3. **Closing with running jobs:** allow "keep running in the background", or require cancelling. Decide in phase 3.
 4. ~~The app's real name and app id~~ Decided: `filehouse`.
