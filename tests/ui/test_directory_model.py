@@ -127,3 +127,20 @@ def test_proxy_sorts_by_size(qtbot, model, tmp_path):
     load(qtbot, model, tmp_path)
 
     assert names(proxy) == ["small", "medium", "big"]
+
+
+def test_a_file_renamed_right_after_it_is_created_leaves_no_ghost(qtbot, model, tmp_path):
+    load(qtbot, model, tmp_path)
+    answers = []
+    on_info = model._on_info
+    # Hold back the answers about files, as a busy system would
+    model._on_info = lambda *args: answers.append(args)
+    (tmp_path / ".part").write_text("x")
+    qtbot.waitUntil(lambda: len(answers) >= 1, timeout=5000)
+    (tmp_path / ".part").rename(tmp_path / "final.txt")
+    qtbot.waitUntil(lambda: any(a[0].get_basename() == "final.txt" for a in answers), timeout=5000)
+
+    for args in answers:
+        on_info(*args)
+
+    assert names(model) == ["final.txt"]

@@ -2,8 +2,7 @@ import os
 from pathlib import Path
 
 import pytest
-from conftest import not_supported
-from helpers import make_tree, never_done, read_tree, run_job
+from helpers import make_tree, never_done, not_supported, read_tree, run_job
 
 from filehouse.core.operations import (
     Answer,

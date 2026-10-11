@@ -126,9 +126,13 @@ class Job:
             self.summary = "Cancelled before it started"
         self._notify()
 
+    @property
+    def can_retry(self):
+        return self._state is JobState.FAILED and any(step.failed for step in self._steps)
+
     def retry(self):
         """A new job for the items this one failed on, or None when there are none."""
-        if self._state is not JobState.FAILED:
+        if not self.can_retry:
             return None
         items = []
         for step in self._steps:
@@ -138,8 +142,6 @@ class Job:
                 step = step.parent
             folder = step.parent.dest if step.parent is not None else step.folder
             items.append((step.source, folder, step.name))
-        if not items:
-            return None
         job = Job(self.kind, [], self.destination, prompt=self._prompt, on_change=self.on_change)
         job.sources = [source for source, _folder, _name in items]
         job._items = items
@@ -393,6 +395,7 @@ class Job:
         if self._prompt is None:
             return None
         before = self._state
+        question.job = self
         self._set_state(JobState.WAITING)
         try:
             reply = self._prompt(question)

@@ -6,8 +6,10 @@ It does not try to replace Dolphin. It covers everyday browsing and hands off to
 
 ## Status: 0.1 alpha
 
-Browsing works. File operations (copy, move, delete, rename) are not implemented yet.
+Browsing and file operations work. Progress in the shell's island is not implemented yet.
 
+- Copy, cut and paste, drag and drop, move to trash, permanent delete, rename and new folder
+- Operations run in the background, with progress, cancel, retry and error details in a panel at the bottom of the window
 - Details view with sorting: folders first, then natural order by name
 - Folders load in batches on a worker thread and follow changes made elsewhere
 - Breadcrumb path bar, editable with a click or Ctrl+L
@@ -56,6 +58,11 @@ install -Dm644 data/filehouse.desktop ~/.local/share/applications/filehouse.desk
 | Ctrl+L | Edit the location |
 | Ctrl+H | Show hidden files |
 | F5 | Reload |
+| Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, paste |
+| Delete | Move to trash |
+| Shift+Delete | Delete permanently (asks first) |
+| F2 | Rename |
+| Ctrl+Shift+N | New folder |
 | Ctrl+W | Close the window |
 
 ## Tests

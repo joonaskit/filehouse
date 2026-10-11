@@ -106,13 +106,14 @@ filehouse/
 │   │       ├── copy.py          copy and move (same-device rename, cross-device copy+delete)
 │   │       ├── trash.py         trash (restore is added in phase 5)
 │   │       ├── delete.py        permanent delete
-│   │       ├── conflicts.py     conflict detection and resolution policy
+│   │       ├── conflicts.py     the questions a job asks, answers, names for "Keep both"
+│   │       ├── quick.py         new folder and rename: immediate, no job
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
 │   │   ├── icons.py             icon and description per content type
-│   │   ├── job_model.py         list model of jobs, fed by worker threads
-│   │   └── workers.py           thread pool glue
+│   │   ├── job_model.py         all jobs of the process, fed by worker threads; titles and texts
+│   │   └── workers.py           the thread pool jobs run on
 │   ├── integration/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
@@ -124,7 +125,9 @@ filehouse/
 │       ├── path_bar.py          breadcrumbs, editable on click or Ctrl+L
 │       ├── folder_view.py       list and grid modes, delegates
 │       ├── operations_panel.py  in-app list of jobs, with cancel, retry and details
-│       └── dialogs/             conflict, confirm delete, properties, rename
+│       ├── clipboard.py         cut, copy and paste of files as `text/uri-list`
+│       └── dialogs/             questions (conflict, error, no trash, confirm delete) and the
+│                                prompter that shows them, name (rename, new folder), details
 └── tests/
     ├── core/                    copy, move, trash, cancel, failure, conflicts against tmp dirs
     └── integration/             island reporter against a fake bus, theme reader
@@ -205,11 +208,13 @@ This is the part that has to be right. Every user action that changes files beco
 
 ### Job model and in-app panel
 
-`JobModel` holds all jobs from this process. Worker threads report through queued signals; the model throttles UI updates to about 10 per second per job.
+`JobModel` holds all jobs from this process: one instance, made in `app.py` and given to every window. It is a `QObject` with signals (`job_added`, `job_changed`, `job_removed`, `question_asked`, `idle`), not an item model, because its observers are a panel of widgets and the island reporter. Worker threads report through queued signals; the model passes on every state change and otherwise at most about 10 updates per second per job. It also decides how long an ended job stays listed: finished and cancelled jobs for a few seconds, failed jobs until dismissed. Retry replaces the failed job with a new one for the failed items.
 
-The **operations panel** is a collapsible strip at the bottom of the window. It shows every job with its title, text, progress and Cancel, keeps finished jobs briefly and failed jobs until dismissed, and opens a details view listing every error. This panel is the primary progress display. The island mirrors it.
+The **operations panel** is a collapsible strip at the bottom of the window. It shows every job with its title, text, progress and Cancel, and for a failed job Retry, Details (every error) and Dismiss. Each window has a panel and they all show the same jobs. This panel is the primary progress display. The island mirrors it.
 
-**Closing a window with jobs running** asks: "Cancel N operations" or "Keep running". Keep running hides the window and lets the process exit when the queue is empty; the island keeps showing progress meanwhile. If that turns out to be confusing, v1 can simply require cancelling.
+**Questions.** One `Prompter` listens to `JobModel.question_asked` and shows one question at a time as a window-modal message box on the window that started the job, or on the active window when that one is gone. If the job is cancelled meanwhile the box closes; if the box's window is closed the question is asked again on another window. Closing a box without choosing cancels the job.
+
+**Closing a window with jobs running.** Jobs belong to the process, so only closing the last window asks: "Keep running", "Cancel N operations" or "Don't close". With either of the first two the window hides and the process exits once every job has ended, because a cancelled job still has to stop and clean up. The island keeps showing progress meanwhile.
 
 ### Island integration (`integration/island.py`)
 
@@ -269,7 +274,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phase 2 is implemented and tested. Phase 3 is next.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2 and 3 are implemented and tested. Phase 4 is next.
 
 ### Phase 0: skeleton and integration basics
 
@@ -346,9 +351,17 @@ The tests use `/dev/shm` as the second file system when it is one, and also alwa
 - Remote locations through GVFS, search, archive extraction (each extraction a job, so it reuses the activity mapping).
 - Video and PDF thumbnails.
 
+### What phase 3 added to the plan above
+
+- **New folder and rename** (`core/operations/quick.py`) are immediate and never replace anything. Their dialog stays open and shows the reason when a name can't be used.
+- **Drops.** The window always answers a drop with "copy" and does the work as a job, so the app the files came from never removes anything itself. A move of files onto the folder they are already in, and a folder dropped on itself, are ignored.
+- **Paste.** A cut is used up by its paste (the clipboard is cleared). On quitting, the app lets go of clipboard contents that are still its own.
+- **Shortcuts.** Cut is Ctrl+X only: the platform's list for Cut includes Shift+Delete, which is permanent delete here.
+- **`DirectoryModel`** drops the answer to a file query that is older than that file's removal. Without this, a file written under a temporary name and renamed into place, which is how this app and many editors write, could stay listed as a ghost.
+
 ## Open decisions
 
 1. ~~Widgets or Qt Quick~~ Decided: Qt Widgets.
 2. ~~A job with skipped items~~ Decided: `failed` when items were skipped after an error; conflict skips still end as `done`.
-3. **Closing with running jobs:** allow "keep running in the background", or require cancelling. Decide in phase 3.
+3. ~~Closing with running jobs~~ Decided: closing the last window offers "Keep running", "Cancel N operations" and "Don't close"; the process exits when the jobs have ended.
 4. ~~The app's real name and app id~~ Decided: `filehouse`.

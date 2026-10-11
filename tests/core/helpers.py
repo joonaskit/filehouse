@@ -3,9 +3,16 @@
 import os
 from pathlib import Path
 
-from gi.repository import Gio
+from gi.repository import Gio, GLib
 
 from filehouse.core.operations import Job, JobState
+
+
+def not_supported(*_args, **_kwargs):
+    """Stands in for a Gio call on a file system that can't do it."""
+    raise GLib.Error.new_literal(
+        Gio.io_error_quark(), "Operation not supported", Gio.IOErrorEnum.NOT_SUPPORTED
+    )
 
 
 def gfile(path):

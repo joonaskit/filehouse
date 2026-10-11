@@ -1,0 +1,155 @@
+import os
+
+import pytest
+from PySide6.QtCore import QThread
+from PySide6.QtWidgets import QApplication
+from ui_helpers import gfile
+
+from filehouse.core.operations import Answer, Conflict, JobKind, JobState
+from filehouse.qt_models import job_model
+from filehouse.qt_models.job_model import JobModel
+
+
+@pytest.fixture
+def files(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "dst").mkdir()
+    (tmp_path / "src" / "a.txt").write_text("aaa")
+    return tmp_path
+
+
+def test_a_job_runs_on_a_worker_and_reports_on_the_ui_thread(qtbot, jobs, files, wait_final):
+    threads, states, added = set(), [], []
+    jobs.job_added.connect(added.append)
+    jobs.job_changed.connect(lambda job: threads.add(QThread.currentThread()))
+    jobs.job_changed.connect(lambda job: states.append(job.state))
+
+    with qtbot.waitSignal(jobs.idle, timeout=5000):
+        job = jobs.start(JobKind.COPY, [gfile(files / "src" / "a.txt")], gfile(files / "dst"))
+        assert jobs.active_count() == 1
+
+    assert added == [job]
+    assert threads == {QApplication.instance().thread()}
+    assert states[-1] is JobState.DONE
+    assert (files / "dst" / "a.txt").read_text() == "aaa"
+    assert jobs.jobs == [job]
+    assert jobs.active_count() == 0
+
+
+def test_finished_jobs_leave_after_a_while_and_failed_ones_stay(qtbot, bare_jobs, files):
+    jobs = bare_jobs
+    jobs._keep_finished_ms = 50
+    jobs.question_asked.connect(lambda job, question: question.answer(Answer.SKIP))
+    removed = []
+    jobs.job_removed.connect(removed.append)
+
+    done = jobs.start(JobKind.COPY, [gfile(files / "src" / "a.txt")], gfile(files / "dst"))
+    failed = jobs.start(JobKind.COPY, [gfile(files / "src" / "missing")], gfile(files / "dst"))
+
+    qtbot.waitUntil(lambda: removed == [done], timeout=5000)
+    qtbot.wait(100)
+    assert jobs.jobs == [failed]
+    assert failed.state is JobState.FAILED
+
+    jobs.dismiss(failed)
+    assert jobs.jobs == []
+    assert removed == [done, failed]
+
+
+def test_a_running_job_cannot_be_dismissed(qtbot, jobs, files, wait_question):
+    (files / "dst" / "a.txt").write_text("old")
+    job = jobs.start(JobKind.COPY, [gfile(files / "src" / "a.txt")], gfile(files / "dst"))
+    wait_question(jobs)
+
+    jobs.dismiss(job)
+
+    assert jobs.jobs == [job]
+
+
+def test_a_question_reaches_the_ui_thread_and_its_answer_the_job(
+    qtbot, bare_jobs, files, wait_final
+):
+    (files / "dst" / "a.txt").write_text("old")
+    jobs = bare_jobs
+    asked = []
+
+    def answer(job, question):
+        assert QThread.currentThread() is QApplication.instance().thread()
+        assert question.job is job and job.state is JobState.WAITING
+        asked.append(question)
+        question.answer(Answer.REPLACE)
+
+    jobs.question_asked.connect(answer)
+
+    job = jobs.start(JobKind.COPY, [gfile(files / "src" / "a.txt")], gfile(files / "dst"))
+    wait_final(jobs, job)
+
+    assert [type(question) for question in asked] == [Conflict]
+    assert job.state is JobState.DONE
+    assert (files / "dst" / "a.txt").read_text() == "aaa"
+
+
+def test_cancel_ends_a_job_that_waits_for_an_answer(qtbot, bare_jobs, files, wait_final):
+    (files / "dst" / "a.txt").write_text("old")
+    jobs = bare_jobs
+    asked = []
+    jobs.question_asked.connect(lambda job, question: asked.append(question))
+    job = jobs.start(JobKind.COPY, [gfile(files / "src" / "a.txt")], gfile(files / "dst"))
+    qtbot.waitUntil(lambda: bool(asked), timeout=5000)
+
+    jobs.cancel_all()
+    wait_final(jobs, job)
+
+    assert job.state is JobState.CANCELLED
+    assert (files / "dst" / "a.txt").read_text() == "old"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
+def test_retry_puts_a_new_job_in_place_of_the_failed_one(qtbot, bare_jobs, files, wait_final):
+    jobs = bare_jobs
+    locked = files / "src" / "a.txt"
+    locked.chmod(0)
+    jobs.question_asked.connect(lambda job, question: question.answer(Answer.SKIP))
+    failed = wait_final(jobs, jobs.start(JobKind.COPY, [gfile(locked)], gfile(files / "dst")))
+    assert failed.state is JobState.FAILED
+    assert job_model.text(failed) == "a.txt: permission denied"
+
+    locked.chmod(0o600)
+    again = jobs.retry(failed)
+    wait_final(jobs, again)
+
+    assert jobs.jobs == [again]
+    assert again.state is JobState.DONE
+    assert (files / "dst" / "a.txt").read_text() == "aaa"
+
+
+def test_titles_and_texts(qtbot, jobs, files, wait_final, wait_question):
+    one = [gfile(files / "src" / "a.txt")]
+    two = [*one, gfile(files / "src" / "b.txt")]
+    (files / "dst" / "a.txt").write_text("old")
+
+    copy = jobs.start(JobKind.COPY, one, gfile(files / "dst"))
+    box = wait_question(jobs)
+    assert job_model.title(copy) == "Copying “a.txt” to dst"
+    assert job_model.text(copy) == "Waiting for your answer"
+    box.button_for(Answer.SKIP).click()
+    wait_final(jobs, copy)
+    assert job_model.title(copy) == "Copied 0 files"
+    assert job_model.text(copy) == ""
+
+    move = jobs.start(JobKind.MOVE, two, gfile(files))
+    assert job_model.title(move) == f"Moving 2 items to {files.name}"
+    assert job_model.title(jobs.start(JobKind.TRASH, two)) == "Moving 2 items to the trash"
+    assert job_model.title(jobs.start(JobKind.DELETE, two)) == "Deleting 2 items"
+
+
+def test_a_model_that_goes_away_cancels_its_waiting_jobs(qtbot, files):
+    (files / "dst" / "a.txt").write_text("old")
+    model = JobModel()
+    job = model.start(JobKind.COPY, [gfile(files / "src" / "a.txt")], gfile(files / "dst"))
+    qtbot.waitUntil(lambda: job.state is JobState.WAITING, timeout=5000)
+
+    model.deleteLater()
+
+    qtbot.waitUntil(lambda: job.state is JobState.CANCELLED, timeout=5000)
+    assert (files / "dst" / "a.txt").read_text() == "old"

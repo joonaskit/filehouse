@@ -298,7 +298,7 @@ def test_replacing_a_file_with_itself_fails_and_keeps_it(tmp_path):
 @pytest.mark.parametrize("cross_device", [False, True])
 def test_move_with_conflicts(tmp_path, monkeypatch, cross_device):
     if cross_device:
-        from conftest import not_supported
+        from helpers import not_supported
 
         from filehouse.core.operations import copy
 

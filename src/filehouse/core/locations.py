@@ -146,3 +146,21 @@ def file_type(location, cancellable=None):
             return None
         raise
     return info.get_file_type()
+
+
+def from_uri(uri):
+    return Gio.File.new_for_uri(uri)
+
+
+def same_filesystem(a, b):
+    """Whether a move from one to the other would be a rename. False when it can't be told."""
+    try:
+        ids = [
+            location.query_info(
+                "id::filesystem", Gio.FileQueryInfoFlags.NONE, None
+            ).get_attribute_string("id::filesystem")
+            for location in (a, b)
+        ]
+    except GLib.Error:
+        return False
+    return ids[0] is not None and ids[0] == ids[1]

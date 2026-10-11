@@ -1,8 +1,7 @@
 import os
 
 import pytest
-from conftest import not_supported
-from helpers import make_tree, read_tree, run_job
+from helpers import make_tree, not_supported, read_tree, run_job
 
 from filehouse.core.operations import Answer, JobKind, JobState, copy
 

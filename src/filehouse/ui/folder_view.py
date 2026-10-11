@@ -12,10 +12,51 @@ from PySide6.QtWidgets import (
 
 from filehouse.integration import style
 from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE, TYPE, InfoRole
+from filehouse.ui import clipboard
+
+
+class _Tree(QTreeView):
+    """The tree, taking drops of files. What a drop does is decided by the window."""
+
+    # URIs, the FileInfo of the folder dropped on (None for the open folder),
+    # the keyboard modifiers and a global position
+    dropped = Signal(list, object, object, QPoint)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        # The base class scrolls near the edges, and then refuses the drop
+        super().dragMoveEvent(event)
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        uris, _cut = clipboard.read(event.mimeData())
+        if not uris:
+            event.ignore()
+            return
+        position = event.position().toPoint()
+        index = self.indexAt(position)
+        info = index.data(InfoRole) if index.isValid() else None
+        # The files are moved or copied here, by a job. Answering "copy" keeps
+        # the app they came from from removing anything itself
+        event.setDropAction(Qt.DropAction.CopyAction)
+        event.accept()
+        self.dropped.emit(
+            uris,
+            info if info is not None and info.is_dir else None,
+            event.modifiers(),
+            self.viewport().mapToGlobal(position),
+        )
 
 
 class FolderView(QWidget):
     item_activated = Signal(object)  # FileInfo
+    dropped = Signal(list, object, object, QPoint)  # see _Tree.dropped
     # FileInfo, or None for the empty area, and a global position
     context_menu_requested = Signal(object, QPoint)
 
@@ -23,8 +64,13 @@ class FolderView(QWidget):
         super().__init__(parent)
         self._proxy = proxy
 
-        self._tree = QTreeView()
+        self._tree = _Tree()
         self._tree.setModel(proxy)
+        self._tree.setDragEnabled(True)
+        self._tree.setAcceptDrops(True)
+        self._tree.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self._tree.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._tree.dropped.connect(self.dropped)
         self._tree.setRootIsDecorated(False)
         self._tree.setItemsExpandable(False)
         self._tree.setUniformRowHeights(True)
@@ -57,6 +103,9 @@ class FolderView(QWidget):
         self._stack.addWidget(self._tree)
         self._stack.addWidget(self._message)
         self.setFocusProxy(self._tree)
+        # For the message shown in place of the list: an empty folder takes drops
+        # and has a context menu too
+        self.setAcceptDrops(True)
 
     def show_items(self):
         self._stack.setCurrentWidget(self._tree)
@@ -84,8 +133,28 @@ class FolderView(QWidget):
     def selected_count(self):
         return len(self._tree.selectionModel().selectedRows())
 
+    def selected_infos(self):
+        """The selected entries, in the order they are shown."""
+        rows = sorted(self._tree.selectionModel().selectedRows(), key=lambda index: index.row())
+        return [index.data(InfoRole) for index in rows]
+
     def selection_model(self):
         return self._tree.selectionModel()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        uris, _cut = clipboard.read(event.mimeData())
+        if uris:
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+            position = self.mapToGlobal(event.position().toPoint())
+            self.dropped.emit(uris, None, event.modifiers(), position)
+
+    def contextMenuEvent(self, event):
+        self.context_menu_requested.emit(None, event.globalPos())
 
     def _on_activated(self, index):
         self.item_activated.emit(index.data(InfoRole))

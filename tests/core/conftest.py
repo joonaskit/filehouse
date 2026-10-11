@@ -4,25 +4,9 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from gi.repository import Gio, GLib
+from helpers import not_supported
 
 from filehouse.core.operations import copy
-
-
-def not_supported(*_args, **_kwargs):
-    raise GLib.Error.new_literal(
-        Gio.io_error_quark(), "Operation not supported", Gio.IOErrorEnum.NOT_SUPPORTED
-    )
-
-
-@pytest.fixture
-def home_dir():
-    """A folder inside the test home, so the home trash (also a test folder) serves it."""
-    assert GLib.get_home_dir() == os.environ["HOME"]
-    assert "filehouse-test-home-" in GLib.get_home_dir()
-    path = Path(tempfile.mkdtemp(prefix="work-", dir=GLib.get_home_dir()))
-    yield path
-    shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture

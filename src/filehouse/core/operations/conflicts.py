@@ -44,6 +44,7 @@ class Question:
     answers = ()
 
     def __init__(self):
+        self.job = None  # the job that asks, set when it does
         self._answered = threading.Event()
         self._reply = None
 
