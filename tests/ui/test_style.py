@@ -107,3 +107,36 @@ def test_a_disabled_icon_is_drawn_in_the_faint_text_colour(qtbot):
 
     assert same_colour(disabled, faint)
     assert not same_colour(disabled, style.palette_color("red"))
+
+
+@pytest.mark.parametrize("large", [14, 21, 60])
+def test_a_button_keeps_round_corners_however_round_the_theme_is(qtbot, qapp, large):
+    # A stylesheet drops a radius that is more than half the height and draws square
+    # corners: with the shell set to "Round" (21 at scale 1.1) the Open button was a box
+    from filehouse.ui.details_pane import DetailsPane
+
+    round_theme = theme.merge(
+        theme.DEFAULTS,
+        {"radius": {"small": 9, "medium": 15, "large": large}, "scale": {"ui": 1.1}},
+    )
+    try:
+        style.apply(qapp, round_theme)
+        assert (
+            style.radius_within("large", style.BUTTON_HEIGHT) <= style.px(style.BUTTON_HEIGHT) / 2
+        )
+        pane = DetailsPane()
+        qtbot.addWidget(pane)
+        pane.open_button.show()
+        pane.resize(260, 400)
+        pane.show()
+        # Of the card, not the button alone: a widget grabbed by itself gets a filled background
+        image = pane.grab(pane.open_button.geometry()).toImage()
+        raised = style.color("surfaceRaised")
+        # Beside the text, not under it
+        assert same_colour(image.pixelColor(image.width() // 8, image.height() // 2), raised)
+        assert not same_colour(image.pixelColor(0, 0), raised)
+        # The top corners: in the roundest theme the card's own border passes the lower ones
+        assert not same_colour(image.pixelColor(image.width() - 1, 0), raised)
+    finally:
+        style.apply(qapp, theme.merge(theme.DEFAULTS, {}))
+        qapp.setStyleSheet("")

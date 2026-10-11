@@ -279,3 +279,55 @@ def test_folders_are_counted_again_when_the_jobs_are_done(qtbot, tree):
     window._jobs.idle.emit()
 
     qtbot.waitUntil(lambda: size() == "1 item", timeout=5000)
+
+
+def test_details_pane_follows_the_selection(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads")
+    window.show()
+    pane = window._details
+    qtbot.waitUntil(lambda: pane.name.toolTip() == "Downloads", timeout=5000)
+    qtbot.waitUntil(lambda: pane.rows["Size"].text() == "2", timeout=5000)
+
+    window._view.select_name("report.pdf")
+    qtbot.waitUntil(lambda: pane.name.toolTip() == "report.pdf", timeout=5000)
+    assert pane.open_button.isVisible()
+
+    window._select_all.trigger()
+    qtbot.waitUntil(lambda: pane.name.toolTip() == "2 items", timeout=5000)
+
+    window._view.selection_model().clear()
+    qtbot.waitUntil(lambda: pane.name.toolTip() == "Downloads", timeout=5000)
+
+
+def test_details_pane_shows_the_folder_gone_to(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads")
+    qtbot.waitUntil(lambda: window._details.name.toolTip() == "Downloads", timeout=5000)
+
+    window.navigate(Gio.File.new_for_path(str(tree / "Downloads" / "sub")))
+
+    qtbot.waitUntil(lambda: window._details.name.toolTip() == "sub", timeout=5000)
+    qtbot.waitUntil(lambda: window._details.rows["Size"].text() == "0", timeout=5000)
+
+
+def test_details_pane_sees_a_selected_file_change(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads")
+    window.show()
+    pane = window._details
+    window._view.select_name("report.pdf")
+    qtbot.waitUntil(lambda: pane.name.toolTip() == "report.pdf", timeout=5000)
+    empty = pane.rows["Size"].text()
+
+    (tree / "Downloads" / "report.pdf").write_text("x" * 5000)
+
+    qtbot.waitUntil(lambda: pane.rows["Size"].text() != empty, timeout=5000)
+
+
+def test_open_in_the_details_pane_enters_the_selected_folder(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads")
+    window.show()
+    window._view.select_name("sub")
+    qtbot.waitUntil(lambda: window._details.open_button.isVisible(), timeout=5000)
+
+    window._details.open_button.click()
+
+    assert current_path(window) == str(tree / "Downloads" / "sub")

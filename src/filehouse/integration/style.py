@@ -22,6 +22,10 @@ from filehouse.integration import theme as theme_reader
 BASE_FONT_PX = 13
 # Height of a button in the toolbar's groups, unscaled: icon buttons and breadcrumbs alike
 CONTROL_HEIGHT = 36
+# Space between a toolbar group's edge and its buttons, unscaled
+GROUP_PADDING = 4
+# Height of a button that stands alone, like Open in the details card, unscaled
+BUTTON_HEIGHT = 40
 
 # How much of a tile its glyph fills, and how strong the tile's own colour is
 _GLYPH_SHARE = 0.56
@@ -38,6 +42,11 @@ def px(size):
     return theme_reader.scaled(_theme, size)
 
 
+def font_px(size):
+    """An unscaled font size in pixels at the user's font and UI scale."""
+    return theme_reader.font_scaled(_theme, size)
+
+
 def color(name):
     return QColor(_theme["colors"][name])
 
@@ -50,6 +59,13 @@ def palette_color(name):
 def radius(name):
     """`small`, `medium` or `large`, in pixels. Follows the shell's corner roundness."""
     return px(_theme["radius"][name])
+
+
+def radius_within(name, height):
+    """A radius for something `height` unscaled pixels tall: never more than half of it.
+    A stylesheet draws square corners when the radius doesn't fit, so with the shell
+    set to "Round" a low button would lose its corners altogether."""
+    return min(radius(name), px(height) // 2)
 
 
 def overlay(alpha):
@@ -220,7 +236,10 @@ def _stylesheet():
 
         /* The rounded groups in the toolbar, the sidebar and the details card */
         #group, #card {{ background: {colors["surface"]}; border-radius: {large}px; }}
-        #group QToolButton {{ border-radius: {medium}px; padding: {px(7)}px; }}
+        #group {{ border-radius: {radius_within("large", CONTROL_HEIGHT + 2 * GROUP_PADDING)}px; }}
+        #group QToolButton {{
+            border-radius: {radius_within("medium", CONTROL_HEIGHT)}px; padding: {px(7)}px;
+        }}
 
         QToolButton {{
             border: none; border-radius: {small}px; padding: {px(5)}px;
@@ -262,6 +281,16 @@ def _stylesheet():
             color: {colors["textSecondary"]}; font-size: {small_font}px;
         }}
         QSplitter::handle {{ background: transparent; }}
+
+        /* The details card */
+        #secondary {{ color: {colors["textSecondary"]}; font-size: {small_font}px; }}
+        #divider {{ background: {divider}; border: none; }}
+        #card QPushButton {{
+            border: none; border-radius: {radius_within("large", BUTTON_HEIGHT)}px;
+            padding: 0 {px(10)}px; background: {colors["surfaceRaised"]};
+        }}
+        #card QPushButton:hover {{ background: {hover}; }}
+        #card QPushButton:pressed {{ background: {pressed}; }}
 
         QMenu {{
             background: {colors["surface"]}; border: 1px solid {divider};

@@ -19,6 +19,7 @@ def test_reads_a_file(tmp_path):
     assert item.name == "notes.txt"
     assert item.folder == str(tmp_path)
     assert item.kind == "Plain text document"
+    assert item.content_type == "text/plain"
     assert not item.is_dir and item.link_target is None
     assert item.size == 5
     assert item.modified == 1_000_000_000

@@ -35,6 +35,7 @@ class Properties:
     name: str
     folder: str  # the folder it is in, as text
     kind: str  # "Folder", "PDF document", …
+    content_type: str
     is_dir: bool
     link_target: str | None
     size: int
@@ -73,6 +74,7 @@ def read(location):
         name=info.get_display_name(),
         folder=parent.get_parse_name() if parent is not None else "",
         kind=Gio.content_type_get_description(content_type) if content_type else "",
+        content_type=content_type or "application/octet-stream",
         is_dir=info.get_file_type() == Gio.FileType.DIRECTORY,
         link_target=info.get_symlink_target() if info.get_is_symlink() else None,
         size=info.get_size(),

@@ -33,6 +33,7 @@ from filehouse.qt_models.directory_model import (
 from filehouse.qt_models.job_model import JobModel
 from filehouse.qt_models.volumes import Volumes
 from filehouse.ui import clipboard, menus, settings
+from filehouse.ui.details_pane import DetailsPane
 from filehouse.ui.dialogs.name import NameDialog
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
@@ -42,6 +43,7 @@ from filehouse.ui.path_bar import PathBar
 from filehouse.ui.sidebar import Sidebar
 
 _MESSAGE_MS = 8000
+_DETAILS_MS = 200
 # What "Sort by" offers, with the order each starts in: the newest and the largest first
 _SORTS = (
     ("Name", NAME, Qt.SortOrder.AscendingOrder),
@@ -82,7 +84,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(QIcon.fromTheme("system-file-manager"))
-        self.resize(settings.window_size(QSize(style.px(960), style.px(620))))
+        self.resize(settings.window_size(QSize(style.px(1080), style.px(660))))
 
         self._history = History()
         self._location = None
@@ -114,12 +116,22 @@ class MainWindow(QMainWindow):
         self._view.selection_model().selectionChanged.connect(self._update_state)
         self._view.dropped.connect(self._on_dropped)
         self._panel = OperationsPanel(self._jobs)
+        self._details = DetailsPane()
+        self._details.open_requested.connect(self._open_selected)
+        # Rows change for many reasons (counts, thumbnails), and often: the pane
+        # looks at most a few times a second whether what it shows is one of them
+        self._details_timer = QTimer(self)
+        self._details_timer.setSingleShot(True)
+        self._details_timer.setInterval(_DETAILS_MS)
+        self._details_timer.timeout.connect(self._update_details)
+        self._proxy.dataChanged.connect(self._update_details_soon)
 
         splitter = QSplitter()
         splitter.addWidget(self._sidebar)
         splitter.addWidget(self._view)
+        splitter.addWidget(self._details)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([style.px(200), style.px(760)])
+        splitter.setSizes([style.px(200), style.px(620), style.px(250)])
         splitter.setHandleWidth(style.px(8))
         splitter.setContentsMargins(style.px(8), 0, style.px(8), style.px(4))
         central = QWidget()
@@ -258,7 +270,8 @@ class MainWindow(QMainWindow):
         group = QFrame()
         group.setObjectName("group")
         layout = QHBoxLayout(group)
-        layout.setContentsMargins(style.px(4), style.px(4), style.px(4), style.px(4))
+        padding = style.px(style.GROUP_PADDING)
+        layout.setContentsMargins(padding, padding, padding, padding)
         layout.setSpacing(style.px(2))
         for item in actions:
             button = QToolButton()
@@ -412,6 +425,19 @@ class MainWindow(QMainWindow):
             elif selected:
                 text += f" · {selected} selected"
         self._count_label.setText(text)
+        self._update_details(infos)
+
+    def _update_details_soon(self, *_args):
+        if not self._details_timer.isActive():
+            self._details_timer.start()
+
+    def _update_details(self, infos=None):
+        if self._location is None:
+            return
+        if infos is None:
+            infos = self._view.selected_infos()
+        count = None if self._model.loading or self._error else self._proxy.rowCount()
+        self._details.show_items(self._location, infos, count)
 
     # Items
 
@@ -429,6 +455,11 @@ class MainWindow(QMainWindow):
             self._show_error(f"Restore “{info.display_name}” to open it.")
         else:
             desktop.open_default(target, self._show_error)
+
+    def _open_selected(self):
+        infos = self._view.selected_infos()
+        if len(infos) == 1:
+            self._on_item_activated(infos[0])
 
     def _show_error(self, message):
         self.statusBar().showMessage(message, _MESSAGE_MS)

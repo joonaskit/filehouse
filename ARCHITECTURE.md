@@ -117,6 +117,7 @@ filehouse/
 │   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
 │   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
 │   │   ├── measure.py           folder sizes on a worker thread
+│   │   ├── details.py           one file's details on a worker thread
 │   │   ├── job_model.py         all jobs of the process, fed by worker threads; titles and texts
 │   │   └── workers.py           the thread pool jobs run on
 │   ├── integration/
@@ -283,7 +284,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a and 6b are done.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a, 6b and 6c are done.
 
 ### Phase 0: skeleton and integration basics
 
@@ -420,6 +421,21 @@ The custom title bar in the pictures is **not** part of this phase. It is a deci
 - It reuses `core/properties.py` and the folder measuring from phase 5. The Properties dialog stays for now and is removed once the pane covers everything it shows.
 
 **Done when:** selecting a file shows its details without opening a dialog.
+
+**Done.** How it was built:
+
+- `ui/details_pane.py` is the third part of the window's splitter, a card like the sidebar. It is given the open folder and the selected entries and decides by itself what to show. Asked again for what it already shows, it does nothing; an entry whose size, date or mode changed counts as new, so a selected file that changes is read again (the window looks for that at most five times a second).
+- **Reading** is `core/properties.read` on a worker thread (`qt_models/details.py`). What is on show stays until the answer is in, and only the answer to the last question is used, so going down a list with the arrow keys neither blinks nor blocks.
+- **One item:** tile, name, type (or "Link to …"), modified, size, owner as "you · group" when it is the user's own, the mode in octal, and the grid. The third column of the grid reads "Open" for a folder. Each dot says in a tooltip what it stands for ("Group may not write it").
+- **A selected folder** is added up in the background as in the Properties dialog: its size, and "Contains 12 files, 3 folders". The count is cancelled when the selection changes.
+- **Several items:** "3 items", their total size and "In all 5 files, 2 folders", added up the same way. No dates, owner or permissions.
+- **Nothing selected:** the open folder, with how many items the list shows in place of a size. It is **not** added up: that would walk the whole drive for "/" on every visit. Its full size is in Properties.
+- **Open** does what Enter does on the item. It is hidden for the open folder and for several items.
+- The grid is a display. Its dots become switches, or not, with step 6g (open question 3).
+- The Properties dialog stays (open question 5). It still has what the pane leaves out: accessed and created dates, the location, where a trashed item was, and the byte count.
+- A new window is 1080 by 660, as in the picture, to make room for the pane.
+- **Corners that fit.** A Qt stylesheet draws square corners when a radius is more than half the height of what it rounds. With the shell set to "Round" (`radius.large` 21 at scale 1.1) that made the Open button a plain box. `style.radius_within(name, height)` gives the theme's radius, but never more than half the height; the Open button and the toolbar's groups and buttons use it, and have a fixed height to go with it. Anything low that gets a theme radius must use it too.
+- Not done: below about 800 pixels of width the list's columns no longer fit beside the pane and scroll sideways. The pane can be dragged shut with the splitter; the real answer is the narrow layout of step 6e.
 
 **6d. Jobs in the status bar.**
 
