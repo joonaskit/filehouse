@@ -17,6 +17,7 @@ from filehouse.core.operations import (
     Failure,
     JobKind,
     JobState,
+    permissions,
 )
 from filehouse.qt_models import directory_model
 from filehouse.ui import clipboard, main_window, settings
@@ -565,6 +566,142 @@ def test_move_to_keeps_what_is_there_unless_told_to_replace(
 
     assert (tree / "dst" / "a.txt").read_text() == "old"
     assert (tree / "src" / "a.txt").read_text() == "aaa"
+
+
+# Permissions
+
+
+def mode_of(path):
+    return os.stat(path).st_mode & 0o7777
+
+
+def preset_entries(window):
+    return {
+        action.text().partition("\t")[0]: action
+        for action in window._permissions_menu(window).actions()
+    }
+
+
+def test_a_preset_changes_the_selected_file_and_the_list_follows(qtbot, tree, open_window):
+    (tree / "src" / "a.txt").chmod(0o640)
+    window = open_window(tree / "src")
+    select(window, "a.txt")
+    entries = preset_entries(window)
+    assert [action.text() for action in entries.values()] == [
+        "Private\t600",
+        "Shared\t664",
+        "Make executable\t755",
+        "Read-only\t444",
+    ]
+    assert not any(action.isChecked() for action in entries.values())
+
+    entries["Read-only"].trigger()
+
+    qtbot.waitUntil(lambda: mode_of(tree / "src" / "a.txt") == 0o444, timeout=TIMEOUT)
+    qtbot.waitUntil(
+        lambda: window.statusBar().currentMessage() == "Permissions of “a.txt” changed",
+        timeout=TIMEOUT,
+    )
+    # The list hears of it from the folder's monitor, and the menu then ticks the preset
+    qtbot.waitUntil(lambda: window._view.selected_infos()[0].mode == 0o444, timeout=TIMEOUT)
+    assert preset_entries(window)["Read-only"].isChecked()
+    assert (tree / "src" / "b.txt").stat().st_mode & 0o777 != 0o444
+
+
+def test_folders_get_their_own_modes_and_nothing_inside_is_changed(qtbot, tree, open_window):
+    (tree / "src" / "sub" / "inside.txt").write_text("")
+    (tree / "src" / "sub" / "inside.txt").chmod(0o640)
+    window = open_window(tree / "src")
+    select(window, "sub")
+    entries = preset_entries(window)
+    assert [action.text() for action in entries.values()] == [
+        "Private\t700",
+        "Shared\t775",
+        "Make executable",
+        "Read-only\t555",
+    ]
+    # Says nothing about folders
+    assert not entries["Make executable"].isEnabled()
+
+    entries["Private"].trigger()
+
+    qtbot.waitUntil(lambda: mode_of(tree / "src" / "sub") == 0o700, timeout=TIMEOUT)
+    assert mode_of(tree / "src" / "sub" / "inside.txt") == 0o640
+
+
+def test_files_and_folders_together_each_get_theirs(qtbot, tree, open_window):
+    window = open_window(tree / "src")
+    select(window, "a.txt", "sub")
+    entries = preset_entries(window)
+    # Two modes: the name says enough
+    assert entries["Shared"].text() == "Shared"
+
+    entries["Shared"].trigger()
+    qtbot.waitUntil(lambda: mode_of(tree / "src" / "a.txt") == 0o664, timeout=TIMEOUT)
+    qtbot.waitUntil(lambda: mode_of(tree / "src" / "sub") == 0o775, timeout=TIMEOUT)
+
+    preset_entries(window)["Make executable"].trigger()
+    qtbot.waitUntil(lambda: mode_of(tree / "src" / "a.txt") == 0o755, timeout=TIMEOUT)
+    qtbot.waitUntil(
+        lambda: (
+            window.statusBar().currentMessage()
+            == "Permissions of 1 file changed, folders left as they were"
+        ),
+        timeout=TIMEOUT,
+    )
+    assert mode_of(tree / "src" / "sub") == 0o775
+
+
+def test_a_link_is_left_alone_and_the_window_says_why(qtbot, tree, open_window):
+    (tree / "src" / "a.txt").chmod(0o640)
+    (tree / "src" / "link").symlink_to("a.txt")
+    window = open_window(tree / "src")
+    select(window, "link")
+
+    preset_entries(window)["Private"].trigger()
+
+    qtbot.waitUntil(lambda: window.statusBar().currentMessage() != "", timeout=TIMEOUT)
+    assert window.statusBar().currentMessage() == (
+        "Could not change the permissions of link: a link has no permissions of its own."
+    )
+    assert mode_of(tree / "src" / "a.txt") == 0o640
+
+
+def test_several_failures_are_all_listed_by_name(qtbot, tree, open_window):
+    for name in ("one", "two"):
+        (tree / "src" / name).symlink_to("a.txt")
+    window = open_window(tree / "src")
+    select(window, "one", "two", "b.txt")
+
+    preset_entries(window)["Private"].trigger()
+
+    qtbot.waitUntil(lambda: window.findChild(ErrorDetails) is not None, timeout=TIMEOUT)
+    details = window.findChild(ErrorDetails)
+    assert details.list.toPlainText() == (
+        f"{tree / 'src' / 'one'}: a link has no permissions of its own\n"
+        f"{tree / 'src' / 'two'}: a link has no permissions of its own"
+    )
+    assert window.statusBar().currentMessage() == (
+        "Could not change the permissions of 2 of 3 items."
+    )
+    # The one that could be changed was
+    assert mode_of(tree / "src" / "b.txt") == 0o600
+    details.close()
+
+
+def test_permissions_need_a_selection_and_are_in_the_file_menu(qtbot, tree, open_window):
+    window = open_window(tree / "src")
+    assert not window._permissions.isEnabled()
+    assert window.set_permissions(permissions.PRESETS[0]) is None
+
+    select(window, "a.txt")
+    assert window._permissions.isEnabled()
+    menu = window._menu_for(window._view.selected_infos()[0])
+    titles = [action.menu().title() for action in menu.actions() if action.menu()]
+    assert "Permissions" in titles
+    # Not in the folder's own menu
+    folder_titles = [a.menu().title() for a in window._menu_for(None).actions() if a.menu()]
+    assert "Permissions" not in folder_titles
 
 
 # Drag and drop

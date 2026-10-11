@@ -242,6 +242,30 @@ def test_the_job_line_is_one_word_in_a_narrow_window(qtbot, window):
     window._jobs.job_removed.emit(one)
 
 
+def test_the_lock_in_the_action_bar_opens_the_presets_upwards(qtbot, window, monkeypatch):
+    from filehouse.ui import menus
+
+    shown = []
+    make = menus.menu
+
+    def menu_that_does_not_block(parent, title=None):
+        # Patched on the menu itself: Qt calls its own exec past a patched class
+        made = make(parent, title)
+        made.exec = lambda position: shown.append((made.title(), position.y()))
+        return made
+
+    monkeypatch.setattr(menus, "menu", menu_that_does_not_block)
+    window.resize(NARROW, 600)
+    window._view.select_name("run.sh")
+    lock = button(window, window._permissions)
+    assert lock.isVisible() and lock.parent() is window._action_bar
+
+    lock.click()
+
+    assert len(shown) == 1 and shown[0][0] == "Permissions"
+    assert shown[0][1] < lock.mapToGlobal(lock.rect().topLeft()).y()
+
+
 # The parts by themselves
 
 

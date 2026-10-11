@@ -108,7 +108,8 @@ filehouse/
 │   │       ├── trash.py         trash (restore is added in phase 5)
 │   │       ├── delete.py        permanent delete
 │   │       ├── conflicts.py     the questions a job asks, answers, names for "Keep both"
-│   │       ├── quick.py         new folder and rename: immediate, no job
+│   │       ├── quick.py         new folder, new file and rename: immediate, no job
+│   │       ├── permissions.py   the permission presets: immediate, no job
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
@@ -117,6 +118,7 @@ filehouse/
 │   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
 │   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
 │   │   ├── measure.py           folder sizes on a worker thread
+│   │   ├── permissions.py       a permissions preset applied on a worker thread
 │   │   ├── details.py           one file's details on a worker thread
 │   │   ├── job_model.py         all jobs of the process, fed by worker threads; titles and texts
 │   │   └── workers.py           the thread pool jobs run on
@@ -287,7 +289,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a to 6f are done.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is implemented and tested, steps 6a to 6g; the custom title bar was never part of it (issue #9).
 
 ### Phase 0: skeleton and integration basics
 
@@ -507,13 +509,24 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 - The four presets from the pictures, from the Permissions submenu and the lock button: Private 600, Shared 664, Make executable 755, Read-only 444.
 - It changes files, so it goes through the core with the same error type and tests as every other operation.
 
+**Done.** How it was built:
+
+- `core/operations/permissions.py` has the presets and `apply(preset, locations)`, which returns how many items were changed, how many were left alone by design, and an `OperationError` for each one that could not be changed. It carries on after a failure. It is not a job: it finishes at once, like rename. `qt_models/permissions.py` runs it on a worker thread, because a selection can be thousands of files.
+- **Folders** (open question 2, decided) get the preset with the "open" bit wherever there is a "read" bit: Private 700, Shared 775, Read-only 555. "Make executable" says nothing about folders and leaves them alone; it is greyed out when only folders are selected.
+- **Only the items themselves.** Nothing inside a selected folder is changed. Applying a preset to everything in a folder would be a job of its own, with progress, cancel and partial failure, and is not built.
+- **Links are never followed**, as in every other operation: a link has no permissions of its own, so it is reported as an error and what it points to is not touched.
+- **Special bits.** A folder keeps set-group-id and sticky, which say who new files in it belong to and who may delete from it. A file loses set-user-id and set-group-id: such a file made writable by its group would be a hole.
+- **In the window.** A Permissions submenu in the file menu, and the lock button behind a line in the narrow window's action bar, which opens the same menu upwards. Each entry shows the mode it gives (the folder's mode when folders are selected, none when files and folders are selected together) and the one the selection already has is ticked.
+- **Afterwards** the status bar says what was changed. One failure is named in the status bar; several open the "What went wrong" list with every one of them by name. The list and the details pane update by themselves, through the folder's monitor.
+- **The grid stays a display** (open question 3, decided). Permissions are changed through the presets only.
+
 **Left for later:** search (the field in the toolbar) and Compress. Both are on the "Later" list already, and both are features of their own.
 
 **Open questions for this phase**
 
 1. ~~Colours of the icon tiles~~ Decided: from the theme's `colors.palette`, see "Theme in this phase". Which colour goes with which place and file type is fixed in the app.
-2. **Folder presets.** 600 or 444 on a folder makes it impossible to open. Do folders get their own presets (700, 775, 755, 555), and is a preset applied to what is inside a folder as well?
-3. **The permissions grid.** Is it only a display, or are the dots switches?
+2. ~~Folder presets~~ Decided: folders get 700, 775 and 555, "Make executable" leaves them alone, and nothing inside a folder is changed. See 6g.
+3. ~~The permissions grid~~ Decided: a display. Permissions change through the presets. See 6g.
 4. ~~The width at which the layout changes~~ Decided: 800 pixels, and no setting to force a layout. See 6e.
 5. **Properties dialog.** Remove it when the details pane is done, or keep it for several items?
 6. ~~New file~~ Decided: an empty file with a typed name. Templates later. See 6f.

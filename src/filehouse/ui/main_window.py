@@ -1,5 +1,7 @@
 """One browser window: toolbar, sidebar, file list, operations panel and status bar."""
 
+from types import SimpleNamespace
+
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import (
@@ -22,7 +24,7 @@ from filehouse.core import locations
 from filehouse.core.errors import OperationError
 from filehouse.core.history import History
 from filehouse.core.listing import mode_text
-from filehouse.core.operations import JobKind, quick
+from filehouse.core.operations import JobKind, permissions, quick
 from filehouse.core.operations.conflicts import split_extension
 from filehouse.integration import desktop, style
 from filehouse.qt_models.directory_model import (
@@ -33,9 +35,11 @@ from filehouse.qt_models.directory_model import (
     DirectorySortProxy,
 )
 from filehouse.qt_models.job_model import JobModel
+from filehouse.qt_models.permissions import PermissionChange
 from filehouse.qt_models.volumes import Volumes
 from filehouse.ui import clipboard, menus, settings
 from filehouse.ui.details_pane import DetailsPane
+from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.dialogs.name import NameDialog
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
@@ -172,7 +176,16 @@ class MainWindow(QMainWindow):
             self._trash,
             self._show_details,
             self._more,
+            self._permissions,
         )
+        # The lock stands apart from the rest, behind a line
+        line = QFrame()
+        line.setObjectName("divider")
+        line.setFixedSize(1, style.px(20))
+        bar = self._action_bar.layout()
+        bar.insertSpacing(bar.count() - 1, style.px(6))
+        bar.insertWidget(bar.count() - 1, line)
+        bar.insertSpacing(bar.count() - 1, style.px(6))
         bar_row = QHBoxLayout()
         bar_row.setContentsMargins(0, 0, 0, style.px(4))
         bar_row.addStretch(1)
@@ -324,6 +337,7 @@ class MainWindow(QMainWindow):
         )
         self._close_details.setEnabled(False)
         self._more = action("More…", "view-more-horizontal", [], self._show_selection_menu)
+        self._permissions = action("Permissions", "object-locked", [], self._show_permissions_menu)
         self._folder_menu = action(
             "Folder menu", "view-more-horizontal", [], self._show_folder_menu
         )
@@ -483,6 +497,7 @@ class MainWindow(QMainWindow):
             item.setEnabled(selected > 0 and (at_trash or not in_trash))
         self._rename.setEnabled(selected == 1 and not in_trash)
         self._move_to.setEnabled(selected > 0 and not in_trash)
+        self._permissions.setEnabled(selected > 0 and not in_trash)
         self._paste.setEnabled(bool(clipboard.get()[0]) and not in_trash)
         for item in (self._new_folder, self._new_file):
             item.setEnabled(not in_trash)
@@ -684,8 +699,44 @@ class MainWindow(QMainWindow):
                 self._terminal.icon(), "Open terminal here", lambda: self.open_terminal(folder)
             )
         menu.addSeparator()
+        menu.addMenu(self._permissions_menu(menu))
         menu.addAction(self._properties)
         return menu
+
+    def _permissions_menu(self, parent):
+        """The presets, for the selection: each with the mode it gives, and a tick
+        on the one the selection has already."""
+        menu = menus.menu(parent, "Permissions")
+        menu.setIcon(self._permissions.icon())
+        infos = self._view.selected_infos()
+        kinds = {info.is_dir for info in infos}
+        for preset in permissions.PRESETS:
+            modes = {preset.mode_for(is_dir) for is_dir in kinds}
+            text = preset.label
+            if len(modes) == 1 and None not in modes:
+                # Files and folders together get different modes: then the name says enough
+                text += f"\t{next(iter(modes)):o}"
+            item = menu.addAction(text, lambda preset=preset: self.set_permissions(preset))
+            # Nothing to do for a preset that leaves every selected item alone
+            item.setEnabled(modes != {None})
+            item.setCheckable(True)
+            item.setChecked(
+                bool(infos)
+                and all(
+                    info.mode is not None and (info.mode & 0o777) == preset.mode_for(info.is_dir)
+                    for info in infos
+                )
+            )
+        return menu
+
+    def _show_permissions_menu(self):
+        if not self._view.selected_infos() or self._in_trash():
+            return
+        menu = self._permissions_menu(self)
+        button = self._button_for(self._permissions)
+        position = button.mapToGlobal(button.rect().topLeft())
+        # From the bar at the bottom of the window: upwards
+        menu.exec(QPoint(position.x(), position.y() - menu.sizeHint().height()))
 
     def _add_open_in_manager(self, menu, folder):
         manager = desktop.file_manager()
@@ -797,6 +848,36 @@ class MainWindow(QMainWindow):
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.show()
         return dialog
+
+    def set_permissions(self, preset):
+        """Give the selection the permissions of `preset`. Only the items themselves:
+        nothing inside a selected folder is changed."""
+        selected = self._selected_locations()
+        if not selected or self._in_trash():
+            return None
+        name = self._view.selected_infos()[0].display_name
+        change = PermissionChange(preset, selected, self)
+        change.done.connect(lambda outcome: self._on_permissions_set(outcome, len(selected), name))
+        change.done.connect(change.deleteLater)
+        return change
+
+    def _on_permissions_set(self, outcome, count, name):
+        what = f"“{name}”" if count == 1 else f"{count} items"
+        failed = len(outcome.errors)
+        if not failed:
+            text = f"Permissions of {what} changed"
+            if outcome.skipped:
+                # "Make executable" on a selection with folders in it
+                changed = "1 file" if outcome.changed == 1 else f"{outcome.changed} files"
+                text = f"Permissions of {changed} changed, folders left as they were"
+            self.statusBar().showMessage(text, _COPIED_MS)
+        elif failed == 1:
+            self._show_error(f"Could not change the permissions of {outcome.errors[0]}.")
+        else:
+            # Every one of them, by name
+            summary = f"Could not change the permissions of {failed} of {count} items."
+            self._show_error(summary)
+            ErrorDetails(SimpleNamespace(errors=outcome.errors, summary=summary), self).open()
 
     def copy_path(self):
         """Put the paths of the selection on the clipboard as text, one per line.
