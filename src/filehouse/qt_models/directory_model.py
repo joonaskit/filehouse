@@ -15,8 +15,10 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 
 from filehouse.core.listing import ATTRIBUTES, ListingError, info_from_gio, list_directory
+from filehouse.qt_models import thumbnails
 from filehouse.qt_models.icons import description_for_content_type, icon_for_content_type
 
 NAME, SIZE, MODIFIED, TYPE = range(4)
@@ -75,6 +77,11 @@ class DirectoryModel(QAbstractTableModel):
         self._removed_at = {}
         self._locale = QLocale()
         self.loading = False
+        # Thumbnails by file name: (modified, QIcon or None). None means there is none to show
+        self._thumbnails = {}
+        self._thumbnails_on = False
+        self._thumbnailer = thumbnails.Thumbnailer(self)
+        self._thumbnailer.ready.connect(self._on_thumbnail)
         self._signals = _ListingSignals(self)
         self._signals.batch.connect(self._on_batch)
         self._signals.finished.connect(self._on_finished)
@@ -89,6 +96,7 @@ class DirectoryModel(QAbstractTableModel):
         self._infos = []
         self._names = set()
         self._removed_at = {}
+        self._thumbnails = {}
         self.endResetModel()
 
         self._location = location
@@ -221,6 +229,57 @@ class DirectoryModel(QAbstractTableModel):
         self._names.discard(name)
         self.endRemoveRows()
 
+    # Thumbnails
+
+    def set_thumbnails(self, on):
+        """Show pictures of image files in place of their type icon."""
+        if on == self._thumbnails_on:
+            return
+        self._thumbnails_on = on
+        if self._infos:
+            self.dataChanged.emit(
+                self.index(0, NAME),
+                self.index(len(self._infos) - 1, NAME),
+                [Qt.ItemDataRole.DecorationRole],
+            )
+
+    def _thumbnail(self, info):
+        """The thumbnail of an entry if it is there. If not, it is asked for and comes later."""
+        known = self._thumbnails.get(info.name)
+        if known is not None and known[0] == info.modified:
+            return known[1]
+        path = self._location.get_path()
+        if path is None or not thumbnails.can_thumbnail(info.content_type):
+            return None
+        # Marked as "nothing to show" until the answer comes, so it is asked for once
+        self._thumbnails[info.name] = (info.modified, None)
+        self._thumbnailer.request(
+            (self._generation, info.name, info.modified),
+            self._location.get_child(info.name).get_uri(),
+            f"{path}/{info.name}",
+            info.modified,
+            info.size,
+        )
+        return None
+
+    def _on_thumbnail(self, token, image):
+        generation, name, modified = token
+        if generation != self._generation or image.isNull():
+            return
+        # On a square, so wide and tall pictures line up and their names sit at one height
+        square = QPixmap(thumbnails.SIZE, thumbnails.SIZE)
+        square.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(square)
+        painter.drawImage(
+            (thumbnails.SIZE - image.width()) // 2, (thumbnails.SIZE - image.height()) // 2, image
+        )
+        painter.end()
+        self._thumbnails[name] = (modified, QIcon(square))
+        row = self.row_for_name(name)
+        if row >= 0:
+            index = self.index(row, NAME)
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DecorationRole])
+
     def row_for_name(self, name):
         """The row of the entry with this file name, or -1."""
         if name not in self._names:
@@ -286,7 +345,8 @@ class DirectoryModel(QAbstractTableModel):
                 )
             return description_for_content_type(info.content_type)
         if role == Qt.ItemDataRole.DecorationRole and column == NAME:
-            return icon_for_content_type(info.content_type)
+            thumbnail = self._thumbnail(info) if self._thumbnails_on else None
+            return thumbnail or icon_for_content_type(info.content_type)
         if role == Qt.ItemDataRole.TextAlignmentRole and column == SIZE:
             return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         return None

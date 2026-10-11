@@ -25,6 +25,7 @@ ICONS = {
     JobKind.COPY: "edit-copy",
     JobKind.MOVE: "transform-move",
     JobKind.TRASH: "user-trash",
+    JobKind.RESTORE: "edit-undo",
     JobKind.DELETE: "edit-delete",
 }
 
@@ -82,9 +83,16 @@ class JobModel(QObject):
             return None
         return (last_bytes - first_bytes) / (last_time - first_time)
 
-    def start(self, kind, sources, destination=None, origin=None):
-        """Queue a new job and return it."""
-        job = Job(kind, sources, destination, prompt=self._prompt, on_change=self._report)
+    def start(self, kind, sources, destination=None, origin=None, targets=None):
+        """Queue a new job and return it. `targets` is for a restore: see `Job`."""
+        job = Job(
+            kind,
+            sources,
+            destination,
+            targets=targets,
+            prompt=self._prompt,
+            on_change=self._report,
+        )
         self._add(job, origin)
         return job
 
@@ -182,6 +190,8 @@ def heading(job):
     what = f"“{locations.basename(job.sources[0])}”" if count == 1 else f"{count} items"
     if job.kind is JobKind.TRASH:
         return f"Moving {what} to the trash"
+    if job.kind is JobKind.RESTORE:
+        return f"Restoring {what}"
     if job.kind is JobKind.DELETE:
         return f"Deleting {what}"
     verb = "Copying" if job.kind is JobKind.COPY else "Moving"

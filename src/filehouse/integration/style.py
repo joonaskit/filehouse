@@ -87,7 +87,7 @@ def _stylesheet():
             padding: {px(4)}px {px(8)}px; background: {colors["surface"]};
         }}
         QLineEdit:focus {{ border-color: {colors["accent"]}; }}
-        QTreeView, QListWidget {{ border: none; outline: none; }}
+        QTreeView, QListView {{ border: none; outline: none; }}
         QTreeView::item {{ padding: {px(5)}px {px(6)}px; }}
         QListWidget {{ background: {colors["background"]}; padding: {px(6)}px; }}
         QListWidget::item {{ padding: {px(6)}px {px(8)}px; border-radius: {small}px; }}

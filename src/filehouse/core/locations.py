@@ -29,6 +29,25 @@ def home():
     return Gio.File.new_for_path(GLib.get_home_dir())
 
 
+def trash():
+    """The trash of every drive in one place, as GVFS shows it."""
+    return Gio.File.new_for_uri("trash:///")
+
+
+def has_trash():
+    """Whether the trash can be browsed. It can't without GVFS."""
+    return "trash" in Gio.Vfs.get_default().get_supported_uri_schemes()
+
+
+def in_trash(location):
+    return location.get_uri_scheme() == "trash"
+
+
+def is_trash(location):
+    """Whether this is the trash itself, not something in it."""
+    return in_trash(location) and location.get_parent() is None
+
+
 def from_argument(arg):
     """A location from a command line argument: a path or a URI."""
     return Gio.File.new_for_commandline_arg(arg)
@@ -44,6 +63,11 @@ def from_user_input(text):
 
 def same(a, b):
     return a is not None and b is not None and a.equal(b)
+
+
+def inside(location, folder):
+    """Whether `location` lies somewhere under `folder`."""
+    return location is not None and folder is not None and location.has_prefix(folder)
 
 
 def parent(location):
@@ -71,6 +95,8 @@ def display_name(location):
     """A short name for titles and breadcrumbs."""
     if location.equal(home()):
         return "Home"
+    if is_trash(location):
+        return "Trash"
     if location.get_parent() is None:
         return "/" if location.is_native() else location.get_uri()
     return location.get_basename() or location.get_uri()
@@ -82,6 +108,8 @@ def segments(location):
     current = location
     while current is not None:
         name = "/" if current.get_parent() is None and current.is_native() else None
+        if is_trash(current):
+            name = "Trash"
         result.append((name or current.get_basename() or current.get_uri(), current))
         current = current.get_parent()
     result.reverse()
@@ -111,6 +139,8 @@ def places():
         if location.equal(home_location) or not location.query_exists(None):
             continue
         result.append(Place(location.get_basename(), icon, location))
+    if has_trash():
+        result.append(Place("Trash", "user-trash", trash()))
     return result
 
 
@@ -146,6 +176,10 @@ def file_type(location, cancellable=None):
             return None
         raise
     return info.get_file_type()
+
+
+def from_path(path):
+    return Gio.File.new_for_path(path)
 
 
 def from_uri(uri):

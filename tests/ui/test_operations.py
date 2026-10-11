@@ -1,5 +1,6 @@
 """File operations from the window: clipboard, drops, delete, rename, new folder, the panel."""
 
+import dataclasses
 import os
 
 import pytest
@@ -8,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 from shiboken6 import isValid
 from ui_helpers import TIMEOUT, gfile
 
-from filehouse.core import locations
+from filehouse.core import listing, locations
 from filehouse.core.operations import (
     Answer,
     ConfirmDelete,
@@ -17,7 +18,8 @@ from filehouse.core.operations import (
     JobKind,
     JobState,
 )
-from filehouse.ui import clipboard, main_window
+from filehouse.qt_models import directory_model
+from filehouse.ui import clipboard, main_window, settings
 from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.main_window import MainWindow
 
@@ -733,3 +735,335 @@ def test_a_question_whose_window_closes_is_asked_again(
     again.button_for(Answer.REPLACE).click()
     wait_final(jobs, job)
     assert (tree / "dst" / "a.txt").read_text() == "aaa"
+
+
+# What is remembered
+
+
+def test_hidden_files_and_view_mode_are_remembered(qtbot, tree, open_window):
+    first = open_window(tree / "src")
+    assert first._view.mode == settings.DETAILS and not first._hidden.isChecked()
+
+    first._hidden.trigger()
+    first._icons_mode.trigger()
+    second = open_window(tree / "dst")
+
+    assert second._hidden.isChecked() and second._proxy.show_hidden
+    assert second._view.mode == settings.ICONS
+    assert second._icons_mode.isChecked() and not second._details_mode.isChecked()
+
+
+def test_window_size_is_remembered_when_it_closes(qtbot, tree, open_window):
+    first = open_window(tree / "src")
+    first.resize(701, 503)
+    first.close()
+
+    second = open_window(tree / "src")
+
+    assert (second.width(), second.height()) == (701, 503)
+
+
+# Icons and details
+
+
+def test_changing_the_view_mode_keeps_the_selection(qtbot, tree, open_window):
+    window = open_window(tree / "src")
+    select(window, "a.txt", "sub")
+    view = window._view
+
+    window._icons_mode.trigger()
+
+    assert view._stack.currentWidget() is view._grid
+    assert [info.name for info in view.selected_infos()] == ["sub", "a.txt"]
+    assert window._count_label.text() == "3 items, 2 selected"
+    assert window._model._thumbnails_on
+
+    # Selecting in the icons counts as well: they only ever select the name
+    view._grid.selectionModel().clearSelection()
+    view._grid.setCurrentIndex(window._proxy.index(1, 0))
+    assert view.selected_count() == 1
+    assert window._rename.isEnabled()
+
+    qtbot.keyClick(window, Qt.Key.Key_3, Qt.KeyboardModifier.ControlModifier)
+    assert view._stack.currentWidget() is view._tree
+    assert not window._model._thumbnails_on
+
+
+def test_an_empty_folder_shows_its_message_in_both_modes(qtbot, tree, open_window):
+    window = open_window(tree / "dst")
+    view = window._view
+    assert view._stack.currentWidget() is view._message
+
+    window._icons_mode.trigger()
+    assert view._stack.currentWidget() is view._message
+
+    (tree / "dst" / "new.txt").write_text("x")
+    qtbot.waitUntil(lambda: view._stack.currentWidget() is view._grid, timeout=TIMEOUT)
+
+
+def test_operations_work_from_the_icons(qtbot, tree, open_window, jobs, wait_final):
+    window = open_window(tree / "src")
+    window._icons_mode.trigger()
+    select(window, "a.txt")
+    window._copy.trigger()
+    go(qtbot, window, tree / "dst")
+
+    wait_final(jobs, window.paste())
+
+    assert names(tree / "dst") == ["a.txt"]
+
+
+# The trash, with a folder standing in for it: the real one is never opened here
+
+
+@pytest.fixture
+def bin_(tree, monkeypatch):
+    """A folder the app takes for the trash, holding two trashed items."""
+    trash = tree / "bin"
+    trash.mkdir()
+    (trash / "report.pdf").write_text("r")
+    (trash / "album").mkdir()
+    (trash / "album" / "a.jpg").write_text("a")
+    root = gfile(trash)
+    monkeypatch.setattr(locations, "trash", lambda: root)
+    monkeypatch.setattr(locations, "is_trash", lambda location: location.equal(root))
+    monkeypatch.setattr(
+        locations, "in_trash", lambda location: location.equal(root) or location.has_prefix(root)
+    )
+    # Where each item was, as the real trash tells for what is in it
+    real = directory_model.info_from_gio
+
+    def with_origin(info):
+        made = real(info)
+        if made.name in ("report.pdf", "album"):
+            made = dataclasses.replace(made, original_path=str(tree / "src" / made.name))
+        return made
+
+    # Both the first listing and the changes that follow go through this
+    monkeypatch.setattr(listing, "info_from_gio", with_origin)
+    monkeypatch.setattr(directory_model, "info_from_gio", with_origin)
+    return trash
+
+
+def test_the_trash_offers_restore_and_delete_and_nothing_else(qtbot, tree, bin_, open_window):
+    clipboard.put(uris(tree / "src" / "a.txt"), cut=False)
+    window = open_window(bin_)
+    assert window.windowTitle() == "Trash — Files"
+
+    off = (window._cut, window._paste, window._rename, window._new_folder)
+    assert not any(action.isEnabled() for action in off)
+    assert window._empty_trash.isEnabled()
+    assert not window._restore.isEnabled() and not window._delete.isEnabled()
+
+    select(window, "report.pdf")
+    assert window._restore.isEnabled() and window._delete.isEnabled()
+    assert not any(action.isEnabled() for action in off)
+    assert window.paste() is None and window.new_folder() is None and window.rename() is None
+
+
+def test_restore_puts_the_selection_back(qtbot, tree, bin_, open_window, jobs, wait_final):
+    window = open_window(bin_)
+    select(window, "report.pdf", "album")
+
+    job = wait_final(jobs, window.restore_selected())
+
+    assert job.kind is JobKind.RESTORE and job.state is JobState.DONE
+    assert window._panel.row(job).title.text() == "Restored 2 items"
+    assert names(bin_) == []
+    assert (tree / "src" / "report.pdf").read_text() == "r"
+    assert names(tree / "src" / "album") == ["a.jpg"]
+    qtbot.waitUntil(lambda: listed(window) == [], timeout=TIMEOUT)
+    assert window._view._message.text() == "The trash is empty"
+    assert not window._empty_trash.isEnabled()
+
+
+def test_restore_asks_when_something_is_in_the_way(
+    qtbot, tree, bin_, open_window, jobs, wait_final, wait_question
+):
+    (tree / "src" / "report.pdf").write_text("newer")
+    window = open_window(bin_)
+    select(window, "report.pdf")
+
+    job = window.restore_selected()
+    box = wait_question(jobs)
+
+    with pytest.raises(StopIteration):
+        box.button_for(Answer.REPLACE)
+    box.button_for(Answer.KEEP_BOTH).click()
+    wait_final(jobs, job)
+    assert (tree / "src" / "report.pdf").read_text() == "newer"
+    assert (tree / "src" / "report (2).pdf").read_text() == "r"
+
+
+def test_delete_key_in_the_trash_deletes_for_good_after_asking(
+    qtbot, tree, bin_, open_window, jobs, wait_final, wait_question
+):
+    window = open_window(bin_)
+    select(window, "report.pdf")
+
+    qtbot.keyClick(window._view._tree, Qt.Key.Key_Delete)
+    box = wait_question(jobs)
+
+    assert isinstance(box.question, ConfirmDelete)
+    assert names(bin_) == ["album", "report.pdf"]
+    box.button_for(Answer.DELETE).click()
+    job = wait_final(jobs, jobs.jobs[0])
+    assert job.kind is JobKind.DELETE
+    assert names(bin_) == ["album"]
+
+
+def test_empty_trash_asks_with_the_count_and_deletes_everything(
+    qtbot, tree, bin_, open_window, jobs, wait_final, wait_question
+):
+    (bin_ / ".hidden").write_text("h")
+    window = open_window(bin_)
+
+    job = window.empty_trash()
+    box = wait_question(jobs)
+
+    # Hidden items count too: the trash is emptied, not just what is on show
+    assert box.text() == "Permanently delete 3 items?"
+    assert names(bin_) == [".hidden", "album", "report.pdf"]
+    box.button_for(Answer.DELETE).click()
+    wait_final(jobs, job)
+
+    assert job.state is JobState.DONE
+    assert names(bin_) == []
+    assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
+
+
+def test_empty_trash_can_be_called_off(
+    qtbot, tree, bin_, open_window, jobs, wait_final, wait_question
+):
+    window = open_window(bin_)
+
+    job = window.empty_trash()
+    wait_question(jobs).button_for(Answer.CANCEL).click()
+    wait_final(jobs, job)
+
+    assert names(bin_) == ["album", "report.pdf"]
+
+
+def test_empty_trash_is_only_for_the_trash(qtbot, tree, open_window, jobs):
+    window = open_window(tree / "src")
+
+    assert not window._empty_trash.isEnabled()
+    assert window.empty_trash() is None
+    assert window.restore_selected() is None
+    assert jobs.jobs == []
+
+
+def test_inside_a_trashed_folder_nothing_can_be_restored_or_deleted(
+    qtbot, tree, bin_, open_window, jobs
+):
+    window = open_window(bin_ / "album")
+    select(window, "a.jpg")
+
+    assert not window._restore.isEnabled() and not window._delete.isEnabled()
+    assert window.delete_selected() is None and window.trash_selected() is None
+    assert not window._empty_trash.isEnabled()
+    assert jobs.jobs == []
+
+
+def test_a_drop_on_the_trash_trashes(qtbot, home_dir, tree, bin_, open_window, jobs, wait_final):
+    (home_dir / "old.txt").write_text("x")
+    window = open_window(bin_)
+
+    job = wait_final(jobs, drop(window, [home_dir / "old.txt"]))
+
+    assert job.kind is JobKind.TRASH and job.state is JobState.DONE
+    assert names(home_dir) == []
+    # Not onto a trashed folder, and what is in the trash already stays put
+    assert drop(window, [tree / "src" / "a.txt"], onto="album") is None
+    assert drop(window, [bin_ / "report.pdf"]) is None
+
+
+def test_a_file_in_the_trash_is_not_opened(qtbot, tree, bin_, open_window):
+    window = open_window(bin_)
+
+    window._on_item_activated(window._model.info(window._model.row_for_name("report.pdf")))
+
+    assert "Restore" in window.statusBar().currentMessage()
+
+
+# Properties
+
+
+def test_properties_of_a_file(qtbot, tree, open_window):
+    window = open_window(tree / "src")
+    select(window, "a.txt")
+
+    dialog = window.properties()
+
+    assert dialog.windowTitle() == "Properties of a.txt"
+    rows = {label: value.text() for label, value in dialog.rows.items()}
+    assert rows["Name"] == "a.txt"
+    assert rows["Type"] == "Plain text document"
+    assert rows["Location"] == str(tree / "src")
+    assert rows["Size"] == "3 bytes"
+    assert rows["Modified"]
+    assert rows["Others"] in ("Read", "Nothing", "Read, write")
+    assert any(label.startswith("Owner") for label in rows)
+    dialog.close()
+
+
+def test_properties_of_a_folder_add_up_what_is_in_it(qtbot, tree, open_window):
+    (tree / "src" / "sub" / "big.bin").write_bytes(b"x" * 3000)
+    (tree / "src" / "sub" / "inner").mkdir()
+    window = open_window(tree / "src")
+    select(window, "sub")
+
+    dialog = window.properties()
+    assert dialog.rows["Size"].text() == "Calculating…"
+
+    qtbot.waitUntil(lambda: "file" in dialog.rows["Size"].text(), timeout=TIMEOUT)
+    assert dialog.rows["Size"].text().endswith("(3,000 bytes), 1 file, 1 folder") or dialog.rows[
+        "Size"
+    ].text().endswith("bytes), 1 file, 1 folder")
+    dialog.close()
+
+
+def test_properties_of_several_items_and_of_the_open_folder(qtbot, tree, open_window):
+    window = open_window(tree / "src")
+    select(window, "a.txt", "b.txt", "sub")
+
+    several = window.properties()
+
+    assert several.windowTitle() == "Properties of 3 items"
+    assert several.rows["Location"].text() == str(tree / "src")
+    qtbot.waitUntil(lambda: "files" in several.rows["Size"].text(), timeout=TIMEOUT)
+    assert several.rows["Size"].text() == "6 bytes, 2 files, 1 folder"
+    several.close()
+
+    select(window)
+    folder = window.properties()
+    assert folder.windowTitle() == "Properties of src"
+    qtbot.waitUntil(lambda: "files" in folder.rows["Size"].text(), timeout=TIMEOUT)
+    assert folder.rows["Size"].text() == "6 bytes, 2 files, 1 folder"
+    folder.close()
+
+
+def test_properties_of_something_that_is_gone_say_so(qtbot, tree, open_window):
+    window = open_window(tree / "src")
+    select(window, "a.txt")
+    (tree / "src" / "a.txt").unlink()
+
+    dialog = window.properties()
+
+    assert "no such file" in dialog.rows["Problem"].text()
+    dialog.close()
+
+
+# Volumes
+
+
+def test_a_window_leaves_a_drive_that_goes_away(qtbot, tree, open_window):
+    window = open_window(tree / "src" / "sub")
+
+    window._on_volume_removed(gfile(tree / "dst"))
+    assert window._location.get_path() == str(tree / "src" / "sub")
+
+    window._on_volume_removed(gfile(tree / "src"))
+    wait_loaded(qtbot, window)
+    assert locations.same(window._location, locations.home())
+    assert "gone" in window.statusBar().currentMessage()

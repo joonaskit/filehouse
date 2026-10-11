@@ -10,6 +10,7 @@ Browsing and file operations work, and operations show in the shell's island whe
 
 - Copy, cut and paste, drag and drop, move to trash, permanent delete, rename and new folder
 - Operations run in the background, with progress, cancel, retry and error details in a panel at the bottom of the window
+- Trash with restore and empty, drives in the sidebar with eject, an icons view with thumbnails, and a properties dialog
 - Details view with sorting: folders first, then natural order by name
 - Folders load in batches on a worker thread and follow changes made elsewhere
 - Breadcrumb path bar, editable with a click or Ctrl+L
@@ -63,6 +64,8 @@ install -Dm644 data/filehouse.desktop ~/.local/share/applications/filehouse.desk
 | Shift+Delete | Delete permanently (asks first) |
 | F2 | Rename |
 | Ctrl+Shift+N | New folder |
+| Ctrl+1, Ctrl+3 | Icons, details |
+| Alt+Enter | Properties |
 | Ctrl+W | Close the window |
 
 ## Tests

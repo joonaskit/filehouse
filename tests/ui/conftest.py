@@ -62,3 +62,13 @@ def release_clipboard(qapp):
 
     yield
     clipboard.release()
+
+
+@pytest.fixture(autouse=True)
+def fresh_settings():
+    """Nothing remembered from an earlier test."""
+    from filehouse.ui import settings
+
+    settings.clear()
+    yield
+    settings.clear()

@@ -120,3 +120,14 @@ def test_ctrl_l_edits_the_location(qtbot, tree):
 
     assert window._path_bar.currentWidget() is window._path_bar._edit
     assert window._path_bar._edit.text() == str(tree / "Downloads")
+
+
+def test_a_folder_whose_last_file_goes_says_it_is_empty(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads" / "sub")
+    (tree / "Downloads" / "sub" / "only.txt").write_text("")
+    qtbot.waitUntil(lambda: window._count_label.text() == "1 item", timeout=5000)
+
+    (tree / "Downloads" / "sub" / "only.txt").unlink()
+
+    qtbot.waitUntil(lambda: window._count_label.text() == "0 items", timeout=5000)
+    assert window._view._message.text() == "This folder is empty"

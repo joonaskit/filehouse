@@ -20,6 +20,8 @@ ATTRIBUTES = ",".join(
         "standard::size",
         "standard::fast-content-type",
         "time::modified",
+        # Only set for what is in the trash
+        "trash::orig-path",
     ]
 )
 
@@ -43,6 +45,7 @@ class FileInfo:
     modified: int  # seconds since the epoch, 0 when unknown
     content_type: str
     sort_key: tuple
+    original_path: str | None = None  # where a trashed item was, for restoring it
 
 
 def natural_key(name):
@@ -67,6 +70,7 @@ def info_from_gio(info):
         content_type=info.get_attribute_string("standard::fast-content-type")
         or "application/octet-stream",
         sort_key=natural_key(display_name),
+        original_path=info.get_attribute_byte_string("trash::orig-path"),
     )
 
 

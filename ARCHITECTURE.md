@@ -99,6 +99,7 @@ filehouse/
 │   │   ├── locations.py         path/URI handling, places (home, Downloads, …), display names
 │   │   ├── listing.py           batched directory enumeration, file info records
 │   │   ├── history.py           back and forward history for one window
+│   │   ├── properties.py        details of a file, size of a folder all the way down
 │   │   ├── errors.py            OperationError: which file, which step, readable message
 │   │   └── operations/
 │   │       ├── job.py           Job, JobState, JobProgress
@@ -112,6 +113,9 @@ filehouse/
 │   ├── qt_models/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
 │   │   ├── icons.py             icon and description per content type
+│   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
+│   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
+│   │   ├── measure.py           folder sizes on a worker thread
 │   │   ├── job_model.py         all jobs of the process, fed by worker threads; titles and texts
 │   │   └── workers.py           the thread pool jobs run on
 │   ├── integration/
@@ -126,8 +130,10 @@ filehouse/
 │       ├── folder_view.py       list and grid modes, delegates
 │       ├── operations_panel.py  in-app list of jobs, with cancel, retry and details
 │       ├── clipboard.py         cut, copy and paste of files as `text/uri-list`
+│       ├── settings.py          what is remembered between runs
 │       └── dialogs/             questions (conflict, error, no trash, confirm delete) and the
-│                                prompter that shows them, name (rename, new folder), details
+│                                prompter that shows them, name (rename, new folder), details,
+│                                properties
 └── tests/
     ├── core/                    copy, move, trash, cancel, failure, conflicts against tmp dirs
     └── integration/             island reporter against a fake bus, theme reader
@@ -276,7 +282,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is next.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives.
 
 ### Phase 0: skeleton and integration basics
 
@@ -342,6 +348,15 @@ The tests use `/dev/shm` as the second file system when it is one, and also alwa
 - Trash view with restore and empty. Restore needs the trash location and each item's original path, and is built here as a job, not in phase 2.
 - Properties dialog (size, counts, dates, permissions read-only).
 - Remember window size, view mode and hidden-files setting.
+
+**How phase 5 was built**
+
+- **Trash.** The trash is the GVFS location `trash:///`, which shows the trash of every drive in one place and tells where each item was (`trash::orig-path`). Restore is its own job kind: one step per item, moved back whole with `Gio.File.move`, the folder it was in made again if it is gone. A restore never replaces what is there now (Skip and Keep both only). Deleting from the trash is the ordinary delete job with its confirmation, planned as one step per item because the trash removes an item with everything in it; "Empty trash" is that job for every item. In the trash nothing can be pasted, renamed or created, the Delete key deletes for good, and a drop on it trashes. Nothing inside a trashed folder can be restored or deleted by itself. Without GVFS there is no Trash place.
+- **Trash in tests.** The real `trash:///` belongs to the user, so tests never open it. The engine is tested with a plain folder standing in for the trash, and the window with the `locations` functions pointed at such a folder. Trash, restore and delete were checked against a real GVFS trash once, by hand, in a session with its own bus and home.
+- **Volumes** (`qt_models/volumes.py`) follow `Gio.VolumeMonitor`: mounted volumes, then drives that could be mounted. Clicking an unmounted one mounts it and goes there. The context menu ejects, or unmounts what can't be ejected. A window showing a drive that goes away returns to home. Encrypted drives that need a passphrase are not handled: the error is shown.
+- **Icons view.** A second view on the same model and selection (Ctrl+1 icons, Ctrl+3 details, as in Dolphin). Thumbnails are only loaded in this mode, for images Qt can read on local files, and only for items that are painted. `qt_models/thumbnails.py` follows the freedesktop thumbnail spec (`normal`, 128 px, `Thumb::URI` and `Thumb::MTime`, written under a temporary name and moved into place), so the cache is shared with Dolphin both ways.
+- **Properties** (Alt+Return) reads one file with `core/properties.py` and adds up folders on a worker thread, links not followed. For several items it shows the totals. It is read only.
+- **Remembered** in `$XDG_CONFIG_HOME/filehouse/filehouse.conf`: window size (saved when a window closes), view mode and whether hidden files are shown.
 
 ### Later
 
