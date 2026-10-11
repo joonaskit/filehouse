@@ -533,13 +533,19 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 
 ### Later
 
-- Live theme updates (file watch on the theme directory).
-- Custom title bar: a decision of its own, see issue #9 (and #21 comment in the shell repo).
-- Recent files written to the freedesktop recent-files list, for the shell's launcher (#24, point 4).
-- A notification for a job that finished while the window was hidden (#24, point 7).
-- Undo for rename, move and trash.
-- Remote locations through GVFS, search, archive extraction (each extraction a job, so it reuses the activity mapping).
-- Video and PDF thumbnails.
+Each has an issue, where what it takes and what is still to be decided is written down.
+
+- Live theme updates (file watch on the theme directory): #13.
+- Custom title bar: a decision of its own, #9 (and #21 comment in the shell repo).
+- Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14.
+- A notification for a job that finished while the window was hidden (shell #24, point 7): #15.
+- Undo for rename, move and trash: #16.
+- Remote locations through GVFS: #17.
+- Search: #18.
+- Archives, extracting and compressing, each a job so it reuses the activity mapping: #19.
+- Video and PDF thumbnails: #20.
+
+Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and a split view (#12).
 
 ### What phase 3 added to the plan above
 
