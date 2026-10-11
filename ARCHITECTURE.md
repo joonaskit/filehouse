@@ -391,9 +391,7 @@ The custom title bar in the pictures is **not** part of this phase. It is a deci
 - Menus are made with `ui/menus.py`, which makes the popup's rounded corners show.
 - Not done: "Move to trash" has a red icon, but its text is not red. Qt's menus have no per-entry text colour, and a custom entry widget was not worth it yet.
 
-**To fix from 6a, before 6b:**
-
-- **The breadcrumb's hover highlight is cut off.** Hovering a location in the path bar shows a highlight that is clipped at the bottom and sits low in its group, instead of a rounded shape centred in it. The path bar is only as tall as its text field, and the breadcrumb buttons with their padding are taller than that. The buttons should fit inside the group with the same height and rounding as the icon buttons next to them.
+**Fixed after 6a:** the breadcrumb's hover highlight was cut off, because the path bar was only as tall as its text field while the breadcrumb buttons were taller. Icon buttons and breadcrumbs now share one height, `style.CONTROL_HEIGHT`, and the path bar is that tall.
 
 **6b. Columns and list menus.**
 

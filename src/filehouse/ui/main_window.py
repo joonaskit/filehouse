@@ -247,6 +247,8 @@ class MainWindow(QMainWindow):
             button.setDefaultAction(item)
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             button.setIconSize(QSize(style.px(18), style.px(18)))
+            side = style.px(style.CONTROL_HEIGHT)
+            button.setFixedSize(side, side)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             layout.addWidget(button)
         return group

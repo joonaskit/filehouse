@@ -71,11 +71,12 @@ class PathBar(QStackedWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def sizeHint(self):
-        # As tall as the text field; a scroll area alone asks for far more
-        return QSize(super().sizeHint().width(), self._edit.sizeHint().height())
+        # As tall as the buttons in it, or their hover highlight is cut off.
+        # A scroll area alone asks for far more
+        return QSize(super().sizeHint().width(), style.px(style.CONTROL_HEIGHT))
 
     def minimumSizeHint(self):
-        return QSize(style.px(120), self._edit.sizeHint().height())
+        return QSize(style.px(120), style.px(style.CONTROL_HEIGHT))
 
     def set_location(self, segments, text):
         """Show `segments`, a root-first list of (name, location). `text` is the editable form."""
@@ -92,6 +93,7 @@ class PathBar(QStackedWidget):
             button = QToolButton()
             button.setText(name)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setFixedHeight(style.px(style.CONTROL_HEIGHT))
             button.clicked.connect(
                 lambda _checked=False, loc=location: self.location_chosen.emit(loc)
             )

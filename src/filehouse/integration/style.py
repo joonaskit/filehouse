@@ -18,6 +18,8 @@ from PySide6.QtGui import (
 from filehouse.integration import theme as theme_reader
 
 BASE_FONT_PX = 13
+# Height of a button in the toolbar's groups, unscaled: icon buttons and breadcrumbs alike
+CONTROL_HEIGHT = 36
 
 # How much of a tile its glyph fills, and how strong the tile's own colour is
 _GLYPH_SHARE = 0.56

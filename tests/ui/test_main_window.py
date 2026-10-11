@@ -169,3 +169,26 @@ def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
     ]
     # The location sits in a group of its own
     assert window._path_bar.parent() is groups[1]
+
+
+def test_breadcrumbs_fit_in_the_path_bar_and_match_the_icon_buttons(qtbot, tree):
+    from PySide6.QtWidgets import QToolButton
+
+    window = open_window(qtbot, tree / "Downloads")
+    window.show()
+    qtbot.waitExposed(window)
+    bar = window._path_bar
+    crumbs = bar.findChildren(QToolButton)
+    back = next(
+        button
+        for button in window.findChildren(QToolButton)
+        if button.defaultAction() is window._back
+    )
+
+    assert crumbs
+    for crumb in crumbs:
+        top = crumb.mapTo(bar, crumb.rect().topLeft()).y()
+        # Wholly inside the bar: a taller button has its hover highlight cut off
+        assert top >= 0 and top + crumb.height() <= bar.height()
+        assert crumb.height() == back.height()
+    assert bar.parent().height() == back.parent().height()
