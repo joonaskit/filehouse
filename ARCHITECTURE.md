@@ -104,7 +104,7 @@ filehouse/
 │   │       ├── job.py           Job, JobState, JobProgress
 │   │       ├── plan.py          expand a request into concrete steps, count bytes
 │   │       ├── copy.py          copy and move (same-device rename, cross-device copy+delete)
-│   │       ├── trash.py         trash and restore
+│   │       ├── trash.py         trash (restore is added in phase 5)
 │   │       ├── delete.py        permanent delete
 │   │       ├── conflicts.py     conflict detection and resolution policy
 │   │       └── queue.py         runs jobs with a concurrency limit
@@ -164,7 +164,7 @@ Every launch is a new process. There is no single-instance logic and no D-Bus na
 
 This is the part that has to be right. Every user action that changes files becomes a **Job**.
 
-**Job kinds:** copy, move, trash, restore from trash, permanent delete, create folder, rename. Rename and create folder are synchronous and fast; they don't need an activity, but they go through the same error type.
+**Job kinds:** copy, move, trash, permanent delete, create folder, rename. Restore from trash is a job kind too, but it is built in phase 5 together with the trash view, so it is designed against the view that triggers it. Rename and create folder are synchronous and fast; they don't need an activity, but they go through the same error type.
 
 **Life of a job:**
 
@@ -178,7 +178,7 @@ This is the part that has to be right. Every user action that changes files beco
 ```
 
 1. **Planning.** Walk the sources and build a flat list of steps (make folder, copy file, remove source), counting files and bytes. Progress is indeterminate during this phase. Planning also detects conflicts at the destination and the case of copying a folder into itself, which fails at once.
-2. **Running.** Execute steps in order. Files copy with `Gio.File.copy(..., progress_callback, cancellable)`, without `OVERWRITE` unless the user chose Replace. Progress is bytes done over bytes planned, so one large file doesn't stall the bar.
+2. **Running.** Execute steps in order. Files copy with `Gio.File.copy(..., progress_callback, cancellable)`, without `OVERWRITE` unless the user chose Replace. Copies keep modification times and permissions (`ALL_METADATA`). Progress is bytes done over bytes planned, so one large file doesn't stall the bar.
 3. **Finishing.** The job reports `done` only when every step finished. Anything else is `cancelled` or `failed`.
 
 **Moves.** Call `Gio.File.move` with `G_FILE_COPY_NO_FALLBACK_FOR_MOVE` first, so Gio never does its own copy-and-delete. On the same file system that is an atomic rename. If it fails with `NOT_SUPPORTED` (different file system), the job copies per file: each source file is deleted as soon as its own copy has completed, so the move needs no free space beyond the file in progress. Source directories are removed last, and only when empty (never recursively), so a folder holding skipped, failed or unmoved files stays in place. A cancelled or failed cross-device move therefore never loses data: each source file is either still in place or fully at the destination, but a folder may end up split between the two. Running the move again picks up the rest.
@@ -193,7 +193,9 @@ This is the part that has to be right. Every user action that changes files beco
 
 **Errors.** Every failure is an `OperationError(path, step, message)`, built from the `GLib.Error` with a readable message ("permission denied", "no space left on device", "file name too long"). On an error the job pauses in *waiting for user* and the app asks: Skip, Skip all, Retry, or Cancel. Skipped items are counted, and a job that finishes with skipped errors ends as `failed` with "Copied 10 of 12 files, 2 skipped" in its text, and Retry is offered for the skipped items. Items skipped by choosing Skip in the conflict dialog are intentional and don't count: a job whose only skips are conflict skips still ends as `done`.
 
-**Conflicts.** When a destination exists: Replace, Skip, Keep both (append " (2)" before the extension), each with an "apply to all" option. Replace on a folder merges, it doesn't delete the existing folder. Conflicts are found during planning where possible, so the user answers before the long part starts.
+**Conflicts.** When a destination exists: Replace, Skip, Keep both (append " (2)" before the extension), each with an "apply to all" option. Replace on a folder merges, it doesn't delete the existing folder. When the source and the destination are of different kinds (a file onto a folder, or a folder onto a file), that item fails with an `OperationError` naming the file: no merge and no replace. Skip and Keep both stay available. Conflicts are found during planning where possible, so the user answers before the long part starts.
+
+**Asking the user.** `core/` cannot import Qt, so a job takes a prompt callback for conflicts and errors. It is called on the job's worker thread and blocks until it returns an answer. Tests answer it directly; in phase 3 the UI supplies a callback that shows a dialog on the UI thread and waits for the result. Cancelling the job also unblocks a pending prompt (the wait watches the job's cancellable), so a closed dialog can never leave a worker thread stuck.
 
 **Trash and delete.** Trash uses `Gio.File.trash`. On a file system without trash support (some removable drives) the job stops and asks whether to delete permanently instead; it never falls back silently. Permanent delete always shows a confirmation with the item count.
 
@@ -328,7 +330,7 @@ Each phase ends with something usable and checked by hand. The core gets tests f
 
 - Icons view with thumbnails.
 - Mounted volumes and eject in the sidebar.
-- Trash view with restore and empty.
+- Trash view with restore and empty. Restore needs the trash location and each item's original path, and is built here as a job, not in phase 2.
 - Properties dialog (size, counts, dates, permissions read-only).
 - Remember window size, view mode and hidden-files setting.
 
