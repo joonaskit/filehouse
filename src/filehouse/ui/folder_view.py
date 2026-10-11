@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from filehouse.integration import style
-from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE, TYPE, InfoRole
+from filehouse.qt_models.directory_model import MODIFIED, NAME, PERMISSIONS, SIZE, InfoRole
 from filehouse.ui import clipboard, settings
 
 
@@ -98,8 +98,9 @@ class FolderView(QWidget):
         header = self._tree.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(NAME, QHeaderView.ResizeMode.Stretch)
-        for column, width in ((SIZE, 90), (MODIFIED, 150), (TYPE, 170)):
+        for column, width in ((PERMISSIONS, 100), (MODIFIED, 120), (SIZE, 90)):
             header.resizeSection(column, style.px(width))
+        header.setSortIndicatorClearable(False)
 
         self._grid = _Grid()
         self._grid.setModel(proxy)
@@ -212,6 +213,20 @@ class FolderView(QWidget):
 
     def selection_model(self):
         return self._tree.selectionModel()
+
+    def select_all(self):
+        self._items().selectAll()
+
+    # The order is the table's: its header shows it, and the icons follow the same proxy
+
+    def sort_column(self):
+        return self._tree.header().sortIndicatorSection()
+
+    def sort_order(self):
+        return self._tree.header().sortIndicatorOrder()
+
+    def sort(self, column, order):
+        self._tree.sortByColumn(column, order)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():

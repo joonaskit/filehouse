@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from gi.repository import Gio
 from PySide6.QtCore import Qt
@@ -192,3 +194,88 @@ def test_breadcrumbs_fit_in_the_path_bar_and_match_the_icon_buttons(qtbot, tree)
         assert top >= 0 and top + crumb.height() <= bar.height()
         assert crumb.height() == back.height()
     assert bar.parent().height() == back.parent().height()
+
+
+def test_select_all_selects_what_is_shown(qtbot, tree):
+    (tree / "Downloads" / ".secret").write_text("")
+    window = open_window(qtbot, tree / "Downloads")
+
+    window._select_all.trigger()
+
+    assert [info.name for info in window._view.selected_infos()] == ["sub", "report.pdf"]
+    assert window._count_label.text() == "2 items · 2 selected"
+
+
+def test_select_all_works_in_the_icons_too(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads")
+    window.set_view_mode("icons")
+
+    window._select_all.trigger()
+
+    assert window._view.selected_count() == 2
+
+
+def submenu(menu, title):
+    return next(a.menu() for a in menu.actions() if a.menu() and a.menu().title() == title)
+
+
+def entry(menu, text):
+    return next(a for a in menu.actions() if a.text() == text)
+
+
+def test_folder_menu_sorts_the_list(qtbot, tree):
+    from PySide6.QtWidgets import QMenu
+
+    from filehouse.qt_models.directory_model import MODIFIED, NAME
+
+    (tree / "Downloads" / "aaa.txt").write_text("")
+    os.utime(tree / "Downloads" / "report.pdf", (1_000_000, 1_000_000))
+    window = open_window(qtbot, tree / "Downloads")
+    menu = QMenu(window)
+    window._add_sort_and_view(menu)
+    sort = submenu(menu, "Sort by")
+    assert entry(sort, "Name").isChecked() and entry(sort, "Ascending").isChecked()
+    assert not entry(sort, "Modified").isChecked()
+
+    # Newest first, folders still on top
+    entry(sort, "Modified").trigger()
+
+    assert (window._view.sort_column(), window._view.sort_order()) == (
+        MODIFIED,
+        Qt.SortOrder.DescendingOrder,
+    )
+    shown = [window._proxy.index(row, NAME).data() for row in range(window._proxy.rowCount())]
+    assert shown == ["sub", "aaa.txt", "report.pdf"]
+
+    # A menu made now shows the new order, and can turn it around
+    menu = QMenu(window)
+    window._add_sort_and_view(menu)
+    sort = submenu(menu, "Sort by")
+    assert entry(sort, "Modified").isChecked() and entry(sort, "Descending").isChecked()
+    entry(sort, "Ascending").trigger()
+    shown = [window._proxy.index(row, NAME).data() for row in range(window._proxy.rowCount())]
+    assert shown == ["sub", "report.pdf", "aaa.txt"]
+
+
+def test_folder_menu_changes_the_view(qtbot, tree):
+    from PySide6.QtWidgets import QMenu
+
+    window = open_window(qtbot, tree / "Downloads")
+    menu = QMenu(window)
+    window._add_sort_and_view(menu)
+
+    entry(submenu(menu, "View"), "Icons").trigger()
+
+    assert window._view.mode == "icons"
+
+
+def test_folders_are_counted_again_when_the_jobs_are_done(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads")
+    window._model._count_timer.setInterval(0)
+    size = lambda: window._proxy.index(0, 3).data()  # noqa: E731
+    qtbot.waitUntil(lambda: size() == "0 items", timeout=5000)
+    (tree / "Downloads" / "sub" / "new.txt").write_text("")
+
+    window._jobs.idle.emit()
+
+    qtbot.waitUntil(lambda: size() == "1 item", timeout=5000)

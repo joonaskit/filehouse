@@ -3,7 +3,14 @@ import os
 import pytest
 from gi.repository import Gio
 
-from filehouse.core.listing import ListingError, list_directory, natural_key
+from filehouse.core.listing import (
+    Count,
+    ListingError,
+    count_children,
+    list_directory,
+    mode_text,
+    natural_key,
+)
 
 
 def listed(path, **kwargs):
@@ -103,3 +110,51 @@ def test_natural_key_orders_numbers_by_value_and_ignores_case():
         "File2.txt",
         "file10.txt",
     ]
+
+
+def test_permission_bits_are_listed(tmp_path):
+    (tmp_path / "script.sh").write_text("")
+    (tmp_path / "script.sh").chmod(0o750)
+    (tmp_path / "private").mkdir(mode=0o700)
+
+    infos = by_name(listed(tmp_path))
+
+    assert infos["script.sh"].mode == 0o750
+    assert infos["private"].mode == 0o700
+
+
+def test_mode_text_reads_like_ls():
+    assert mode_text(0o755) == "rwxr-xr-x"
+    assert mode_text(0o640) == "rw-r-----"
+    assert mode_text(0o1777) == "rwxrwxrwt"
+    assert mode_text(None) == ""
+
+
+def test_count_children_tells_hidden_entries_apart(tmp_path):
+    for name in ("a", "b", ".hidden", "draft~"):
+        (tmp_path / name).write_text("")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "deeper").write_text("")
+
+    # Only what is directly in the folder
+    assert count_children(Gio.File.new_for_path(str(tmp_path))) == Count(shown=3, hidden=2)
+    assert count_children(Gio.File.new_for_path(str(tmp_path / "sub"))) == Count(1, 0)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read anything")
+def test_count_children_of_an_unreadable_folder_is_unknown(tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0)
+    try:
+        assert count_children(Gio.File.new_for_path(str(locked))) is None
+    finally:
+        locked.chmod(0o700)
+
+
+def test_count_children_stops_when_cancelled(tmp_path):
+    (tmp_path / "a").write_text("")
+    cancellable = Gio.Cancellable()
+    cancellable.cancel()
+
+    assert count_children(Gio.File.new_for_path(str(tmp_path)), cancellable) is None

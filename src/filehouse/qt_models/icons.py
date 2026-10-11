@@ -1,12 +1,10 @@
-"""Icons and descriptions for content types, cached per type.
+"""Icons for content types, cached per kind.
 
 A file's icon is a glyph on a rounded tile, coloured by what kind of file it
 is. The colours are the theme's palette; which kind gets which is decided here.
 """
 
 from functools import cache
-
-from gi.repository import Gio
 
 from filehouse.integration import style
 
@@ -76,8 +74,3 @@ def _tile(kind, _theme_generation):
     # One per kind and theme: a tile is drawn in the colours of the theme in use
     names, colour = _KINDS[kind]
     return style.tile(*names, colour=colour)
-
-
-@cache
-def description_for_content_type(content_type):
-    return Gio.content_type_get_description(content_type)

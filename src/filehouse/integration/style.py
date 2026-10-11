@@ -4,6 +4,8 @@ Colours and fonts go through `QPalette` and `QFont`. The stylesheet is for
 shapes: rounded groups, cards, rows and menus.
 """
 
+from functools import cache
+
 from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import (
     QColor,
@@ -189,6 +191,18 @@ def _font():
             font = QFont(family)
             break
     font.setPixelSize(theme_reader.font_scaled(_theme, BASE_FONT_PX))
+    return font
+
+
+def fixed_font():
+    """The system's fixed-width font at the theme's size: for permissions and the like."""
+    return _fixed_font(generation)
+
+
+@cache
+def _fixed_font(_theme_generation):
+    font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    font.setPixelSize(theme_reader.font_scaled(_theme, BASE_FONT_PX - 1))
     return font
 
 

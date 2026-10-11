@@ -112,7 +112,8 @@ filehouse/
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
-│   │   ├── icons.py             icon and description per content type
+│   │   ├── icons.py             icon tile per kind of file
+│   │   ├── dates.py             "Today, 10:42", "Yesterday", a weekday, a date
 │   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
 │   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
 │   │   ├── measure.py           folder sizes on a worker thread
@@ -159,7 +160,7 @@ Every launch is a new process. There is no single-instance logic and no D-Bus na
 - **`core/listing.py`** enumerates a folder with `Gio.File.enumerate_children` on a worker thread, in batches of about 200, asking only for the attributes the view needs (`standard::*`, `time::modified`, `unix::mode`, `thumbnail::*`). Large folders appear progressively.
 - **`DirectoryModel`** holds one folder. It appends batches, then follows changes with a `Gio.FileMonitor` (created, deleted, renamed, changed). Sorting and the hidden-files filter are a `QSortFilterProxyModel` on top: folders first, then natural order by name, case-insensitive.
 - Navigation keeps a back/forward history per window. Up goes to the parent.
-- **`FolderView`** has a details mode (`QTreeView`: name, size, modified, type) and an icons mode (`QListView` in icon mode, with thumbnails). The mode is remembered per window, not per folder, in v1.
+- **`FolderView`** has a details mode (`QTreeView`: name, permissions, modified, size) and an icons mode (`QListView` in icon mode, with thumbnails). The mode is remembered per window, not per folder, in v1.
 - Thumbnails: look up `~/.cache/thumbnails/{normal,large}/<md5 of URI>.png` and check its `Thumb::MTime`. On a miss, generate image thumbnails with `QImageReader` on a thread pool and write them back to the cache following the freedesktop spec, so Dolphin can reuse them. Other types show their MIME icon.
 - **Sidebar:** Home, Desktop, Documents, Downloads, Pictures, Music, Videos, Trash, then mounted volumes from `Gio.VolumeMonitor`, with eject. Without GVFS installed the volume monitor only sees mounts, not unmounted drives; that is acceptable for v1.
 
@@ -282,7 +283,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: step 6a is done.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a and 6b are done.
 
 ### Phase 0: skeleton and integration basics
 
@@ -401,6 +402,16 @@ The custom title bar in the pictures is **not** part of this phase. It is a deci
 - Folder menu: Select all, Sort by, View.
 
 **Done when:** a folder of 10 000 files still lists as fast as before, and the counts fill in afterwards.
+
+**Done.** How it was built:
+
+- **Permissions** come with the listing (`unix::mode`, which the listing's `stat` already has: 10 000 files list in the same time with and without it) and are written as `ls` does, in the system's fixed-width font. The columns beside the name are in the secondary text colour.
+- **Modified** (`qt_models/dates.py`): "Today" with the time, "Yesterday", the weekday for two to six days ago, a date for anything older or in the future. A week ago is a date, because its weekday is today's. Times and dates are written in the user's locale; the words and weekday names are English like the rest of the app.
+- **Folder counts.** `core/listing.py` has `count_children`: what is directly in a folder, shown and hidden entries apart. `DirectoryModel` starts one count task when the listing has finished, for all folders in name order; it reports a few times a second, and each report is one `dataChanged`. A folder that can't be read shows nothing. The count includes hidden entries when the list shows them. Measured on 10 000 folders: listed in 0.9 s as before, all counts in 0.9 s more, with no longer stall of the UI than the listing itself causes.
+- **Keeping counts current.** The folder's monitor says when a subfolder appears or changes its attributes, and that subfolder is counted again (changes are gathered for 300 ms, and only one count runs at a time). It does **not** say when something is put into or taken out of a subfolder. So all folders are counted again when the last job ends and when the window becomes active. In between, a count can be out of date until a reload.
+- **Sorting.** The Size column sorts files by size and folders by their count, folders still on top. Sorting by size while the counts come in moves the folders as they arrive.
+- **Folder menu**, in the order of the picture: New folder, Paste, Select all; Sort by, View, Show hidden files; Open folder in Dolphin, Properties. "Sort by" offers Name, Modified and Size (Modified and Size start with the newest and the largest) and Ascending or Descending; clicking a column header still works, also for Permissions. Select all is on Ctrl+A. The trash's menu gets Select all, Sort by and View as well.
+- Not done: the sort order is not remembered between runs; a new window sorts by name.
 
 **6c. Details pane.**
 

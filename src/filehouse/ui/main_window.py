@@ -1,6 +1,6 @@
 """One browser window: toolbar, sidebar, file list, operations panel and status bar."""
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,7 +23,13 @@ from filehouse.core.history import History
 from filehouse.core.operations import JobKind, quick
 from filehouse.core.operations.conflicts import split_extension
 from filehouse.integration import desktop, style
-from filehouse.qt_models.directory_model import DirectoryModel, DirectorySortProxy
+from filehouse.qt_models.directory_model import (
+    MODIFIED,
+    NAME,
+    SIZE,
+    DirectoryModel,
+    DirectorySortProxy,
+)
 from filehouse.qt_models.job_model import JobModel
 from filehouse.qt_models.volumes import Volumes
 from filehouse.ui import clipboard, menus, settings
@@ -36,6 +42,12 @@ from filehouse.ui.path_bar import PathBar
 from filehouse.ui.sidebar import Sidebar
 
 _MESSAGE_MS = 8000
+# What "Sort by" offers, with the order each starts in: the newest and the largest first
+_SORTS = (
+    ("Name", NAME, Qt.SortOrder.AscendingOrder),
+    ("Modified", MODIFIED, Qt.SortOrder.DescendingOrder),
+    ("Size", SIZE, Qt.SortOrder.DescendingOrder),
+)
 DETAILS, ICONS = settings.DETAILS, settings.ICONS
 
 KEEP_RUNNING, CANCEL_ALL, STAY_OPEN = range(3)
@@ -216,6 +228,12 @@ class MainWindow(QMainWindow):
         self._new_folder = action(
             "New folder…", "folder-new", [QKeySequence("Ctrl+Shift+N")], self.new_folder
         )
+        self._select_all = action(
+            "Select all",
+            "edit-select-all",
+            QKeySequence.keyBindings(keys.SelectAll),
+            self._view.select_all,
+        )
         self._restore = action("Restore", "edit-undo", [], self.restore_selected)
         self._empty_trash = action("Empty trash…", "trash-empty", [], self.empty_trash)
         self._properties = action(
@@ -371,6 +389,7 @@ class MainWindow(QMainWindow):
         self._empty_trash.setEnabled(at_trash and self._model.rowCount() > 0)
 
         count = self._proxy.rowCount()
+        self._select_all.setEnabled(count > 0)
         if self._error:
             self._view.show_message(self._error)
         elif count or self._model.loading:
@@ -422,31 +441,53 @@ class MainWindow(QMainWindow):
                 menu.addSeparator()
                 menu.addAction(self._properties)
             else:
-                menu.addAction(self._empty_trash)
+                menu.addActions([self._empty_trash, self._select_all])
+                menu.addSeparator()
+                self._add_sort_and_view(menu)
             menu.exec(position)
             return
+        if info is None:
+            # The folder's own menu
+            menu.addActions([self._new_folder, self._paste, self._select_all])
+            menu.addSeparator()
+            self._add_sort_and_view(menu)
+            menu.addAction(self._hidden)
+            menu.addSeparator()
+            self._add_open_in_manager(menu, self._location)
+            menu.addAction(self._properties)
+            menu.exec(position)
+            return
+        target = locations.child(self._location, info.name)
         folder = self._location
-        if info is not None:
-            target = locations.child(self._location, info.name)
-            menu.addAction(
-                style.icon("document-open-symbolic", "document-open"),
-                "Open",
-                lambda: self._on_item_activated(info),
-            )
-            if info.is_dir:
-                folder = target
-            else:
-                apps = desktop.apps_for_type(info.content_type)
-                if apps:
-                    open_with = menus.menu(menu, "Open with")
-                    open_with.setIcon(style.icon("view-grid-symbolic", "view-grid"))
-                    menu.addMenu(open_with)
-                    for app in apps:
-                        open_with.addAction(
-                            QIcon.fromTheme(app.icon) if app.icon else QIcon(),
-                            app.name,
-                            lambda app=app: desktop.open_with(app, target, self._show_error),
-                        )
+        menu.addAction(
+            style.icon("document-open-symbolic", "document-open"),
+            "Open",
+            lambda: self._on_item_activated(info),
+        )
+        if info.is_dir:
+            folder = target
+        else:
+            apps = desktop.apps_for_type(info.content_type)
+            if apps:
+                open_with = menus.menu(menu, "Open with")
+                open_with.setIcon(style.icon("view-grid-symbolic", "view-grid"))
+                menu.addMenu(open_with)
+                for app in apps:
+                    open_with.addAction(
+                        QIcon.fromTheme(app.icon) if app.icon else QIcon(),
+                        app.name,
+                        lambda app=app: desktop.open_with(app, target, self._show_error),
+                    )
+        self._add_open_in_manager(menu, folder)
+        menu.addSeparator()
+        menu.addActions([self._cut, self._copy, self._paste])
+        menu.addSeparator()
+        menu.addActions([self._rename, self._trash, self._delete])
+        menu.addSeparator()
+        menu.addAction(self._properties)
+        menu.exec(position)
+
+    def _add_open_in_manager(self, menu, folder):
         manager = desktop.file_manager()
         if manager is not None:
             menu.addAction(
@@ -454,20 +495,31 @@ class MainWindow(QMainWindow):
                 f"Open folder in {manager.name}",
                 lambda: desktop.open_with(manager, folder, self._show_error),
             )
-        menu.addSeparator()
-        if info is not None:
-            menu.addActions([self._cut, self._copy])
-        menu.addAction(self._paste)
-        if info is not None:
-            menu.addSeparator()
-            menu.addActions([self._rename, self._trash, self._delete])
-        else:
-            menu.addAction(self._new_folder)
-            menu.addSeparator()
-            menu.addAction(self._hidden)
-        menu.addSeparator()
-        menu.addAction(self._properties)
-        menu.exec(position)
+
+    def _add_sort_and_view(self, menu):
+        """The folder menu's entries for how the list is shown."""
+        column, order = self._view.sort_column(), self._view.sort_order()
+        sort = menus.menu(menu, "Sort by")
+        sort.setIcon(style.icon("view-sort-symbolic", "view-sort"))
+        for text, sorts_by, first_order in _SORTS:
+            item = sort.addAction(
+                text, lambda by=sorts_by, first=first_order: self._view.sort(by, first)
+            )
+            item.setCheckable(True)
+            item.setChecked(sorts_by == column)
+        sort.addSeparator()
+        for text, way in (
+            ("Ascending", Qt.SortOrder.AscendingOrder),
+            ("Descending", Qt.SortOrder.DescendingOrder),
+        ):
+            item = sort.addAction(text, lambda way=way: self._view.sort(column, way))
+            item.setCheckable(True)
+            item.setChecked(way == order)
+        menu.addMenu(sort)
+        view = menus.menu(menu, "View")
+        view.setIcon(style.icon("view-grid-symbolic", "view-grid"))
+        view.addActions([self._details_mode, self._icons_mode])
+        menu.addMenu(view)
 
     # File operations
 
@@ -677,7 +729,14 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            # Folders may have been filled or emptied by another app meanwhile
+            self._model.recount()
+
     def _on_jobs_idle(self):
+        self._model.recount()
         if self._closing_when_idle:
             self._closing_when_idle = False
             self.close()
