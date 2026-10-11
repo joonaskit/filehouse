@@ -5,12 +5,14 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QDateTime,
     QLocale,
+    QMimeData,
     QModelIndex,
     QObject,
     QRunnable,
     QSortFilterProxyModel,
     Qt,
     QThreadPool,
+    QUrl,
     Signal,
 )
 
@@ -68,6 +70,9 @@ class DirectoryModel(QAbstractTableModel):
         self._cancellable = None
         self._monitor = None
         self._monitor_handler = None
+        # Counts monitor events, to tell an answer that is older than a removal
+        self._event = 0
+        self._removed_at = {}
         self._locale = QLocale()
         self.loading = False
         self._signals = _ListingSignals(self)
@@ -83,6 +88,7 @@ class DirectoryModel(QAbstractTableModel):
         self.beginResetModel()
         self._infos = []
         self._names = set()
+        self._removed_at = {}
         self.endResetModel()
 
         self._location = location
@@ -143,10 +149,11 @@ class DirectoryModel(QAbstractTableModel):
 
     def _on_changed(self, _monitor, file, other_file, event):
         events = Gio.FileMonitorEvent
+        self._event += 1
         if event in (events.DELETED, events.MOVED_OUT):
-            self._remove(file.get_basename())
+            self._gone(file.get_basename())
         elif event == events.RENAMED:
-            self._remove(file.get_basename())
+            self._gone(file.get_basename())
             self._refresh(other_file)
         elif event in (
             events.CREATED,
@@ -156,6 +163,10 @@ class DirectoryModel(QAbstractTableModel):
         ):
             self._refresh(file)
 
+    def _gone(self, name):
+        self._removed_at[name] = self._event
+        self._remove(name)
+
     def _refresh(self, file):
         file.query_info_async(
             ATTRIBUTES,
@@ -164,9 +175,10 @@ class DirectoryModel(QAbstractTableModel):
             self._cancellable,
             self._on_info,
             self._generation,
+            self._event,
         )
 
-    def _on_info(self, file, result, generation):
+    def _on_info(self, file, result, generation, asked_at):
         try:
             info = file.query_info_finish(result)
         except GLib.Error:
@@ -175,6 +187,10 @@ class DirectoryModel(QAbstractTableModel):
         if generation != self._generation:
             return
         info = info_from_gio(info)
+        if self._removed_at.get(info.name, -1) >= asked_at:
+            # Asked while the file was there, answered after it was renamed or deleted:
+            # a file written under a temporary name and moved into place does this
+            return
         if info.name in self._names:
             self._replace(info)
         else:
@@ -226,6 +242,29 @@ class DirectoryModel(QAbstractTableModel):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return _HEADERS[section]
         return None
+
+    # Dragging out: the rows as `text/uri-list`
+
+    def flags(self, index):
+        flags = super().flags(index)
+        if index.isValid():
+            flags |= Qt.ItemFlag.ItemIsDragEnabled
+        return flags
+
+    def supportedDragActions(self):
+        return Qt.DropAction.CopyAction | Qt.DropAction.MoveAction | Qt.DropAction.LinkAction
+
+    def mimeTypes(self):
+        return ["text/uri-list"]
+
+    def mimeData(self, indexes):
+        data = QMimeData()
+        data.setUrls([QUrl(uri) for uri in self.uris({index.row() for index in indexes})])
+        return data
+
+    def uris(self, rows):
+        """The URIs of the entries on these rows."""
+        return [self._location.get_child(self._infos[row].name).get_uri() for row in sorted(rows)]
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():

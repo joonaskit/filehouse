@@ -1,0 +1,54 @@
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+import pytest
+from helpers import not_supported
+
+from filehouse.core.operations import copy
+
+
+@pytest.fixture
+def real_other_device(tmp_path):
+    """A folder on a different file system than tmp_path, or skip."""
+    try:
+        path = Path(tempfile.mkdtemp(prefix="filehouse-test-", dir="/dev/shm"))
+    except OSError:
+        pytest.skip("no second file system to test with")
+    if path.stat().st_dev == tmp_path.stat().st_dev:
+        shutil.rmtree(path)
+        pytest.skip("no second file system to test with")
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.fixture(params=["real", "forced"])
+def other_device(request, tmp_path, monkeypatch):
+    """A destination that can't be reached with a rename: a real second file system
+    where there is one, and always a folder where renames are made to fail the same way."""
+    if request.param == "real":
+        return request.getfixturevalue("real_other_device")
+    monkeypatch.setattr(copy, "_rename_item", not_supported)
+    path = tmp_path / "other"
+    path.mkdir()
+    return path
+
+
+@pytest.fixture
+def slow_copy(monkeypatch):
+    """Copy file contents in small chunks, so a test can act in the middle of a file.
+    Like Gio, it leaves the partial file behind when it is cancelled."""
+
+    def chunked(source, dest, _flags, cancellable, progress):
+        total = os.path.getsize(source.get_path())
+        done = 0
+        with open(source.get_path(), "rb") as reader, open(dest.get_path(), "xb") as writer:
+            while chunk := reader.read(1024):
+                if cancellable is not None:
+                    cancellable.set_error_if_cancelled()
+                writer.write(chunk)
+                done += len(chunk)
+                progress(done, total)
+
+    monkeypatch.setattr(copy, "_gio_copy", chunked)

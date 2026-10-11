@@ -101,5 +101,11 @@ def _stylesheet():
         }}
         QSplitter::handle {{ background: {colors["surface"]}; }}
         QStatusBar, QStatusBar QLabel {{ color: {colors["textSecondary"]}; }}
+        #operations {{ border-top: 1px solid {colors["surface"]}; }}
+        #operationsHeader {{ border-radius: 0; padding: {px(6)}px {px(10)}px; }}
+        QProgressBar {{
+            border: none; border-radius: {px(3)}px; background: {colors["surfaceRaised"]};
+        }}
+        QProgressBar::chunk {{ border-radius: {px(3)}px; background: {colors["accent"]}; }}
         QStatusBar QLabel {{ padding: 0 {px(8)}px; }}
     """

@@ -104,15 +104,16 @@ filehouse/
 │   │       ├── job.py           Job, JobState, JobProgress
 │   │       ├── plan.py          expand a request into concrete steps, count bytes
 │   │       ├── copy.py          copy and move (same-device rename, cross-device copy+delete)
-│   │       ├── trash.py         trash and restore
+│   │       ├── trash.py         trash (restore is added in phase 5)
 │   │       ├── delete.py        permanent delete
-│   │       ├── conflicts.py     conflict detection and resolution policy
+│   │       ├── conflicts.py     the questions a job asks, answers, names for "Keep both"
+│   │       ├── quick.py         new folder and rename: immediate, no job
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
 │   │   ├── icons.py             icon and description per content type
-│   │   ├── job_model.py         list model of jobs, fed by worker threads
-│   │   └── workers.py           thread pool glue
+│   │   ├── job_model.py         all jobs of the process, fed by worker threads; titles and texts
+│   │   └── workers.py           the thread pool jobs run on
 │   ├── integration/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
@@ -124,7 +125,9 @@ filehouse/
 │       ├── path_bar.py          breadcrumbs, editable on click or Ctrl+L
 │       ├── folder_view.py       list and grid modes, delegates
 │       ├── operations_panel.py  in-app list of jobs, with cancel, retry and details
-│       └── dialogs/             conflict, confirm delete, properties, rename
+│       ├── clipboard.py         cut, copy and paste of files as `text/uri-list`
+│       └── dialogs/             questions (conflict, error, no trash, confirm delete) and the
+│                                prompter that shows them, name (rename, new folder), details
 └── tests/
     ├── core/                    copy, move, trash, cancel, failure, conflicts against tmp dirs
     └── integration/             island reporter against a fake bus, theme reader
@@ -164,7 +167,7 @@ Every launch is a new process. There is no single-instance logic and no D-Bus na
 
 This is the part that has to be right. Every user action that changes files becomes a **Job**.
 
-**Job kinds:** copy, move, trash, restore from trash, permanent delete, create folder, rename. Rename and create folder are synchronous and fast; they don't need an activity, but they go through the same error type.
+**Job kinds:** copy, move, trash, permanent delete, create folder, rename. Restore from trash is a job kind too, but it is built in phase 5 together with the trash view, so it is designed against the view that triggers it. Rename and create folder are synchronous and fast; they don't need an activity, but they go through the same error type.
 
 **Life of a job:**
 
@@ -178,38 +181,44 @@ This is the part that has to be right. Every user action that changes files beco
 ```
 
 1. **Planning.** Walk the sources and build a flat list of steps (make folder, copy file, remove source), counting files and bytes. Progress is indeterminate during this phase. Planning also detects conflicts at the destination and the case of copying a folder into itself, which fails at once.
-2. **Running.** Execute steps in order. Files copy with `Gio.File.copy(..., progress_callback, cancellable)`, without `OVERWRITE` unless the user chose Replace. Progress is bytes done over bytes planned, so one large file doesn't stall the bar.
+2. **Running.** Execute steps in order. Files copy with `Gio.File.copy(..., progress_callback, cancellable)` to a temporary name next to the destination (`.filehouse-<random>.part`) and are renamed into place once complete, without `OVERWRITE` unless the user chose Replace. A half-written file therefore never appears under the real name, a file being replaced stays whole until its replacement is, and the temporary file is always the job's own to remove. Copies keep modification times and permissions (`ALL_METADATA`). Progress is bytes done over bytes planned, so one large file doesn't stall the bar.
 3. **Finishing.** The job reports `done` only when every step finished. Anything else is `cancelled` or `failed`.
 
-**Moves.** Call `Gio.File.move` with `G_FILE_COPY_NO_FALLBACK_FOR_MOVE` first, so Gio never does its own copy-and-delete. On the same file system that is an atomic rename. If it fails with `NOT_SUPPORTED` (different file system), the job does a copy of that item and deletes the source only after the copy of that item completed. A cancelled or failed cross-device move therefore never loses data: each source is either still in place or fully at the destination.
+**Moves.** Call `Gio.File.move` with `G_FILE_COPY_NO_FALLBACK_FOR_MOVE` first, so Gio never does its own copy-and-delete. On the same file system that is an atomic rename. A folder whose destination is free and on the same file system (compared by `id::filesystem` while planning) is one rename step and counts as one item; any other folder is planned item by item, and so is a rename that turns out not to be possible at run time. If it fails with `NOT_SUPPORTED` (different file system), the job copies per file: each source file is deleted as soon as its own copy has completed, so the move needs no free space beyond the file in progress. Source directories are removed last, and only when empty (never recursively), so a folder holding skipped, failed or unmoved files stays in place. A cancelled or failed cross-device move therefore never loses data: each source file is either still in place or fully at the destination, but a folder may end up split between the two. Running the move again picks up the rest.
+
+**Symlinks.** A symbolic link is copied as a link, never followed. The planner classifies items with `query_info(..., NOFOLLOW_SYMLINKS)`, so a link to a folder is one "copy link" step and the planner never walks into it. Copy uses `Gio.File.copy` with `NOFOLLOW_SYMLINKS`, so the new link has the same target text (a relative link may point somewhere else, or nowhere, from its new place). A same-device move renames the link; a cross-device move copies the link and then deletes the source link, never its target. Trash and permanent delete act on the link, not the target. A link counts as zero bytes for progress.
 
 **Cancel.** Each job has a `Gio.Cancellable`. Cancelling:
 
-- stops at the current file, deletes the partial destination file of the step in progress (never a file that existed before), and leaves completed files in place;
+- stops at the current file, deletes the partial destination file of the step in progress (the temporary file, so never a file that existed before), and leaves completed files in place. A copy that has already completed is still put in place, and in a move its source removed, so no step is left half done;
 - reports `cancelled` with a summary: "Cancelled after 5 of 12 files" for copy and move, "Moved 5 of 12 files to the trash" for trash;
 - is acknowledged in the UI within a fraction of a second, even mid-file, because `Gio.File.copy` checks the cancellable between chunks.
 
-**Errors.** Every failure is an `OperationError(path, step, message)`, built from the `GLib.Error` with a readable message ("permission denied", "no space left on device", "file name too long"). On an error the job pauses in *waiting for user* and the app asks: Skip, Skip all, Retry, or Cancel. Skipped items are counted, and a job that finishes with skips ends as `done` with "Copied 10 of 12 files, 2 skipped" in its text. **Open decision:** whether a job with skips should end as `done` or `failed`. The rule "never imply it finished when it did not" suggests `failed`, or a `done` whose title states the skips.
+**Errors.** Every failure is an `OperationError(path, step, message)`, built from the `GLib.Error` with a readable message ("permission denied", "no space left on device", "file name too long"). On an error the job pauses in *waiting for user* and the app asks: Skip, Skip all, Retry, or Cancel. Without "Skip all" every error asks again. Skipped items are counted, and a job that finishes with skipped errors ends as `failed` with "Copied 10 of 12 files, 2 skipped" in its text, and Retry is offered for the skipped items (`Job.retry()` gives a new job for just those). An empty folder counts as one item, and a summary says "items" instead of "files" when it counts any folder. Items skipped by choosing Skip in the conflict dialog are intentional and don't count: a job whose only skips are conflict skips still ends as `done`.
 
-**Conflicts.** When a destination exists: Replace, Skip, Keep both (append " (2)" before the extension), each with an "apply to all" option. Replace on a folder merges, it doesn't delete the existing folder. Conflicts are found during planning where possible, so the user answers before the long part starts.
+**Conflicts.** When a destination exists: Replace, Skip, Keep both (append " (2)" before the extension), each with an "apply to all" option. Replace on a folder merges, it doesn't delete the existing folder. When the source and the destination are of different kinds (a file onto a folder, or a folder onto a file), that item fails with an `OperationError` naming the file: no merge and no replace. Skip and Keep both stay available. Conflicts are found during planning where possible, so the user answers before the long part starts.
 
-**Trash and delete.** Trash uses `Gio.File.trash`. On a file system without trash support (some removable drives) the job stops and asks whether to delete permanently instead; it never falls back silently. Permanent delete always shows a confirmation with the item count.
+**Asking the user.** `core/` cannot import Qt, so a job takes a prompt callback for conflicts, errors, a missing trash and the delete confirmation. It is called on the job's worker thread with a question object and either returns the answer (tests do this) or returns nothing and answers later from any thread with `question.answer(...)` (the UI does this in phase 3, after showing a dialog on the UI thread). The job does the waiting itself and watches its cancellable, so cancelling unblocks a pending question and a closed dialog can never leave a worker thread stuck. Without a prompt callback nothing is ever replaced, a failed item is skipped and reported, and a permanent delete is refused. A callback that raises fails the job.
 
-**Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. This also keeps the app well inside the island's limit of 8 activities per sender.
+**Trash and delete.** Trash uses `Gio.File.trash`. On a file system without trash support (some removable drives) the job stops and asks whether to delete permanently instead; it never falls back silently. Permanent delete always shows a confirmation with the item count: the delete job itself asks (`ConfirmDelete`) before it plans or touches anything, so no caller can skip it. Delete removes files one by one and each folder only once it is empty, never recursively and never through a link.
+
+**Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. The core starts no threads: `JobQueue` is given a `spawn` function by `qt_models/`. A job cancelled while it is still queued reports `cancelled` at once and is never started. This also keeps the app well inside the island's limit of 8 activities per sender.
 
 **Undo.** Not in v1. Trash is the safety net. A later "Undo" can cover rename, move (same device) and trash.
 
 ### Job model and in-app panel
 
-`JobModel` holds all jobs from this process. Worker threads report through queued signals; the model throttles UI updates to about 10 per second per job.
+`JobModel` holds all jobs from this process: one instance, made in `app.py` and given to every window. It is a `QObject` with signals (`job_added`, `job_changed`, `job_removed`, `question_asked`, `idle`), not an item model, because its observers are a panel of widgets and the island reporter. Worker threads report through queued signals; the model passes on every state change and otherwise at most about 10 updates per second per job. It also decides how long an ended job stays listed: finished and cancelled jobs for a few seconds, failed jobs until dismissed. Retry replaces the failed job with a new one for the failed items.
 
-The **operations panel** is a collapsible strip at the bottom of the window. It shows every job with its title, text, progress and Cancel, keeps finished jobs briefly and failed jobs until dismissed, and opens a details view listing every error. This panel is the primary progress display. The island mirrors it.
+The **operations panel** is a collapsible strip at the bottom of the window. It shows every job with its title, text, progress and Cancel, and for a failed job Retry, Details (every error) and Dismiss. Each window has a panel and they all show the same jobs. This panel is the primary progress display. The island mirrors it.
 
-**Closing a window with jobs running** asks: "Cancel N operations" or "Keep running". Keep running hides the window and lets the process exit when the queue is empty; the island keeps showing progress meanwhile. If that turns out to be confusing, v1 can simply require cancelling.
+**Questions.** One `Prompter` listens to `JobModel.question_asked` and shows one question at a time as a window-modal message box on the window that started the job, or on the active window when that one is gone. If the job is cancelled meanwhile the box closes; if the box's window is closed the question is asked again on another window. Closing a box without choosing cancels the job.
+
+**Closing a window with jobs running.** Jobs belong to the process, so only closing the last window asks: "Keep running", "Cancel N operations" or "Don't close". With either of the first two the window hides and the process exits once every job has ended, because a cancelled job still has to stop and clean up. The island keeps showing progress meanwhile.
 
 ### Island integration (`integration/island.py`)
 
-A small client of the activities API. It observes `JobModel` and translates; it holds no job logic.
+A small client of the activities API. It observes `JobModel` and translates; it holds no job logic. It has two parts: `IslandClient` does the D-Bus work and knows nothing about jobs, and `IslandReporter` maps jobs to activities and is tested against a stand-in for the client.
 
 **Connecting**
 
@@ -224,12 +233,13 @@ A small client of the activities API. It observes `JobModel` and translates; it 
 | id | `job-<n>`, unique within the process |
 | kind and count | `title`: "Copying 12 files", "Moving 3 items to Pictures", "Moving 40 items to the trash" |
 | planning | `progress: -1` (indeterminate), `text`: "Preparing…" |
-| running | `progress`: bytes done / bytes planned; `text`: current file name and speed |
+| running | `progress`: bytes done / bytes planned; `text`: current file name, its position and the speed ("film.mkv (3 of 12), 24 MB/s") |
 | waiting for user | progress unchanged, `text`: "Waiting for you in Files" |
 | queued | not published until it starts |
+| over before it was seen running | not published, unless it failed: a paste that finishes at once doesn't flash in the island |
 | — | `icon`: `edit-copy`, `transform-move`, `user-trash`, `edit-delete` by kind |
 | — | `actions`: `[("cancel", "Cancel")]` while running; on failure `[("retry", "Retry"), ("show", "Show")]` |
-| done | `state: done`, final title ("Copied 12 files"), empty `text` |
+| done | `state: done`, final title ("Copied 12 files"), empty `text`, `progress: 1.0` |
 | cancelled | `state: cancelled`, `text`: "Cancelled after 5 of 12 files" |
 | failed | `state: failed`, `error`: "report.pdf: permission denied" |
 
@@ -237,9 +247,10 @@ Rules from the API spec that the client must follow:
 
 - **Throttle** progress updates to at most 4 per second per job, and always send the final state immediately. The island's limit is 20 calls per second per sender.
 - **Cancel is a request.** On `ActionInvoked(id, "cancel")` cancel the job's `Gio.Cancellable`; the activity stays `running` until the job reports how it ended, and then the client sends that state. Never send `cancelled` before the work has actually stopped.
-- **Show for a retry.** A finished activity can't go back to `running` with `Update`. Retry starts a new job, published with `Show` under the old id.
+- **Show for a retry.** A finished activity can't go back to `running` with `Update`. Retry starts a new job, published with `Show` under the old id. `JobModel` adds the new job before it removes the failed one and says which job it replaces, so the reporter can hand the activity over; the failure stays on show until the new job starts.
+- **Only what changed is sent.** The reporter remembers the fields the island has and puts only the differences in an `Update`. If a call fails, those fields count as not sent.
 - **`Dismissed(id)`** on a failed job also dismisses it in the in-app panel, so the two stay in sync. Dismissing it in the app calls `Dismiss(id)`.
-- **Errors from the island** are logged and never stop a job. `NotFound` means the activity is gone (dismissed or timed out): stop updating it. `LimitExceeded` means too many failed activities are still showing: dismiss the oldest failed one this app owns and try once more. `RateLimited` means drop this update; the next one carries newer values anyway.
+- **Errors from the island** are logged and never stop a job. `NotFound` means the activity is gone (dismissed or timed out): stop updating it. `LimitExceeded` means too many failed activities are still showing: dismiss the oldest failed one this app owns from the island (it stays in the app's own panel) and try once more. `RateLimited` means drop this update; the next one carries newer values anyway. A refused `Show`, and a refused final state, are tried again a few times, because nothing newer will follow them.
 - **All D-Bus calls are asynchronous** and made from the UI thread, so a slow or hung island never blocks the app.
 - **Crashes need no code.** If the app dies, the island turns its running activities into failures because the connection closed. That is why every job must hold its activity under the app's long-lived connection, not a short-lived one.
 
@@ -265,7 +276,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phase 2 is next.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is next.
 
 ### Phase 0: skeleton and integration basics
 
@@ -291,13 +302,16 @@ Each phase ends with something usable and checked by hand. The core gets tests f
 - pytest suite against temporary folders, covering at least:
   - copy and move of nested folders, with byte-based progress;
   - cancel mid-file removes only the partial file and reports how far it got;
-  - a cross-device move cancelled or failed halfway leaves every source either in place or complete at the destination (use a tmpfs or a second temporary mount when available, otherwise force the copy-and-delete path);
+  - a cross-device move cancelled or failed halfway leaves every source file either in place or complete at the destination, a folder may be split between the two, and a source directory that still holds files is not removed (use a tmpfs or a second temporary mount when available, otherwise force the copy-and-delete path);
   - a permission error names the file;
   - copying a folder into itself fails during planning;
   - Keep both picks a free name;
-  - `done` is never reported when any step was skipped or failed (whatever the decision above).
+  - copy and move of a file link, a folder link, a broken link and a link to a parent folder: each is copied as a link, the planner doesn't recurse into it, and the target is never read or changed (including after a cross-device move deletes the source link);
+  - `done` is never reported when any step failed or was skipped after an error; the job ends as `failed`. Items skipped through a conflict choice don't prevent `done`.
 
 **Done when:** the suite passes; no UI yet.
+
+The tests use `/dev/shm` as the second file system when it is one, and also always run the cross-device cases with renames forced to fail. They run with `HOME` and the XDG directories pointed at a temporary folder (`tests/conftest.py`), so the trash they use is not the real one.
 
 ### Phase 3: operations in the UI
 
@@ -310,7 +324,7 @@ Each phase ends with something usable and checked by hand. The core gets tests f
 ### Phase 4: island integration
 
 - `island.py`: version check, name watching, mapping, throttling, actions, dismissal sync, error handling.
-- Test the reporter against a fake activities service on a private bus (`dbus-run-session`), or against a fake transport object.
+- Test the reporter against a fake activities service on a private bus (`dbus-run-session`), or against a fake transport object. Both are done: the reporter against a stand-in client, and the client against a stand-in service on a `dbus-daemon` started by the test, so the real session bus is never used.
 - Manual checks with the shell running:
   - a copy shows in the island and ends as "done";
   - Cancel in the island stops the copy and shows "Cancelled after N of M files";
@@ -325,7 +339,7 @@ Each phase ends with something usable and checked by hand. The core gets tests f
 
 - Icons view with thumbnails.
 - Mounted volumes and eject in the sidebar.
-- Trash view with restore and empty.
+- Trash view with restore and empty. Restore needs the trash location and each item's original path, and is built here as a job, not in phase 2.
 - Properties dialog (size, counts, dates, permissions read-only).
 - Remember window size, view mode and hidden-files setting.
 
@@ -339,9 +353,17 @@ Each phase ends with something usable and checked by hand. The core gets tests f
 - Remote locations through GVFS, search, archive extraction (each extraction a job, so it reuses the activity mapping).
 - Video and PDF thumbnails.
 
+### What phase 3 added to the plan above
+
+- **New folder and rename** (`core/operations/quick.py`) are immediate and never replace anything. Their dialog stays open and shows the reason when a name can't be used.
+- **Drops.** The window always answers a drop with "copy" and does the work as a job, so the app the files came from never removes anything itself. A move of files onto the folder they are already in, and a folder dropped on itself, are ignored.
+- **Paste.** A cut is used up by its paste (the clipboard is cleared). On quitting, the app lets go of clipboard contents that are still its own.
+- **Shortcuts.** Cut is Ctrl+X only: the platform's list for Cut includes Shift+Delete, which is permanent delete here.
+- **`DirectoryModel`** drops the answer to a file query that is older than that file's removal. Without this, a file written under a temporary name and renamed into place, which is how this app and many editors write, could stay listed as a ghost.
+
 ## Open decisions
 
 1. ~~Widgets or Qt Quick~~ Decided: Qt Widgets.
-2. **A job with skipped items:** `done` with the skips in its title, or `failed`. Decide before phase 2.
-3. **Closing with running jobs:** allow "keep running in the background", or require cancelling. Decide in phase 3.
+2. ~~A job with skipped items~~ Decided: `failed` when items were skipped after an error; conflict skips still end as `done`.
+3. ~~Closing with running jobs~~ Decided: closing the last window offers "Keep running", "Cancel N operations" and "Don't close"; the process exits when the jobs have ended.
 4. ~~The app's real name and app id~~ Decided: `filehouse`.

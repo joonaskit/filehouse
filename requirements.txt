@@ -1,0 +1,6 @@
+# PySide6 and PyGObject are deliberately not listed: install them from Fedora
+# (sudo dnf install python3-pyside6 python3-gobject) and create the venv with
+# system site packages. See CLAUDE.md.
+
+# The app itself, editable, plus the dev tools from pyproject.toml
+-e .[dev]

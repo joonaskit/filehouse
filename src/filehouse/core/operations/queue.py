@@ -1,0 +1,52 @@
+"""Runs jobs a few at a time; the rest wait as `queued`."""
+
+import threading
+from collections import deque
+
+from filehouse.core.operations.job import JobState
+
+DEFAULT_LIMIT = 2
+
+
+class JobQueue:
+    """Starts jobs in the order they were added, at most `limit` at once.
+
+    The core starts no threads of its own: `spawn(function)` is supplied by the
+    caller and must run `function` in the background.
+    """
+
+    def __init__(self, spawn, limit=DEFAULT_LIMIT):
+        self._spawn = spawn
+        self._limit = limit
+        self._lock = threading.Lock()
+        self._waiting = deque()
+        self._running = set()
+
+    def add(self, job):
+        with self._lock:
+            self._waiting.append(job)
+        self._fill()
+
+    def is_idle(self):
+        with self._lock:
+            return not self._waiting and not self._running
+
+    def _fill(self):
+        starting = []
+        with self._lock:
+            while self._waiting and len(self._running) < self._limit:
+                job = self._waiting.popleft()
+                # A job cancelled while it waited has already reported that
+                if job.state is JobState.QUEUED:
+                    self._running.add(job)
+                    starting.append(job)
+        for job in starting:
+            self._spawn(lambda job=job: self._work(job))
+
+    def _work(self, job):
+        try:
+            job.run()
+        finally:
+            with self._lock:
+                self._running.discard(job)
+            self._fill()
