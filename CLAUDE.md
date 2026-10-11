@@ -15,19 +15,22 @@ A small file browser for KDE Plasma (Wayland), companion to the Quickshell Islan
 sudo dnf install python3-pyside6 python3-gobject
 python3 -m venv --system-site-packages .venv   # system site packages are needed for gi
 source .venv/bin/activate
-pip install -e . pytest pytest-qt
+pip install -e '.[dev]'
+
+filehouse ~/Downloads       # run the app
+ruff check . && ruff format --check .
 
 pytest                     # all tests
 pytest tests/core          # operations engine, no display needed
 pytest tests/core/test_copy.py::test_name
-QT_QPA_PLATFORM=offscreen pytest tests/ui      # UI tests without a display
+pytest tests/ui            # runs offscreen (set in tests/conftest.py)
 ```
 
 Do not `pip install PySide6` into the venv: mixing a PyPI Qt with the system PyGObject risks losing the shared GLib event loop the design depends on.
 
 ## Naming
 
-The name is undecided. ARCHITECTURE.md calls the app `filehouse` in prose but uses `island-files` / `island_files` in the layout and `.desktop` file. Ask before creating the package directory. Whatever is chosen, the `.desktop` file name, `StartupWMClass`, and `QGuiApplication.setDesktopFileName()` must be the same string.
+The app, package, command and app id are all `filehouse` (`APP_ID` in `src/filehouse/__init__.py`). The `.desktop` file name, `StartupWMClass`, and `QGuiApplication.setDesktopFileName()` must be that same string.
 
 ## Layer rules
 
@@ -38,7 +41,8 @@ ui/  →  qt_models/  →  core/  →  Gio
 
 - `core/` imports **no Qt**. Gio and plain Python only; it reports through callbacks.
 - `qt_models/` is the only place that runs core work on threads and turns callbacks into queued Qt signals.
-- `ui/` never calls Gio or D-Bus directly.
+- `ui/` never calls Gio or D-Bus directly. It passes locations (`Gio.File`) around as opaque values and asks `core/locations.py` for anything it needs from them.
+- `tests/test_layers.py` enforces these import rules.
 - `integration/` must degrade silently: no island means no activities, no `theme.json` means built-in defaults. The app must work with the shell stopped.
 - `JobModel` is the single source of truth for job state. The in-app operations panel and the island reporter both observe it; the island client holds no job logic.
 

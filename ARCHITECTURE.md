@@ -4,7 +4,7 @@ A small file browser for KDE Plasma (Wayland), written in Python and Qt. It is a
 
 It is not meant to replace Dolphin on features, stability or security. It covers the behaviour that matters to its author, integrates with the shell, and hands off to Dolphin (or the default file manager) for everything else.
 
-Working name in this document: **filehouse** (app id `filehouse`). Rename before the first release; the `.desktop` file, the Wayland app id and `StartupWMClass` must change together.
+The app is called **filehouse** (app id `filehouse`). The `.desktop` file name, the Wayland app id and `StartupWMClass` are all that string and must change together if it is ever renamed.
 
 ## Background
 
@@ -50,9 +50,9 @@ These shape the operations engine more than anything else:
 
 On Fedora: `dnf install python3-pyside6 python3-gobject`. For development, a venv created with `--system-site-packages` sees both.
 
-**Open decision: Widgets or Qt Quick.** Widgets is the recommendation above. Qt Quick would make it easier to match the shell's look and animations, at the cost of building the views. If matching the shell's feel matters more than the effort, revisit this before phase 1, because it decides the whole `ui/` layer.
+**Decided: Qt Widgets.** Qt Quick would make it easier to match the shell's look and animations, at the cost of building the views by hand.
 
-**Spike in phase 0: Gio inside the Qt event loop.** Qt on Linux normally runs on the GLib event dispatcher, so Gio callbacks and D-Bus signals attached to the default main context are delivered by Qt's own loop. Confirm this with the PySide6 build in use (a Gio D-Bus signal subscription must fire while only `app.exec()` runs). If it does not hold, fall back to iterating the GLib main context from a `QTimer`, or to QtDBus for the activities client.
+**Gio inside the Qt event loop.** Qt on Linux runs on the GLib event dispatcher, so Gio callbacks and D-Bus signals attached to the default main context are delivered by Qt's own loop. The phase 0 spike confirmed this with Fedora's PySide6 6.11 on both the Wayland and offscreen platforms: an async Gio call, a GLib idle source and a Gio D-Bus signal subscription all fire while only `app.exec()` runs. The directory model's tests depend on it, so they fail if it ever stops holding. The fallback would be iterating the GLib main context from a `QTimer`.
 
 ## Architecture
 
@@ -86,18 +86,19 @@ Rules that keep it this way:
 ### Project layout
 
 ```
-island-files/
+filehouse/
 ├── ARCHITECTURE.md              this document
 ├── README.md
-├── pyproject.toml               entry point: island-files = island_files.app:main
+├── pyproject.toml               entry point: filehouse = filehouse.app:main
 ├── data/
-│   ├── island-files.desktop     Exec=island-files %U, StartupWMClass=island-files
+│   ├── filehouse.desktop     Exec=filehouse %U, StartupWMClass=filehouse
 │   └── icons/
-├── src/island_files/
+├── src/filehouse/
 │   ├── app.py                   argument parsing, QApplication, desktop file name, first window
 │   ├── core/
 │   │   ├── locations.py         path/URI handling, places (home, Downloads, …), display names
 │   │   ├── listing.py           batched directory enumeration, file info records
+│   │   ├── history.py           back and forward history for one window
 │   │   ├── errors.py            OperationError: which file, which step, readable message
 │   │   └── operations/
 │   │       ├── job.py           Job, JobState, JobProgress
@@ -109,6 +110,7 @@ island-files/
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
+│   │   ├── icons.py             icon and description per content type
 │   │   ├── job_model.py         list model of jobs, fed by worker threads
 │   │   └── workers.py           thread pool glue
 │   ├── integration/
@@ -133,7 +135,7 @@ island-files/
 ### Startup (`app.py`)
 
 1. Parse arguments: zero or more paths or `file://` URIs (`%U` from the `.desktop` file). A file argument opens its folder with the file selected. A missing path opens home and shows a message.
-2. `QGuiApplication.setDesktopFileName("island-files")`. On Wayland this sets the app id, which the shell's `DockService.findToplevels` compares **exactly** against `StartupWMClass`. This is what gives point 3a for free.
+2. `QGuiApplication.setDesktopFileName("filehouse")`. On Wayland this sets the app id, which the shell's `DockService.findToplevels` compares **exactly** against `StartupWMClass`. This is what gives point 3a for free.
 3. Load the theme and apply the style before creating any window.
 4. Open one window per path argument (one window when there are none).
 
@@ -263,6 +265,8 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phase 2 is next.
+
 ### Phase 0: skeleton and integration basics
 
 - Project layout, `pyproject.toml`, `.desktop` file, `app.py`.
@@ -270,14 +274,14 @@ Each phase ends with something usable and checked by hand. The core gets tests f
 - Theme reader and style, with defaults.
 - Spike: Gio D-Bus signal delivered inside `app.exec()`.
 
-**Done when:** `island-files ~/Downloads` opens a themed, empty window titled "Downloads — Files"; the shell's dock shows it as running under its own icon; the launcher's window switcher lists it; the window still opens with `theme.json` deleted.
+**Done when:** `filehouse ~/Downloads` opens a themed, empty window titled "Downloads — Files"; the shell's dock shows it as running under its own icon; the launcher's window switcher lists it; the window still opens with `theme.json` deleted.
 
 ### Phase 1: browsing
 
 - `listing.py`, `DirectoryModel` with batches and a file monitor, sort and hidden-files proxy.
 - Details view, path bar, back/forward/up, sidebar places.
 - Open with the default app, Open with, Open in Dolphin.
-- Keyboard: Enter, Backspace, Alt+Left/Right/Up, Ctrl+L, Ctrl+H, type-to-select.
+- Keyboard: Enter, Backspace (back, as in Dolphin), Alt+Left/Right/Up, Ctrl+L, Ctrl+H, F5, type-to-select.
 
 **Done when:** browsing a folder of 10 000 files stays responsive; files created elsewhere appear without a refresh.
 
@@ -337,7 +341,7 @@ Each phase ends with something usable and checked by hand. The core gets tests f
 
 ## Open decisions
 
-1. **Widgets or Qt Quick** for the UI (recommendation: Widgets). Decide before phase 1.
+1. ~~Widgets or Qt Quick~~ Decided: Qt Widgets.
 2. **A job with skipped items:** `done` with the skips in its title, or `failed`. Decide before phase 2.
 3. **Closing with running jobs:** allow "keep running in the background", or require cancelling. Decide in phase 3.
-4. **The app's real name and app id.** Decide before the `.desktop` file is installed anywhere it will be pinned in the dock, because the dock stores the desktop file name.
+4. ~~The app's real name and app id~~ Decided: `filehouse`.
