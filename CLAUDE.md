@@ -64,4 +64,4 @@ These are requirements, not guidelines. Any change in `core/operations/` needs a
 - Island updates: at most 4 per second per job, final state sent immediately, never `cancelled` before the work has actually stopped.
 - Keep the stylesheet short; colours and fonts go through `QPalette` and `QFont` from the theme.
 - Sizes are defined in unscaled pixels and multiplied by the theme's `scale.ui`.
-- Tests run against `tmp_path`; never touch the real home directory or the real trash.
+- Tests run against `tmp_path`; never touch the real home directory or the real trash. `tests/conftest.py` points `HOME` and the XDG directories at a temporary folder before `gi` loads; tests that need a working trash use the `home_dir` fixture.

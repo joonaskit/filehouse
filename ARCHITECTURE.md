@@ -178,28 +178,28 @@ This is the part that has to be right. Every user action that changes files beco
 ```
 
 1. **Planning.** Walk the sources and build a flat list of steps (make folder, copy file, remove source), counting files and bytes. Progress is indeterminate during this phase. Planning also detects conflicts at the destination and the case of copying a folder into itself, which fails at once.
-2. **Running.** Execute steps in order. Files copy with `Gio.File.copy(..., progress_callback, cancellable)`, without `OVERWRITE` unless the user chose Replace. Copies keep modification times and permissions (`ALL_METADATA`). Progress is bytes done over bytes planned, so one large file doesn't stall the bar.
+2. **Running.** Execute steps in order. Files copy with `Gio.File.copy(..., progress_callback, cancellable)` to a temporary name next to the destination (`.filehouse-<random>.part`) and are renamed into place once complete, without `OVERWRITE` unless the user chose Replace. A half-written file therefore never appears under the real name, a file being replaced stays whole until its replacement is, and the temporary file is always the job's own to remove. Copies keep modification times and permissions (`ALL_METADATA`). Progress is bytes done over bytes planned, so one large file doesn't stall the bar.
 3. **Finishing.** The job reports `done` only when every step finished. Anything else is `cancelled` or `failed`.
 
-**Moves.** Call `Gio.File.move` with `G_FILE_COPY_NO_FALLBACK_FOR_MOVE` first, so Gio never does its own copy-and-delete. On the same file system that is an atomic rename. If it fails with `NOT_SUPPORTED` (different file system), the job copies per file: each source file is deleted as soon as its own copy has completed, so the move needs no free space beyond the file in progress. Source directories are removed last, and only when empty (never recursively), so a folder holding skipped, failed or unmoved files stays in place. A cancelled or failed cross-device move therefore never loses data: each source file is either still in place or fully at the destination, but a folder may end up split between the two. Running the move again picks up the rest.
+**Moves.** Call `Gio.File.move` with `G_FILE_COPY_NO_FALLBACK_FOR_MOVE` first, so Gio never does its own copy-and-delete. On the same file system that is an atomic rename. A folder whose destination is free and on the same file system (compared by `id::filesystem` while planning) is one rename step and counts as one item; any other folder is planned item by item, and so is a rename that turns out not to be possible at run time. If it fails with `NOT_SUPPORTED` (different file system), the job copies per file: each source file is deleted as soon as its own copy has completed, so the move needs no free space beyond the file in progress. Source directories are removed last, and only when empty (never recursively), so a folder holding skipped, failed or unmoved files stays in place. A cancelled or failed cross-device move therefore never loses data: each source file is either still in place or fully at the destination, but a folder may end up split between the two. Running the move again picks up the rest.
 
 **Symlinks.** A symbolic link is copied as a link, never followed. The planner classifies items with `query_info(..., NOFOLLOW_SYMLINKS)`, so a link to a folder is one "copy link" step and the planner never walks into it. Copy uses `Gio.File.copy` with `NOFOLLOW_SYMLINKS`, so the new link has the same target text (a relative link may point somewhere else, or nowhere, from its new place). A same-device move renames the link; a cross-device move copies the link and then deletes the source link, never its target. Trash and permanent delete act on the link, not the target. A link counts as zero bytes for progress.
 
 **Cancel.** Each job has a `Gio.Cancellable`. Cancelling:
 
-- stops at the current file, deletes the partial destination file of the step in progress (never a file that existed before), and leaves completed files in place;
+- stops at the current file, deletes the partial destination file of the step in progress (the temporary file, so never a file that existed before), and leaves completed files in place. A copy that has already completed is still put in place, and in a move its source removed, so no step is left half done;
 - reports `cancelled` with a summary: "Cancelled after 5 of 12 files" for copy and move, "Moved 5 of 12 files to the trash" for trash;
 - is acknowledged in the UI within a fraction of a second, even mid-file, because `Gio.File.copy` checks the cancellable between chunks.
 
-**Errors.** Every failure is an `OperationError(path, step, message)`, built from the `GLib.Error` with a readable message ("permission denied", "no space left on device", "file name too long"). On an error the job pauses in *waiting for user* and the app asks: Skip, Skip all, Retry, or Cancel. Skipped items are counted, and a job that finishes with skipped errors ends as `failed` with "Copied 10 of 12 files, 2 skipped" in its text, and Retry is offered for the skipped items. Items skipped by choosing Skip in the conflict dialog are intentional and don't count: a job whose only skips are conflict skips still ends as `done`.
+**Errors.** Every failure is an `OperationError(path, step, message)`, built from the `GLib.Error` with a readable message ("permission denied", "no space left on device", "file name too long"). On an error the job pauses in *waiting for user* and the app asks: Skip, Skip all, Retry, or Cancel. Without "Skip all" every error asks again. Skipped items are counted, and a job that finishes with skipped errors ends as `failed` with "Copied 10 of 12 files, 2 skipped" in its text, and Retry is offered for the skipped items (`Job.retry()` gives a new job for just those). An empty folder counts as one item, and a summary says "items" instead of "files" when it counts any folder. Items skipped by choosing Skip in the conflict dialog are intentional and don't count: a job whose only skips are conflict skips still ends as `done`.
 
 **Conflicts.** When a destination exists: Replace, Skip, Keep both (append " (2)" before the extension), each with an "apply to all" option. Replace on a folder merges, it doesn't delete the existing folder. When the source and the destination are of different kinds (a file onto a folder, or a folder onto a file), that item fails with an `OperationError` naming the file: no merge and no replace. Skip and Keep both stay available. Conflicts are found during planning where possible, so the user answers before the long part starts.
 
-**Asking the user.** `core/` cannot import Qt, so a job takes a prompt callback for conflicts and errors. It is called on the job's worker thread and blocks until it returns an answer. Tests answer it directly; in phase 3 the UI supplies a callback that shows a dialog on the UI thread and waits for the result. Cancelling the job also unblocks a pending prompt (the wait watches the job's cancellable), so a closed dialog can never leave a worker thread stuck.
+**Asking the user.** `core/` cannot import Qt, so a job takes a prompt callback for conflicts, errors, a missing trash and the delete confirmation. It is called on the job's worker thread with a question object and either returns the answer (tests do this) or returns nothing and answers later from any thread with `question.answer(...)` (the UI does this in phase 3, after showing a dialog on the UI thread). The job does the waiting itself and watches its cancellable, so cancelling unblocks a pending question and a closed dialog can never leave a worker thread stuck. Without a prompt callback nothing is ever replaced, a failed item is skipped and reported, and a permanent delete is refused. A callback that raises fails the job.
 
-**Trash and delete.** Trash uses `Gio.File.trash`. On a file system without trash support (some removable drives) the job stops and asks whether to delete permanently instead; it never falls back silently. Permanent delete always shows a confirmation with the item count.
+**Trash and delete.** Trash uses `Gio.File.trash`. On a file system without trash support (some removable drives) the job stops and asks whether to delete permanently instead; it never falls back silently. Permanent delete always shows a confirmation with the item count: the delete job itself asks (`ConfirmDelete`) before it plans or touches anything, so no caller can skip it. Delete removes files one by one and each folder only once it is empty, never recursively and never through a link.
 
-**Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. This also keeps the app well inside the island's limit of 8 activities per sender.
+**Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. The core starts no threads: `JobQueue` is given a `spawn` function by `qt_models/`. A job cancelled while it is still queued reports `cancelled` at once and is never started. This also keeps the app well inside the island's limit of 8 activities per sender.
 
 **Undo.** Not in v1. Trash is the safety net. A later "Undo" can cover rename, move (same device) and trash.
 
@@ -269,7 +269,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phase 2 is next.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phase 2 is implemented and tested. Phase 3 is next.
 
 ### Phase 0: skeleton and integration basics
 
@@ -303,6 +303,8 @@ Each phase ends with something usable and checked by hand. The core gets tests f
   - `done` is never reported when any step failed or was skipped after an error; the job ends as `failed`. Items skipped through a conflict choice don't prevent `done`.
 
 **Done when:** the suite passes; no UI yet.
+
+The tests use `/dev/shm` as the second file system when it is one, and also always run the cross-device cases with renames forced to fail. They run with `HOME` and the XDG directories pointed at a temporary folder (`tests/conftest.py`), so the trash they use is not the real one.
 
 ### Phase 3: operations in the UI
 

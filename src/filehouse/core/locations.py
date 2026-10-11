@@ -133,3 +133,16 @@ def resolve_start(arg):
     if folder is None:
         return StartTarget(home(), message=f"Could not open {display_path(location)}")
     return StartTarget(folder, select=location.get_basename())
+
+
+def file_type(location, cancellable=None):
+    """What is at `location`, links not followed: a `Gio.FileType`, or None when nothing is."""
+    try:
+        info = location.query_info(
+            "standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, cancellable
+        )
+    except GLib.Error as error:
+        if error.matches(Gio.io_error_quark(), Gio.IOErrorEnum.NOT_FOUND):
+            return None
+        raise
+    return info.get_file_type()
