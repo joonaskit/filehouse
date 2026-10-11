@@ -4,6 +4,7 @@ from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -47,6 +48,7 @@ from filehouse.ui.sidebar import Sidebar
 
 _MESSAGE_MS = 8000
 _DETAILS_MS = 200
+_COPIED_MS = 2500
 # A window less wide than this, unscaled, gets the narrow layout: the sidebar as a
 # rail of icons, the actions in a bar at the bottom, the details as a sheet
 NARROW_BELOW = 800
@@ -80,6 +82,11 @@ def ask_about_running_jobs(parent, count):
     box.setEscapeButton(stay)
     box.exec()
     return {keep: KEEP_RUNNING, cancel: CANCEL_ALL}.get(box.clickedButton(), STAY_OPEN)
+
+
+def pick_folder(parent, title, start):
+    """Ask for a folder with the desktop's own dialog. Returns its path, or "" for none."""
+    return QFileDialog.getExistingDirectory(parent, title, start)
 
 
 def quit_app():
@@ -159,7 +166,12 @@ class MainWindow(QMainWindow):
         splitter.setContentsMargins(style.px(8), 0, style.px(8), style.px(4))
         # Only in a narrow window, and only with something selected to act on
         self._action_bar = self._group(
-            self._copy, self._rename, self._trash, self._show_details, self._more
+            self._copy,
+            self._move_to,
+            self._rename,
+            self._trash,
+            self._show_details,
+            self._more,
         )
         bar_row = QHBoxLayout()
         bar_row.setContentsMargins(0, 0, 0, style.px(4))
@@ -275,6 +287,18 @@ class MainWindow(QMainWindow):
         self._new_folder = action(
             "New folder…", "folder-new", [QKeySequence("Ctrl+Shift+N")], self.new_folder
         )
+        self._new_file = action("New file…", "document-new", [], self.new_file)
+        self._move_to = action("Move to…", "document-export", [], self.move_selected)
+        # The keys Dolphin has for these two
+        self._copy_path = action(
+            "Copy path", "edit-copy-path", [QKeySequence("Ctrl+Alt+C")], self.copy_path
+        )
+        self._terminal = action(
+            "Open terminal here",
+            "utilities-terminal",
+            [QKeySequence("Shift+F4")],
+            lambda: self.open_terminal(),
+        )
         self._select_all = action(
             "Select all",
             "edit-select-all",
@@ -316,7 +340,7 @@ class MainWindow(QMainWindow):
         # In a narrow window the actions are in a bar at the bottom, and the folder
         # menu has a button
         self._toolbar_actions = toolbar.addWidget(
-            self._group(self._copy, self._rename, self._trash)
+            self._group(self._copy, self._move_to, self._rename, self._trash)
         )
         toolbar.addWidget(self._group(self._details_mode, self._icons_mode))
         self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
@@ -458,8 +482,12 @@ class MainWindow(QMainWindow):
         for item in (self._trash, self._delete):
             item.setEnabled(selected > 0 and (at_trash or not in_trash))
         self._rename.setEnabled(selected == 1 and not in_trash)
+        self._move_to.setEnabled(selected > 0 and not in_trash)
         self._paste.setEnabled(bool(clipboard.get()[0]) and not in_trash)
-        self._new_folder.setEnabled(not in_trash)
+        for item in (self._new_folder, self._new_file):
+            item.setEnabled(not in_trash)
+        # A terminal starts in a folder of this computer: not in the trash or a remote place
+        self._terminal.setVisible(self._terminal_folder() is not None)
         self._restore.setEnabled(
             selected > 0 and all(info.original_path is not None for info in infos)
         )
@@ -611,11 +639,14 @@ class MainWindow(QMainWindow):
             return menu
         if info is None:
             # The folder's own menu
-            menu.addActions([self._new_folder, self._paste, self._select_all])
+            menu.addActions([self._new_folder, self._new_file])
+            menu.addSeparator()
+            menu.addActions([self._paste, self._select_all])
             menu.addSeparator()
             self._add_sort_and_view(menu)
             menu.addAction(self._hidden)
             menu.addSeparator()
+            menu.addActions([self._copy_path, self._terminal])
             self._add_open_in_manager(menu, self._location)
             menu.addAction(self._properties)
             return menu
@@ -644,7 +675,14 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addActions([self._cut, self._copy, self._paste])
         menu.addSeparator()
-        menu.addActions([self._rename, self._trash, self._delete])
+        menu.addActions([self._rename, self._move_to, self._trash, self._delete])
+        menu.addSeparator()
+        menu.addAction(self._copy_path)
+        if info.is_dir and self._terminal_folder(folder) is not None:
+            # In the folder the menu is for, not the one it is listed in
+            menu.addAction(
+                self._terminal.icon(), "Open terminal here", lambda: self.open_terminal(folder)
+            )
         menu.addSeparator()
         menu.addAction(self._properties)
         return menu
@@ -759,6 +797,58 @@ class MainWindow(QMainWindow):
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.show()
         return dialog
+
+    def copy_path(self):
+        """Put the paths of the selection on the clipboard as text, one per line.
+        With nothing selected, the path of this folder."""
+        selected = self._selected_locations() or [self._location]
+        clipboard.put_text("\n".join(locations.display_path(item) for item in selected))
+        what = "Path" if len(selected) == 1 else f"{len(selected)} paths"
+        self.statusBar().showMessage(f"{what} copied", _COPIED_MS)
+
+    def _terminal_folder(self, folder=None):
+        """The path a terminal would start in, or None when it can't: no terminal
+        installed, or a folder that is not on this computer's file systems."""
+        folder = folder or self._location
+        if folder is None or desktop.default_terminal() is None:
+            return None
+        return locations.local_path(folder)
+
+    def open_terminal(self, folder=None):
+        path = self._terminal_folder(folder)
+        if path is not None:
+            desktop.open_terminal(path, self._show_error)
+
+    def move_selected(self):
+        """Move the selection to a folder that is picked in a dialog."""
+        selected = self._selected_locations()
+        if not selected or self._in_trash():
+            return None
+        start = locations.local_path(self._location) or locations.local_path(locations.home())
+        path = pick_folder(self, "Move to", start)
+        if not path:
+            return None
+        target = locations.from_path(path)
+        if self._all_in(selected, target):
+            # Already there
+            return None
+        return self._start(JobKind.MOVE, selected, target)
+
+    def new_file(self):
+        if self._in_trash():
+            return None
+        folder = self._location
+        name = quick.suggest_file_name(folder)
+
+        def create(text):
+            try:
+                made = quick.create_file(folder, text)
+            except OperationError as error:
+                return f"Could not create the file: {error.message}."
+            self._select_when_listed(folder, locations.basename(made))
+            return None
+
+        return self._ask_name("New file", "Name of the new file:", name, create)
 
     def new_folder(self):
         if self._in_trash():
@@ -899,6 +989,8 @@ class MainWindow(QMainWindow):
 
     def _on_jobs_idle(self):
         self._model.recount()
+        # What a job copied or deleted shows in how full the drives are
+        self._volumes.refresh_usage()
         if self._closing_when_idle:
             self._closing_when_idle = False
             self.close()

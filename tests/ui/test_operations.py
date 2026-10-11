@@ -401,6 +401,172 @@ def test_new_folder_with_a_taken_name_says_why(qtbot, tree, open_window):
     assert dialog.result() == 0
 
 
+def test_new_file(qtbot, tree, open_window):
+    (tree / "src" / "New file").write_text("")
+    window = open_window(tree / "src")
+
+    dialog = window.new_file()
+    assert dialog.edit.text() == "New file (2)"
+    dialog.edit.setText("notes.md")
+    dialog.accept()
+
+    assert (tree / "src" / "notes.md").read_text() == ""
+    qtbot.waitUntil(
+        lambda: [info.name for info in window._view.selected_infos()] == ["notes.md"],
+        timeout=TIMEOUT,
+    )
+
+
+def test_new_file_with_a_taken_name_says_why_and_replaces_nothing(qtbot, tree, open_window):
+    window = open_window(tree / "src")
+
+    dialog = window.new_file()
+    dialog.edit.setText("a.txt")
+    dialog.accept()
+
+    assert dialog.error.text() == "Could not create the file: already exists."
+    assert dialog.result() == 0
+    assert (tree / "src" / "a.txt").read_text() == "aaa"
+
+
+# Copy path, the terminal, Move to
+
+
+def test_copy_path_puts_the_paths_on_the_clipboard_as_text(qtbot, tree, open_window):
+    window = open_window(tree / "src")
+
+    # Nothing selected: this folder
+    window.copy_path()
+    assert QApplication.clipboard().text() == str(tree / "src")
+
+    select(window, "a.txt")
+    window.copy_path()
+    assert QApplication.clipboard().text() == str(tree / "src" / "a.txt")
+
+    select(window, "a.txt", "sub")
+    window._copy_path.trigger()
+    assert QApplication.clipboard().text() == f"{tree / 'src' / 'sub'}\n{tree / 'src' / 'a.txt'}"
+    assert window.statusBar().currentMessage() == "2 paths copied"
+    # Text, not files: pasting it here does nothing
+    assert clipboard.get() == ([], False)
+
+
+@pytest.fixture
+def terminal(monkeypatch):
+    """A terminal that is "installed", and a list of the folders it was started in."""
+    from filehouse.integration import desktop
+
+    started = []
+    monkeypatch.setattr(desktop, "default_terminal", lambda: "/usr/bin/a-terminal")
+    monkeypatch.setattr(desktop, "open_terminal", lambda path, on_error: started.append(path))
+    return started
+
+
+def test_open_terminal_here_starts_it_in_this_folder(qtbot, tree, open_window, terminal):
+    window = open_window(tree / "src")
+    assert window._terminal.isVisible()
+
+    window._terminal.trigger()
+
+    assert terminal == [str(tree / "src")]
+    texts = [action.text() for action in window._menu_for(None).actions()]
+    assert "Open terminal here" in texts and "Copy path" in texts
+
+
+def test_the_menu_of_a_folder_opens_the_terminal_in_that_folder(qtbot, tree, open_window, terminal):
+    window = open_window(tree / "src")
+    by_name = {info.name: info for info in (window._model.info(row) for row in range(3))}
+
+    folder_menu = window._menu_for(by_name["sub"])
+    entry = next(a for a in folder_menu.actions() if a.text() == "Open terminal here")
+    entry.trigger()
+    assert terminal == [str(tree / "src" / "sub")]
+
+    # A file has no "here"
+    file_menu = window._menu_for(by_name["a.txt"])
+    assert "Open terminal here" not in [a.text() for a in file_menu.actions()]
+    assert "Copy path" in [a.text() for a in file_menu.actions()]
+
+
+def test_without_a_terminal_there_is_no_entry_for_one(qtbot, tree, open_window, monkeypatch):
+    from filehouse.integration import desktop
+
+    monkeypatch.setattr(desktop, "default_terminal", lambda: None)
+    window = open_window(tree / "src")
+
+    assert not window._terminal.isVisible()
+    visible = [a.text() for a in window._menu_for(None).actions() if a.isVisible()]
+    assert "Open terminal here" not in visible
+
+
+@pytest.fixture
+def picked(monkeypatch):
+    """Stands in for the folder dialog: set `picked.path`, read `picked.asked`."""
+
+    class Picked:
+        path = ""
+        asked = []
+
+    def pick(parent, title, start):
+        Picked.asked.append((title, start))
+        return Picked.path
+
+    Picked.asked = []
+    monkeypatch.setattr(main_window, "pick_folder", pick)
+    return Picked
+
+
+def test_move_to_moves_the_selection_to_the_picked_folder(
+    qtbot, tree, open_window, jobs, wait_final, picked
+):
+    window = open_window(tree / "src")
+    select(window, "a.txt", "sub")
+    picked.path = str(tree / "dst")
+
+    job = wait_final(jobs, window.move_selected())
+
+    assert job.kind is JobKind.MOVE and job.state is JobState.DONE
+    assert picked.asked == [("Move to", str(tree / "src"))]
+    assert names(tree / "dst") == ["a.txt", "sub"]
+    assert names(tree / "src") == ["b.txt"]
+
+
+def test_move_to_does_nothing_when_no_folder_is_picked_or_it_is_this_one(
+    qtbot, tree, open_window, jobs, picked
+):
+    window = open_window(tree / "src")
+    assert not window._move_to.isEnabled()
+    assert window.move_selected() is None and picked.asked == []
+
+    select(window, "a.txt")
+    assert window._move_to.isEnabled()
+    assert window.move_selected() is None  # the dialog was closed
+
+    picked.path = str(tree / "src")
+    assert window.move_selected() is None  # where it is already
+
+    assert jobs.jobs == []
+    assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
+
+
+def test_move_to_keeps_what_is_there_unless_told_to_replace(
+    qtbot, tree, open_window, jobs, wait_final, wait_question, picked
+):
+    (tree / "dst" / "a.txt").write_text("old")
+    window = open_window(tree / "src")
+    select(window, "a.txt")
+    picked.path = str(tree / "dst")
+
+    job = window.move_selected()
+    box = wait_question(jobs)
+    assert isinstance(box.question, Conflict)
+    box.button_for(Answer.SKIP).click()
+    wait_final(jobs, job)
+
+    assert (tree / "dst" / "a.txt").read_text() == "old"
+    assert (tree / "src" / "a.txt").read_text() == "aaa"
+
+
 # Drag and drop
 
 

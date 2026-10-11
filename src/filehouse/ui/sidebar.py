@@ -1,7 +1,7 @@
 """Places, and below them the drives and other volumes that are plugged in."""
 
-from PySide6.QtCore import QRect, QSize, Qt, Signal
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import QLocale, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QFont, QIcon, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QListWidget,
@@ -18,6 +18,10 @@ from filehouse.integration import style
 from filehouse.ui import menus
 
 _EntryRole = Qt.ItemDataRole.UserRole
+# How full a drive is: a `Usage`, or nothing when that isn't known
+_UsageRole = Qt.ItemDataRole.UserRole + 1
+# A drive this full shows its bar in the warning colour
+_NEARLY_FULL = 0.9
 
 # The palette colour of a place's tile, by its icon. Anything else is a plain folder
 _PLACE_COLOURS = {
@@ -43,6 +47,49 @@ _RAIL_PADDING = 2 * (8 + 6) + 2
 def _tile(entry, is_device):
     colour = _DEVICE_COLOUR if is_device else _PLACE_COLOURS.get(entry.icon, _FOLDER_COLOUR)
     return style.tile(entry.icon + "-symbolic", entry.icon, "folder-symbolic", colour=colour)
+
+
+class _ListDelegate(QStyledItemDelegate):
+    """Draws a drive with a bar under its name for how full it is. Rows without
+    a usage are left to the style."""
+
+    def paint(self, painter, option, index):
+        usage = index.data(_UsageRole)
+        if usage is None:
+            super().paint(painter, option, index)
+            return
+        row = QStyleOptionViewItem(option)
+        self.initStyleOption(row, index)
+        text = row.text
+        # The row and its icon from the style; the name and the bar from here
+        row.text = ""
+        widget = row.widget
+        widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, row, painter, widget)
+
+        left = option.rect.left() + style.px(6 + _ICON + 8)
+        width = option.rect.right() - style.px(10) - left
+        metrics = option.fontMetrics
+        gap, bar = style.px(4), style.px(3)
+        top = option.rect.top() + (option.rect.height() - metrics.height() - gap - bar) // 2
+        painter.save()
+        painter.setFont(option.font)
+        painter.setPen(option.palette.color(option.palette.ColorRole.Text))
+        painter.drawText(
+            QRect(left, top, width, metrics.height()),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            metrics.elidedText(text, Qt.TextElideMode.ElideRight, width),
+        )
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        track = style.color("textPrimary")
+        track.setAlphaF(0.15)
+        painter.setBrush(track)
+        y = top + metrics.height() + gap
+        painter.drawRoundedRect(QRectF(left, y, width, bar), bar / 2, bar / 2)
+        painter.setBrush(style.color("warning" if usage.fraction >= _NEARLY_FULL else "accent"))
+        filled = max(bar, width * min(1.0, usage.fraction))
+        painter.drawRoundedRect(QRectF(left, y, filled, bar), bar / 2, bar / 2)
+        painter.restore()
 
 
 class _RailDelegate(QStyledItemDelegate):
@@ -84,7 +131,8 @@ class Sidebar(QListWidget):
         self._volumes = volumes
         self._selected = None
         self._rail = False
-        self._list_delegate = self.itemDelegate()
+        self._list_delegate = _ListDelegate(self)
+        self.setItemDelegate(self._list_delegate)
         self._rail_delegate = _RailDelegate(self)
         self.setIconSize(QSize(style.px(_ICON), style.px(_ICON)))
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -93,6 +141,7 @@ class Sidebar(QListWidget):
         self.customContextMenuRequested.connect(self._on_context_menu)
         self.itemClicked.connect(self._on_clicked)
         volumes.changed.connect(self._fill)
+        volumes.usage_changed.connect(self._show_usage)
         self._fill()
 
     def entries(self):
@@ -156,6 +205,25 @@ class Sidebar(QListWidget):
         for device in devices:
             self._add(device, is_device=True)
         self.select(self._selected)
+        self._show_usage()
+
+    def _show_usage(self):
+        """How full each drive is: a bar under its name, and the numbers as a tooltip."""
+        locale = QLocale()
+        for row in range(self.count()):
+            item = self.item(row)
+            entry = item.data(_EntryRole)
+            usage = self._volumes.usage(entry) if hasattr(entry, "can_eject") else None
+            item.setData(_UsageRole, usage)
+            if usage is not None:
+                free = locale.formattedDataSize(usage.free)
+                tip = f"{free} free of {locale.formattedDataSize(usage.total)}"
+                item.setToolTip(f"{entry.name}: {tip}" if self._rail else tip)
+
+    def usage_shown(self, name):
+        """The usage on show for the drive with this name, or None."""
+        row = self.row_of(name)
+        return self.item(row).data(_UsageRole) if row >= 0 else None
 
     def _add_divider(self):
         item = QListWidgetItem()

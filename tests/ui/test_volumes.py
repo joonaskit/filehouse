@@ -1,5 +1,7 @@
 """Volumes and the sidebar, with stand-ins for Gio's volume monitor: no real drive is touched."""
 
+import os
+
 import pytest
 from gi.repository import Gio, GLib
 from PySide6.QtCore import Qt
@@ -235,3 +237,76 @@ def test_clicking_goes_there_and_an_unmounted_drive_is_mounted_first(qtbot, side
         qtbot.mouseClick(sidebar.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
 
     assert went == ["/docs", str(tmp_path / "stick"), str(tmp_path / "backup")]
+
+
+def test_the_system_drive_is_listed_first_and_not_twice(qtbot, tmp_path):
+    system = gfile(tmp_path)
+    monitor = FakeMonitor([FakeMount("Same place", tmp_path), FakeMount("USB stick", "/stick")])
+    volumes = Volumes(monitor=monitor, system=system)
+
+    entries = volumes.entries()
+
+    assert [entry.name for entry in entries] == [GLib.get_os_info("NAME"), "USB stick"]
+    assert entries[0].location.equal(system)
+    # Not something to eject
+    assert not entries[0].can_eject
+
+
+def test_a_stand_in_monitor_has_no_system_drive_unless_given(qtbot):
+    assert Volumes(monitor=FakeMonitor()).entries() == []
+
+
+def test_usage_of_mounted_volumes_arrives_later(qtbot, tmp_path):
+    from filehouse.qt_models.volumes import Usage
+
+    stick = FakeMount("USB stick", tmp_path)
+    disk = FakeVolume("Backup disk", mounts_at=tmp_path / "backup")
+    volumes = Volumes(monitor=FakeMonitor([stick], [disk]))
+    mounted, unmounted = volumes.entries()
+    assert volumes.usage(mounted) is None
+
+    qtbot.waitUntil(lambda: volumes.usage(mounted) is not None, timeout=5000)
+
+    usage = volumes.usage(mounted)
+    disk_stats = os.statvfs(tmp_path)
+    assert usage.total == disk_stats.f_blocks * disk_stats.f_frsize
+    assert 0 < usage.used <= usage.total and 0.0 < usage.fraction <= 1.0
+    assert usage.free == usage.total - usage.used
+    # Nothing is known about a drive that isn't mounted
+    assert volumes.usage(unmounted) is None
+    assert Usage(used=1, total=4).fraction == 0.25 and Usage(0, 0).fraction == 0.0
+
+
+def test_usage_of_a_drive_that_is_gone_is_forgotten(qtbot, tmp_path):
+    stick = FakeMount("USB stick", tmp_path)
+    monitor = FakeMonitor([stick])
+    volumes = Volumes(monitor=monitor)
+    entry = volumes.entries()[0]
+    qtbot.waitUntil(lambda: volumes.usage(entry) is not None, timeout=5000)
+
+    monitor.mounts.remove(stick)
+    monitor.emit("mount-removed", stick)
+
+    assert volumes.usage(entry) is None
+
+
+def test_sidebar_shows_how_full_a_drive_is(qtbot, tmp_path):
+    monitor = FakeMonitor([FakeMount("USB stick", tmp_path)])
+    volumes = Volumes(monitor=monitor)
+    sidebar = Sidebar([Place("Home", "user-home", gfile(tmp_path))], volumes)
+    qtbot.addWidget(sidebar)
+    sidebar.resize(220, 300)
+    sidebar.show()
+
+    qtbot.waitUntil(lambda: sidebar.usage_shown("USB stick") is not None, timeout=5000)
+
+    assert sidebar.usage_shown("USB stick") == volumes.usage(volumes.entries()[0])
+    assert " free of " in sidebar.item(sidebar.row_of("USB stick")).toolTip()
+    # A place is not a drive
+    assert sidebar.usage_shown("Home") is None
+    # Drawn without trouble, as a list and as a rail
+    assert not sidebar.grab().isNull()
+    sidebar.set_rail(True)
+    assert sidebar.usage_shown("USB stick") is not None
+    assert sidebar.item(sidebar.row_of("USB stick")).toolTip().startswith("USB stick: ")
+    assert not sidebar.grab().isNull()

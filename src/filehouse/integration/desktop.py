@@ -1,12 +1,30 @@
-"""Opening files with other apps, and handing folders off to the default file manager."""
+"""Opening files with other apps, and handing folders off to the default file manager
+and the terminal."""
 
+import os
+import shlex
 from dataclasses import dataclass, field
+from functools import cache
 
 from gi.repository import Gio, GLib
 
 from filehouse import APP_ID
 
 _OWN_DESKTOP_ID = f"{APP_ID}.desktop"
+
+# Tried in this order when the desktop names no terminal
+_TERMINALS = (
+    "xdg-terminal-exec",
+    "konsole",
+    "ptyxis",
+    "kgx",
+    "gnome-terminal",
+    "alacritty",
+    "kitty",
+    "foot",
+    "wezterm",
+    "xterm",
+)
 
 
 @dataclass(frozen=True)
@@ -62,3 +80,47 @@ def file_manager():
     """The default file manager other than this app, or None."""
     apps = apps_for_type("inode/directory")
     return apps[0] if apps else None
+
+
+def _configured_terminal():
+    """The terminal chosen in Plasma's settings, as a command name, or None."""
+    settings = GLib.KeyFile()
+    try:
+        settings.load_from_file(
+            os.path.join(GLib.get_user_config_dir(), "kdeglobals"), GLib.KeyFileFlags.NONE
+        )
+        words = shlex.split(settings.get_string("General", "TerminalApplication"))
+    except (GLib.Error, ValueError):
+        return None
+    return words[0] if words else None
+
+
+def terminal(find=GLib.find_program_in_path):
+    """The program to run as the terminal, as a full path, or None when there is none.
+    What the user chose comes first: in Plasma's settings, then in $TERMINAL."""
+    candidates = [_configured_terminal(), os.environ.get("TERMINAL"), *_TERMINALS]
+    for name in candidates:
+        path = find(name) if name else None
+        if path:
+            return path
+    return None
+
+
+@cache
+def default_terminal():
+    """`terminal()`, looked up once: it is asked for every time a menu is made."""
+    return terminal()
+
+
+def open_terminal(folder_path, on_error):
+    """Start the terminal in a folder. A terminal opens its shell where it is started."""
+    program = default_terminal()
+    if program is None:
+        on_error("No terminal was found.")
+        return
+    launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.NONE)
+    launcher.set_cwd(folder_path)
+    try:
+        launcher.spawnv([program])
+    except GLib.Error as error:
+        on_error(f"Could not start the terminal: {error.message}")

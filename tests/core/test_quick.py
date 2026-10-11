@@ -65,3 +65,48 @@ def test_suggested_folder_name_is_free(tmp_path):
     assert quick.suggest_folder_name(gfile(tmp_path)) == "New folder"
     make_tree(tmp_path, {"New folder": {}, "New folder (2)": "a file"})
     assert quick.suggest_folder_name(gfile(tmp_path)) == "New folder (3)"
+
+
+def test_create_file_makes_an_empty_file(tmp_path):
+    made = quick.create_file(gfile(tmp_path), "  notes.txt ")
+
+    assert made.get_path() == str(tmp_path / "notes.txt")
+    assert read_tree(tmp_path) == {"notes.txt": ""}
+
+
+def test_create_file_never_replaces(tmp_path):
+    make_tree(tmp_path, {"Photos": {"a.jpg": "a"}, "notes": "kept"})
+
+    for name in ("Photos", "notes"):
+        with pytest.raises(OperationError) as raised:
+            quick.create_file(gfile(tmp_path), name)
+        assert str(raised.value) == f"{name}: already exists"
+        assert raised.value.step == "create file"
+    assert read_tree(tmp_path) == {"Photos": {"a.jpg": "a"}, "notes": "kept"}
+
+
+@pytest.mark.parametrize("name", ["", "   ", "a/b", ".", ".."])
+def test_create_file_refuses_names_that_cannot_be_used(tmp_path, name):
+    with pytest.raises(OperationError):
+        quick.create_file(gfile(tmp_path), name)
+    assert read_tree(tmp_path) == {}
+
+
+def test_create_file_in_a_folder_that_cannot_be_written_names_the_file(tmp_path):
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root can write anywhere")
+    tmp_path.chmod(0o500)
+    try:
+        with pytest.raises(OperationError) as raised:
+            quick.create_file(gfile(tmp_path), "notes")
+        assert str(raised.value) == "notes: permission denied"
+    finally:
+        tmp_path.chmod(0o700)
+
+
+def test_suggest_file_name_avoids_what_is_there(tmp_path):
+    assert quick.suggest_file_name(gfile(tmp_path)) == "New file"
+    make_tree(tmp_path, {"New file": ""})
+    assert quick.suggest_file_name(gfile(tmp_path)) == "New file (2)"

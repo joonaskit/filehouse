@@ -124,7 +124,7 @@ filehouse/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
-│   │   └── desktop.py           open, open with, default file manager hand-off
+│   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
 │       ├── main_window.py
 │       ├── sidebar.py           places and mounted volumes
@@ -287,7 +287,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a to 6e are done.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a to 6f are done.
 
 ### Phase 0: skeleton and integration basics
 
@@ -492,6 +492,16 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 - A usage bar per drive in the sidebar.
 - "Move" in the toolbar: move the selection to a folder that is picked.
 
+**Done.** How it was built:
+
+- **Copy path** (Ctrl+Alt+C, as in Dolphin) puts the paths of the selection on the clipboard as plain text, one per line; with nothing selected, the open folder's. It is text, not files, so it can't be pasted back as a copy.
+- **Open terminal here** (Shift+F4, as in Dolphin). `integration/desktop.py` picks the terminal: the one set in Plasma's settings (`TerminalApplication` in `kdeglobals`), then `$TERMINAL`, then `xdg-terminal-exec` and a list of known ones. It is started with the folder as its working directory, which every terminal opens its shell in, so no terminal needs its own command line option. The entry is hidden when no terminal is found and where there is no local folder to start in (the trash, remote places). In the menu of a folder in the list it opens that folder.
+- **New file** makes an empty file with a typed name, the way New folder does, and never replaces anything (`quick.create_file`). Templates, which the submenu arrow in the picture suggests, are left for later (open question 6, decided).
+- **Usage bars.** `qt_models/volumes.py` asks each mounted volume how full it is (`filesystem::size` and `free`, asynchronously) when the drives change, when the last job ends and when the app starts. The sidebar draws a bar under the drive's name, in the accent colour and in the warning colour from 90 % full, with "12 GiB free of 500 GiB" as the tooltip. The rail has no room for the bar and keeps the tooltip.
+- **The system's drive** is now the first device, named after the system ("Fedora Linux") and leading to "/", as in the picture. Without it most machines would list no device and show no bar.
+- **Move to…** is in the toolbar, the action bar and the file menu. It asks for a folder with the desktop's own dialog and starts an ordinary move job, so conflicts, cancel and errors behave as for any move.
+- **Menus** now follow the pictures' order. Folder: New folder, New file; Paste, Select all; Sort by, View, Show hidden files; Copy path, Open terminal here, Open folder in Dolphin, Properties. File: Open, Open with, Open folder in Dolphin; Cut, Copy, Paste; Rename, Move to, Move to trash, Delete permanently; Copy path, Open terminal here (folders); Properties.
+
 **6g. Changing permissions.**
 
 - The four presets from the pictures, from the Permissions submenu and the lock button: Private 600, Shared 664, Make executable 755, Read-only 444.
@@ -506,7 +516,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 3. **The permissions grid.** Is it only a display, or are the dots switches?
 4. ~~The width at which the layout changes~~ Decided: 800 pixels, and no setting to force a layout. See 6e.
 5. **Properties dialog.** Remove it when the details pane is done, or keep it for several items?
-6. **New file.** An empty file with a typed name, or a list of templates as the submenu arrow suggests?
+6. ~~New file~~ Decided: an empty file with a typed name. Templates later. See 6f.
 
 ### Later
 

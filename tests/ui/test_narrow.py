@@ -216,7 +216,7 @@ def test_the_menu_buttons_show_the_folder_menu_and_the_selection_menu(qtbot, win
 def test_menus_are_made_without_being_shown(qtbot, window):
     folder_menu = window._menu_for(None)
     texts = [action.text() for action in folder_menu.actions() if action.text()]
-    assert texts[:3] == ["New folder…", "Paste", "Select all"]
+    assert texts[:4] == ["New folder…", "New file…", "Paste", "Select all"]
 
     window._view.select_name("run.sh")
     file_menu = window._menu_for(window._view.selected_infos()[0])

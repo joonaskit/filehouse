@@ -86,6 +86,12 @@ def uri(location):
     return location.get_uri()
 
 
+def local_path(location):
+    """The path of a location on this computer's own file systems, or None: the
+    trash and remote places have none."""
+    return location.get_path() if location.is_native() else None
+
+
 def display_path(location):
     """The full location as editable text: a path when local, a URI otherwise."""
     return location.get_parse_name()
