@@ -775,7 +775,7 @@ def test_changing_the_view_mode_keeps_the_selection(qtbot, tree, open_window):
 
     assert view._stack.currentWidget() is view._grid
     assert [info.name for info in view.selected_infos()] == ["sub", "a.txt"]
-    assert window._count_label.text() == "3 items, 2 selected"
+    assert window._count_label.text() == "3 items · 2 selected"
     assert window._model._thumbnails_on
 
     # Selecting in the icons counts as well: they only ever select the name

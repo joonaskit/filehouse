@@ -4,12 +4,15 @@ from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
-    QMenu,
     QMessageBox,
+    QSizePolicy,
     QSplitter,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -23,7 +26,7 @@ from filehouse.integration import desktop, style
 from filehouse.qt_models.directory_model import DirectoryModel, DirectorySortProxy
 from filehouse.qt_models.job_model import JobModel
 from filehouse.qt_models.volumes import Volumes
-from filehouse.ui import clipboard, settings
+from filehouse.ui import clipboard, menus, settings
 from filehouse.ui.dialogs.name import NameDialog
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
@@ -104,8 +107,9 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._sidebar)
         splitter.addWidget(self._view)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([style.px(190), style.px(770)])
-        splitter.setHandleWidth(1)
+        splitter.setSizes([style.px(200), style.px(760)])
+        splitter.setHandleWidth(style.px(8))
+        splitter.setContentsMargins(style.px(8), 0, style.px(8), style.px(4))
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -143,8 +147,8 @@ class MainWindow(QMainWindow):
         self._view.setFocus()
 
     def _create_actions(self):
-        def action(text, icon, shortcuts, slot):
-            item = QAction(QIcon.fromTheme(icon), text, self)
+        def action(text, icon, shortcuts, slot, colour="textPrimary"):
+            item = QAction(style.icon(icon + "-symbolic", icon, colour=colour), text, self)
             item.setShortcuts(shortcuts)
             item.triggered.connect(slot)
             self.addAction(item)
@@ -196,13 +200,18 @@ class MainWindow(QMainWindow):
         )
         self._rename = action("Rename…", "edit-rename", [QKeySequence("F2")], self.rename)
         self._trash = action(
-            "Move to trash", "user-trash", [QKeySequence("Delete")], self.trash_selected
+            "Move to trash",
+            "user-trash",
+            [QKeySequence("Delete")],
+            self.trash_selected,
+            colour="danger",
         )
         self._delete = action(
             "Delete permanently…",
             "edit-delete",
             [QKeySequence("Shift+Delete")],
             self.delete_selected,
+            colour="danger",
         )
         self._new_folder = action(
             "New folder…", "folder-new", [QKeySequence("Ctrl+Shift+N")], self.new_folder
@@ -213,13 +222,34 @@ class MainWindow(QMainWindow):
             "Properties", "document-properties", [QKeySequence("Alt+Return")], self.properties
         )
 
+        # One row of rounded groups: where you are, what you can do, how it is shown
         toolbar = QToolBar()
         toolbar.setMovable(False)
         toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
-        toolbar.addActions([self._back, self._forward, self._up])
-        toolbar.addWidget(self._path_bar)
-        toolbar.addActions([self._icons_mode, self._details_mode, self._hidden])
+        toolbar.addWidget(self._group(self._back, self._forward, self._up))
+        location = self._group()
+        location.layout().addWidget(self._path_bar)
+        location.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(location)
+        toolbar.addWidget(self._group(self._copy, self._rename, self._trash))
+        toolbar.addWidget(self._group(self._details_mode, self._icons_mode))
         self.addToolBar(toolbar)
+
+    def _group(self, *actions):
+        """A rounded group for the toolbar, holding an icon button per action."""
+        group = QFrame()
+        group.setObjectName("group")
+        layout = QHBoxLayout(group)
+        layout.setContentsMargins(style.px(4), style.px(4), style.px(4), style.px(4))
+        layout.setSpacing(style.px(2))
+        for item in actions:
+            button = QToolButton()
+            button.setDefaultAction(item)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setIconSize(QSize(style.px(18), style.px(18)))
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            layout.addWidget(button)
+        return group
 
     # What is remembered
 
@@ -356,8 +386,10 @@ class MainWindow(QMainWindow):
             text = "Loading…"
         else:
             text = "1 item" if count == 1 else f"{count} items"
-            if selected:
-                text += f", {selected} selected"
+            if selected == 1:
+                text += f" · {infos[0].display_name} selected"
+            elif selected:
+                text += f" · {selected} selected"
         self._count_label.setText(text)
 
     # Items
@@ -381,7 +413,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, _MESSAGE_MS)
 
     def _on_context_menu(self, info, position):
-        menu = QMenu(self)
+        menu = menus.menu(self)
         if self._in_trash():
             if info is not None:
                 menu.addActions([self._restore, self._delete])
@@ -394,13 +426,19 @@ class MainWindow(QMainWindow):
         folder = self._location
         if info is not None:
             target = locations.child(self._location, info.name)
-            menu.addAction("Open", lambda: self._on_item_activated(info))
+            menu.addAction(
+                style.icon("document-open-symbolic", "document-open"),
+                "Open",
+                lambda: self._on_item_activated(info),
+            )
             if info.is_dir:
                 folder = target
             else:
                 apps = desktop.apps_for_type(info.content_type)
                 if apps:
-                    open_with = menu.addMenu("Open with")
+                    open_with = menus.menu(menu, "Open with")
+                    open_with.setIcon(style.icon("view-grid-symbolic", "view-grid"))
+                    menu.addMenu(open_with)
                     for app in apps:
                         open_with.addAction(
                             QIcon.fromTheme(app.icon) if app.icon else QIcon(),
@@ -410,6 +448,7 @@ class MainWindow(QMainWindow):
         manager = desktop.file_manager()
         if manager is not None:
             menu.addAction(
+                style.icon("folder-open-symbolic", "folder-open"),
                 f"Open folder in {manager.name}",
                 lambda: desktop.open_with(manager, folder, self._show_error),
             )
@@ -593,9 +632,9 @@ class MainWindow(QMainWindow):
         return self._start(kind, sources, target)
 
     def _ask_drop_action(self, position):
-        menu = QMenu(self)
-        move = menu.addAction(QIcon.fromTheme("transform-move"), "Move here")
-        copy = menu.addAction(QIcon.fromTheme("edit-copy"), "Copy here")
+        menu = menus.menu(self)
+        move = menu.addAction(style.icon("go-jump-symbolic", "transform-move"), "Move here")
+        copy = menu.addAction(style.icon("edit-copy-symbolic", "edit-copy"), "Copy here")
         menu.addSeparator()
         menu.addAction("Cancel")
         return {move: JobKind.MOVE, copy: JobKind.COPY}.get(menu.exec(position))

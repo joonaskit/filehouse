@@ -282,7 +282,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is planned and not started.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: step 6a is done.
 
 ### Phase 0: skeleton and integration basics
 
@@ -381,6 +381,19 @@ The custom title bar in the pictures is **not** part of this phase. It is a deci
 - Status bar text: "11 items · Dock.qml selected".
 
 **Done when:** the wide window matches the picture apart from the title bar, the details pane and the columns.
+
+**Done.** How it was built:
+
+- `integration/style.py` has the helpers the rest of the phase uses: `palette_color`, `radius`, `overlay` (the text colour at an opacity), `icon` (a theme icon in one colour) and `tile` (an icon on a rounded tile in a palette colour). Icons are drawn once as ordinary pixmaps; a custom icon engine was tried and dropped, because Qt can outlive Python at exit and then calls into an engine that is gone. `style.generation` goes up with each applied theme, so caches of icons know when to start over.
+- `qt_models/icons.py` sorts content types into eight kinds (folder, image, video, audio, archive, document, code, other), each with a palette colour. The sidebar maps places to colours the same way.
+- The breadcrumb starts at Home for anything in the home folder.
+- The toolbar has no "show hidden files" button any more; it is in the folder menu and on Ctrl+H.
+- Menus are made with `ui/menus.py`, which makes the popup's rounded corners show.
+- Not done: "Move to trash" has a red icon, but its text is not red. Qt's menus have no per-entry text colour, and a custom entry widget was not worth it yet.
+
+**To fix from 6a, before 6b:**
+
+- **The breadcrumb's hover highlight is cut off.** Hovering a location in the path bar shows a highlight that is clipped at the bottom and sits low in its group, instead of a rounded shape centred in it. The path bar is only as tall as its text field, and the breadcrumb buttons with their padding are taller than that. The buttons should fit inside the group with the same height and rounding as the icon buttons next to them.
 
 **6b. Columns and list menus.**
 

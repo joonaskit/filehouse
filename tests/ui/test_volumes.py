@@ -181,10 +181,26 @@ def names(sidebar):
     return [sidebar.item(row).text() for row in range(sidebar.count())]
 
 
-def test_sidebar_shows_places_then_volumes(sidebar):
-    assert names(sidebar) == ["Home", "Docs", "USB stick", "Backup disk"]
-    assert sidebar.item(3).toolTip()
-    assert not sidebar.item(2).toolTip()
+def test_sidebar_shows_places_then_devices_under_headings(sidebar):
+    assert names(sidebar) == ["Places", "Home", "Docs", "Devices", "USB stick", "Backup disk"]
+    assert [entry.name for entry in sidebar.entries()] == [
+        "Home",
+        "Docs",
+        "USB stick",
+        "Backup disk",
+    ]
+    assert sidebar.item(sidebar.row_of("Backup disk")).toolTip()
+    assert not sidebar.item(sidebar.row_of("USB stick")).toolTip()
+    # A heading is not a place: it can't be selected or found by name
+    assert not sidebar.item(0).flags() & Qt.ItemFlag.ItemIsSelectable
+    assert sidebar.row_of("Places") == -1
+
+
+def test_no_devices_heading_without_devices(qtbot, tmp_path):
+    sidebar = Sidebar([Place("Home", "user-home", gfile(tmp_path))], Volumes(monitor=FakeMonitor()))
+    qtbot.addWidget(sidebar)
+
+    assert names(sidebar) == ["Places", "Home"]
 
 
 def test_sidebar_follows_drives_coming_and_going_and_keeps_its_highlight(sidebar, tmp_path):
@@ -194,11 +210,17 @@ def test_sidebar_follows_drives_coming_and_going_and_keeps_its_highlight(sidebar
     sidebar.monitor.mounts.append(card)
     sidebar.monitor.emit("mount-added", card)
 
-    assert names(sidebar) == ["Home", "Docs", "USB stick", "SD card", "Backup disk"]
-    assert sidebar.currentRow() == 1
+    assert [entry.name for entry in sidebar.entries()] == [
+        "Home",
+        "Docs",
+        "USB stick",
+        "SD card",
+        "Backup disk",
+    ]
+    assert sidebar.currentRow() == sidebar.row_of("Docs")
 
     sidebar.select(gfile(tmp_path / "stick"))
-    assert sidebar.currentRow() == 2
+    assert sidebar.currentRow() == sidebar.row_of("USB stick")
     sidebar.select(gfile("/elsewhere"))
     assert sidebar.currentRow() == -1
 
@@ -207,7 +229,8 @@ def test_clicking_goes_there_and_an_unmounted_drive_is_mounted_first(qtbot, side
     went = []
     sidebar.place_activated.connect(lambda location: went.append(location.get_path()))
 
-    for row in (1, 2, 3):
+    for name in ("Places", "Docs", "USB stick", "Backup disk"):
+        row = 0 if name == "Places" else sidebar.row_of(name)
         rect = sidebar.visualItemRect(sidebar.item(row))
         qtbot.mouseClick(sidebar.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
 

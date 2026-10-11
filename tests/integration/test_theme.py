@@ -37,11 +37,30 @@ def test_newer_or_missing_version_gives_the_defaults(tmp_path):
 
 def test_unknown_fields_are_kept(tmp_path):
     theme = load_theme(
-        write(tmp_path, {"version": 1, "future": 1, "colors": {"palette": {"green": "#30d158"}}})
+        write(tmp_path, {"version": 1, "future": 1, "colors": {"palette": {"teal": "#40c8e0"}}})
     )
 
     assert theme["future"] == 1
-    assert theme["colors"]["palette"] == {"green": "#30d158"}
+    assert theme["colors"]["palette"]["teal"] == "#40c8e0"
+
+
+def test_palette_is_complete_without_a_file_and_checked_like_other_colours(tmp_path):
+    names = {"green", "blue", "orange", "yellow", "red", "purple", "cyan", "indigo"}
+    assert set(load_theme(str(tmp_path / "missing.json"))["colors"]["palette"]) == names
+
+    theme = load_theme(
+        write(
+            tmp_path,
+            {"version": 1, "colors": {"palette": {"green": "#112233", "blue": "sky", "red": 7}}},
+        )
+    )
+
+    palette = theme["colors"]["palette"]
+    assert palette["green"] == "#112233"
+    # A value that is not a colour falls back to the default, as for any other colour
+    assert palette["blue"] == DEFAULTS["colors"]["palette"]["blue"]
+    assert palette["red"] == DEFAULTS["colors"]["palette"]["red"]
+    assert set(palette) == names
 
 
 def test_wrong_types_fall_back_per_field(tmp_path):

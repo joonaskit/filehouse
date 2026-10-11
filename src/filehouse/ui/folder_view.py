@@ -7,6 +7,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QListView,
     QStackedLayout,
+    QStyle,
+    QStyledItemDelegate,
     QTreeView,
     QWidget,
 )
@@ -54,6 +56,15 @@ class _TakesDrops:
         )
 
 
+class _Rows(QStyledItemDelegate):
+    """Draws entries without the style's own frame around the one the keyboard is on.
+    What is selected is shown by the selection alone."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.state &= ~QStyle.StateFlag.State_HasFocus
+
+
 class _Tree(_TakesDrops, QTreeView):
     dropped = Signal(list, object, object, QPoint)
 
@@ -78,8 +89,9 @@ class FolderView(QWidget):
         self._tree.setRootIsDecorated(False)
         self._tree.setItemsExpandable(False)
         self._tree.setUniformRowHeights(True)
-        self._tree.setAllColumnsShowFocus(True)
-        self._tree.setIconSize(QSize(style.px(20), style.px(20)))
+        # False: with it the tree frames the whole row the keyboard is on, selected or not
+        self._tree.setAllColumnsShowFocus(False)
+        self._tree.setIconSize(QSize(style.px(28), style.px(28)))
         self._tree.setSortingEnabled(True)
         self._tree.sortByColumn(NAME, Qt.SortOrder.AscendingOrder)
 
@@ -107,6 +119,7 @@ class FolderView(QWidget):
         self._grid.setSpacing(style.px(4))
 
         for view in (self._tree, self._grid):
+            view.setItemDelegate(_Rows(view))
             view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
             view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             view.setDragEnabled(True)

@@ -131,3 +131,41 @@ def test_a_folder_whose_last_file_goes_says_it_is_empty(qtbot, tree):
 
     qtbot.waitUntil(lambda: window._count_label.text() == "0 items", timeout=5000)
     assert window._view._message.text() == "This folder is empty"
+
+
+def test_status_names_a_single_selection_and_counts_several(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads")
+    model = window._view.selection_model()
+    flags = model.SelectionFlag.Select | model.SelectionFlag.Rows
+
+    model.select(window._proxy.index(0, 0), flags)
+    assert window._count_label.text() == "2 items · sub selected"
+
+    model.select(window._proxy.index(1, 0), flags)
+    assert window._count_label.text() == "2 items · 2 selected"
+
+
+def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
+    from PySide6.QtWidgets import QFrame, QToolButton
+
+    window = open_window(qtbot, tree / "Downloads")
+
+    groups = [frame for frame in window.findChildren(QFrame) if frame.objectName() == "group"]
+    buttons = [
+        [
+            button.defaultAction().text()
+            for button in group.findChildren(QToolButton)
+            # The breadcrumbs are buttons too, without an action
+            if button.defaultAction() is not None
+        ]
+        for group in groups
+    ]
+
+    assert buttons == [
+        ["Back", "Forward", "Up"],
+        [],
+        ["Copy", "Rename…", "Move to trash"],
+        ["Details", "Icons"],
+    ]
+    # The location sits in a group of its own
+    assert window._path_bar.parent() is groups[1]

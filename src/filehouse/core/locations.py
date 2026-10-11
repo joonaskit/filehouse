@@ -103,13 +103,20 @@ def display_name(location):
 
 
 def segments(location):
-    """Every ancestor of `location` and the location itself, root first, as (name, location)."""
+    """The way to `location` as (name, location), ending with the location itself.
+
+    It starts at the root, or at Home for anything in the home folder: nobody
+    needs "/ › home › me" in front of every folder of their own."""
     result = []
     current = location
+    home_location = home()
     while current is not None:
         name = "/" if current.get_parent() is None and current.is_native() else None
         if is_trash(current):
             name = "Trash"
+        if current.equal(home_location):
+            result.append(("Home", current))
+            break
         result.append((name or current.get_basename() or current.get_uri(), current))
         current = current.get_parent()
     result.reverse()
