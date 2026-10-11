@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Filehouse
+GenericName=File Manager
+Comment=Browse files
+Exec=filehouse %U
+Icon=system-file-manager
+Terminal=false
+Categories=Qt;System;FileTools;FileManager;
+StartupNotify=true
+StartupWMClass=filehouse

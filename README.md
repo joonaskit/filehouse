@@ -1,82 +1,66 @@
-# FileHouse 🏠
+# Filehouse
 
-A modular file browser application built with Python and Qt (PySide6).
+A small file browser for KDE Plasma (Wayland), written in Python and Qt Widgets. It is a companion to [Quickshell Island](https://github.com/joonaskit/Quickshell-Dynamic-Island) and follows the shell's theme, but runs as its own process and works without the shell.
 
-## Features
+It does not try to replace Dolphin. It covers everyday browsing and hands off to the default file manager for the rest.
 
-- **Folder Navigation Tree**: Sidebar directory tree for quick folder hierarchy navigation.
-- **File Table View**: Detailed directory contents with sortable columns (Name, Size, Type, Date Modified).
-- **Interactive Navigation**:
-  - Address bar with editable path and quick Enter navigation
-  - Back, Forward, Up to parent directory, and Home directory buttons
-  - History stack management
-- **Preview & Metadata Panel**:
-  - Displays file size, type, and modification timestamp
-  - Thumbnail preview for images (`.png`, `.jpg`, `.svg`, etc.)
-  - Text snippet preview for code and text files (`.py`, `.md`, `.txt`, `.json`, etc.)
-- **Persistent Preferences**:
-  - Saves window dimensions, position, and last visited directory via `QSettings`
-  - Toggle hidden files (`Ctrl+H`)
-  - Toggle preview panel (`Ctrl+P`)
-- **System Integration**:
-  - Open files using the system's default application on double-click
-  - Context menu with path copying to clipboard
+## Status: 0.1 alpha
 
----
+Browsing works. File operations (copy, move, delete, rename) are not implemented yet.
 
-## Folder Structure
+- Details view with sorting: folders first, then natural order by name
+- Folders load in batches on a worker thread and follow changes made elsewhere
+- Breadcrumb path bar, editable with a click or Ctrl+L
+- Back, forward and up, with history per window
+- Sidebar with home and the user's special folders
+- Open with the default app, Open with, and Open folder in the default file manager
+- Colours, fonts, radii and scale from the shell's `theme.json`, with built-in defaults when it is missing
 
-```text
-filehouse/
-├── main.py                     # Root entrypoint launcher
-├── requirements.txt            # Python dependencies (PySide6)
-├── pyproject.toml              # Packaging and build specification
-├── README.md                   # Project documentation
-└── filehouse/                  # Core package
-    ├── __init__.py
-    ├── app.py                  # Application bootstrap & lifecycle
-    ├── core/                   # Business logic & non-UI helpers
-    │   ├── __init__.py
-    │   ├── config.py           # User settings & persistence (QSettings)
-    │   ├── file_ops.py         # File operations, formatting & MIME types
-    │   └── history.py          # Back / Forward navigation stack
-    └── ui/                     # User interface layer
-        ├── __init__.py
-        ├── main_window.py      # QMainWindow, layout, menus & action wiring
-        ├── styles/
-        │   └── style.qss       # Application stylesheet
-        ├── views/
-        │   ├── __init__.py
-        │   ├── file_view.py    # Main table view (QTableView + QFileSystemModel)
-        │   ├── preview_panel.py# File details & preview widget
-        │   └── tree_view.py    # Sidebar directory tree (QTreeView)
-        └── widgets/
-            ├── __init__.py
-            └── address_bar.py  # Navigation bar (back/forward/up/address)
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and the plan.
+
+## Install
+
+Fedora:
+
+```sh
+sudo dnf install python3-pyside6 python3-gobject
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
 ```
 
----
+Use the distribution's PySide6 and PyGObject rather than the ones from PyPI, so that Qt and Gio share one event loop.
 
-## Installation & Running
+## Run
 
-### 1. Requirements
-
-- Python 3.10+
-- PySide6
-
-```bash
-pip install -r requirements.txt
+```sh
+filehouse                 # opens home
+filehouse ~/Downloads     # opens a folder
+filehouse ~/notes.txt     # opens the file's folder with the file selected
 ```
 
-### 2. Run the Application
+To show the app in the launcher and the shell's dock, install the desktop file and make sure `filehouse` is on your `PATH`:
 
-```bash
-python main.py
+```sh
+install -Dm644 data/filehouse.desktop ~/.local/share/applications/filehouse.desktop
 ```
 
-Or install in editable mode:
+## Keyboard
 
-```bash
-pip install -e .
-filehouse
+| Key | Action |
+| --- | --- |
+| Enter | Open |
+| Backspace, Alt+Left | Back |
+| Alt+Right | Forward |
+| Alt+Up | Up |
+| Ctrl+L | Edit the location |
+| Ctrl+H | Show hidden files |
+| F5 | Reload |
+| Ctrl+W | Close the window |
+
+## Tests
+
+```sh
+pytest
+ruff check . && ruff format --check .
 ```
