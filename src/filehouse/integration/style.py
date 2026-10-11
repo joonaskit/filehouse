@@ -51,6 +51,26 @@ def color(name):
     return QColor(_theme["colors"][name])
 
 
+# The window's layers, as the shell's own windows are built (its clipboard history, for
+# one): the window is the theme's `surface`, not its `background`, which is pitch black
+# in the dark scheme and harsh behind a whole window. What lies on the window is that
+# colour with a little of the text colour mixed in, so the light scheme follows by itself.
+_LAYERS = {"window": 0.0, "card": 0.04, "raised": 0.10}
+# The hairline around a card: it is what sets a card apart from the window
+_CARD_BORDER = 0.06
+
+
+def layer(name):
+    """The colour of one of the window's layers: "window", the "card"s on it (sidebar,
+    details, toolbar groups, menus) or the "raised" controls on a card."""
+    base, text, share = color("surface"), color("textPrimary"), _LAYERS[name]
+    return QColor(
+        round(base.red() + (text.red() - base.red()) * share),
+        round(base.green() + (text.green() - base.green()) * share),
+        round(base.blue() + (text.blue() - base.blue()) * share),
+    )
+
+
 def palette_color(name):
     """One of the theme's eight decoration colours: "green", "blue", "orange", …"""
     return QColor(_theme["colors"]["palette"][name])
@@ -174,11 +194,6 @@ def tile(*names, colour):
 def _palette():
     palette = QPalette()
     roles = {
-        QPalette.ColorRole.Window: "background",
-        QPalette.ColorRole.Base: "background",
-        QPalette.ColorRole.AlternateBase: "surface",
-        QPalette.ColorRole.Button: "surfaceRaised",
-        QPalette.ColorRole.ToolTipBase: "surfaceRaised",
         QPalette.ColorRole.WindowText: "textPrimary",
         QPalette.ColorRole.Text: "textPrimary",
         QPalette.ColorRole.ButtonText: "textPrimary",
@@ -190,6 +205,15 @@ def _palette():
     }
     for role, name in roles.items():
         palette.setColor(role, color(name))
+    layers = {
+        QPalette.ColorRole.Window: "window",
+        QPalette.ColorRole.Base: "window",
+        QPalette.ColorRole.AlternateBase: "card",
+        QPalette.ColorRole.Button: "raised",
+        QPalette.ColorRole.ToolTipBase: "raised",
+    }
+    for role, name in layers.items():
+        palette.setColor(role, layer(name))
     for role in (
         QPalette.ColorRole.WindowText,
         QPalette.ColorRole.Text,
@@ -226,16 +250,20 @@ def _stylesheet():
     colors = _theme["colors"]
     small, medium, large = radius("small"), radius("medium"), radius("large")
     hover, pressed, divider = overlay(0.08), overlay(0.14), overlay(0.10)
-    selected = tint("accent", 0.28)
+    selected = tint("accent", 0.22)
+    window, card, raised = (layer(name).name() for name in ("window", "card", "raised"))
+    card_border = overlay(_CARD_BORDER)
     small_font = theme_reader.font_scaled(_theme, 11)
     return f"""
         QToolBar {{
             border: none; spacing: {px(8)}px; padding: {px(8)}px;
-            background: {colors["background"]};
+            background: {window};
         }}
 
         /* The rounded groups in the toolbar, the sidebar and the details card */
-        #group, #card {{ background: {colors["surface"]}; border-radius: {large}px; }}
+        #group, #card {{
+            background: {card}; border: 1px solid {card_border}; border-radius: {large}px;
+        }}
         #group {{ border-radius: {radius_within("large", CONTROL_HEIGHT + 2 * GROUP_PADDING)}px; }}
         #group QToolButton {{
             border-radius: {radius_within("medium", CONTROL_HEIGHT)}px; padding: {px(7)}px;
@@ -247,11 +275,11 @@ def _stylesheet():
         }}
         QToolButton:hover {{ background: {hover}; }}
         QToolButton:pressed {{ background: {pressed}; }}
-        QToolButton:checked {{ background: {colors["surfaceRaised"]}; }}
+        QToolButton:checked {{ background: {raised}; }}
 
         QLineEdit {{
             border: 1px solid {divider}; border-radius: {medium}px;
-            padding: {px(4)}px {px(8)}px; background: {colors["surfaceRaised"]};
+            padding: {px(4)}px {px(8)}px; background: {raised};
         }}
         QLineEdit:focus {{ border-color: {colors["accent"]}; }}
 
@@ -270,7 +298,8 @@ def _stylesheet():
         QListView::item {{ border-radius: {medium}px; padding: {px(4)}px; }}
 
         #sidebar {{
-            padding: {px(8)}px; background: {colors["surface"]}; border-radius: {large}px;
+            padding: {px(8)}px; background: {card}; border: 1px solid {card_border};
+            border-radius: {large}px;
         }}
         QListWidget#sidebar::item {{ padding: 0 {px(6)}px; border-radius: {medium}px; }}
         QListWidget#sidebar::item:disabled {{ color: {colors["textSecondary"]}; }}
@@ -287,13 +316,13 @@ def _stylesheet():
         #divider {{ background: {divider}; border: none; }}
         #card QPushButton {{
             border: none; border-radius: {radius_within("large", BUTTON_HEIGHT)}px;
-            padding: 0 {px(10)}px; background: {colors["surfaceRaised"]};
+            padding: 0 {px(10)}px; background: {raised};
         }}
         #card QPushButton:hover {{ background: {hover}; }}
         #card QPushButton:pressed {{ background: {pressed}; }}
 
         QMenu {{
-            background: {colors["surface"]}; border: 1px solid {divider};
+            background: {card}; border: 1px solid {divider};
             border-radius: {large}px; padding: {px(6)}px;
         }}
         QMenu::item {{
@@ -318,7 +347,7 @@ def _stylesheet():
         #operations {{ border-top: 1px solid {divider}; }}
         #operationsHeader {{ border-radius: 0; padding: {px(6)}px {px(10)}px; }}
         QProgressBar {{
-            border: none; border-radius: {px(3)}px; background: {colors["surfaceRaised"]};
+            border: none; border-radius: {px(3)}px; background: {raised};
         }}
         QProgressBar::chunk {{ border-radius: {px(3)}px; background: {colors["accent"]}; }}
     """

@@ -131,12 +131,38 @@ def test_a_button_keeps_round_corners_however_round_the_theme_is(qtbot, qapp, la
         pane.show()
         # Of the card, not the button alone: a widget grabbed by itself gets a filled background
         image = pane.grab(pane.open_button.geometry()).toImage()
-        raised = style.color("surfaceRaised")
+        raised = style.layer("raised")
         # Beside the text, not under it
         assert same_colour(image.pixelColor(image.width() // 8, image.height() // 2), raised)
         assert not same_colour(image.pixelColor(0, 0), raised)
         # The top corners: in the roundest theme the card's own border passes the lower ones
         assert not same_colour(image.pixelColor(image.width() - 1, 0), raised)
+    finally:
+        style.apply(qapp, theme.merge(theme.DEFAULTS, {}))
+        qapp.setStyleSheet("")
+
+
+def test_the_window_is_the_surface_colour_and_cards_are_a_shade_off_it(qtbot, qapp):
+    from PySide6.QtGui import QPalette
+
+    try:
+        style.apply(qapp, theme.merge(theme.DEFAULTS, {}))
+        palette = qapp.palette()
+        # Not the theme's background, which is pitch black
+        assert palette.color(QPalette.ColorRole.Window).name() == "#1c1c1e"
+        assert palette.color(QPalette.ColorRole.Base).name() == "#1c1c1e"
+        assert style.layer("card").name() == "#252527"
+        assert style.layer("raised").name() == "#333334"
+
+        # In a light theme the layers get darker, not lighter
+        light = theme.merge(
+            theme.DEFAULTS,
+            {"scheme": "light", "colors": {"surface": "#f1ebe1", "textPrimary": "#101010"}},
+        )
+        style.apply(qapp, light)
+        assert style.layer("window").name() == "#f1ebe1"
+        assert style.layer("card").lightness() < style.layer("window").lightness()
+        assert style.layer("raised").lightness() < style.layer("card").lightness()
     finally:
         style.apply(qapp, theme.merge(theme.DEFAULTS, {}))
         qapp.setStyleSheet("")

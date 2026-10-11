@@ -266,7 +266,7 @@ Rules from the API spec that the client must follow:
 
 - Port the shell's `examples/read_theme.py`: start from complete defaults, overlay `$XDG_CONFIG_HOME/quickshell-island/theme.json`, ignore unknown fields, fall back per field, and use defaults for a missing or newer `version`.
 - `style.py` maps it to Qt:
-  - `QPalette`: `background` → Window, `surface` → Base, `surfaceRaised` → AlternateBase and Button, `textPrimary` → WindowText and Text, `textSecondary` → PlaceholderText, `accent` → Highlight, `onAccent` → HighlightedText.
+  - `QPalette`: the window's layers (see "Window colours" under phase 6) → Window, Base, AlternateBase and Button, `textPrimary` → WindowText and Text, `textSecondary` → PlaceholderText, `accent` → Highlight, `onAccent` → HighlightedText.
   - Font: the first installed family from `fonts.families`, at `max(8, round(px * scale.font * scale.ui))`.
   - Sizes (row height, icon sizes, paddings) defined in unscaled pixels and multiplied by `scale.ui`.
   - A short stylesheet for corner radii (`radius.small` for buttons and rows, `radius.medium` for panels) and the operations panel. Keep it short: a large stylesheet fights the platform style.
@@ -373,6 +373,15 @@ The custom title bar in the pictures is **not** part of this phase. It is a deci
 - **Corners** use `radius.small`, `medium` and `large`. These follow the user's corner roundness setting, so the window only looks as round as the pictures when the shell is set to "Round". The app does not hard-code the pictures' radii.
 - **Light scheme.** The shell has an experimental light mode and exports `scheme` with matching colours. Nothing in the app may assume a dark background: translucent overlays (hover, dividers) are derived from the text colour, not from white.
 - **Reader.** `integration/theme.py` currently defaults `palette` to empty and keeps whatever entries the file has without checking them. It gets the full default palette and the same colour check as the other colours, so the tiles work with no theme file.
+
+**Window colours.** Changed after 6c: the first design put the cards on the theme's `background`, which is pitch black in the dark scheme and harsh behind a whole window. The window now uses the colours of the shell's own windows (its clipboard history is the model), all derived in `style.layer` from two theme colours:
+
+- **window** and the list: the theme's `surface`.
+- **card** (sidebar, details, toolbar groups, menus): `surface` with 4 % of the text colour mixed in, and a hairline border of the text colour at 6 %. The border is what sets a card apart.
+- **raised** (the Open button, a checked toolbar button, text fields, the progress bar's track): `surface` with 10 % of the text colour.
+- The selected row is the accent at 22 %.
+
+The theme's `background` and `surfaceRaised` are no longer used. Because every layer is `surface` plus some text colour, a light scheme gets darker cards on a light window without anything said about it.
 
 **6a. Restyle what exists.** No new behaviour.
 
