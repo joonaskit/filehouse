@@ -6,8 +6,9 @@ operations panel and the island reporter both observe it.
 """
 
 import time
+from collections import deque
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QLocale, QObject, QTimer, Signal
 
 from filehouse.core import locations
 from filehouse.core.operations import Job, JobKind, JobQueue, JobState
@@ -16,6 +17,9 @@ from filehouse.qt_models import workers
 # At most this often per job, apart from state changes
 _UPDATE_SECONDS = 0.1
 _KEEP_FINISHED_MS = 4000
+# Speed is measured over the last few seconds, and not from less than this
+_SPEED_WINDOW_SECONDS = 3.0
+_SPEED_MIN_SECONDS = 0.5
 
 ICONS = {
     JobKind.COPY: "edit-copy",
@@ -41,6 +45,8 @@ class JobModel(QObject):
         super().__init__(parent)
         self._jobs = []
         self._origins = {}
+        self._predecessors = {}
+        self._samples = {}  # job id -> recent (time, bytes done), for the speed
         self._ended = set()
         self._last_report = {}  # job id -> (state, time); touched only by that job's thread
         self._keep_finished_ms = keep_finished_ms
@@ -62,6 +68,20 @@ class JobModel(QObject):
         """Whatever was passed as `origin` when the job was started."""
         return self._origins.get(job.id)
 
+    def predecessor(self, job):
+        """The failed job this one is a retry of, or None."""
+        return self._predecessors.get(job.id)
+
+    def speed(self, job):
+        """Bytes per second over the last few seconds, or None when it can't be told."""
+        samples = self._samples.get(job.id)
+        if job.state is not JobState.RUNNING or not samples:
+            return None
+        (first_time, first_bytes), (last_time, last_bytes) = samples[0], samples[-1]
+        if last_time - first_time < _SPEED_MIN_SECONDS or last_bytes <= first_bytes:
+            return None
+        return (last_bytes - first_bytes) / (last_time - first_time)
+
     def start(self, kind, sources, destination=None, origin=None):
         """Queue a new job and return it."""
         job = Job(kind, sources, destination, prompt=self._prompt, on_change=self._report)
@@ -81,9 +101,10 @@ class JobModel(QObject):
         again = job.retry()
         if again is None:
             return None
-        origin = self.origin(job)
+        # Added before the old one goes, so observers can hand over from one to the other
+        self._predecessors[again.id] = job
+        self._add(again, self.origin(job))
         self.dismiss(job)
-        self._add(again, origin)
         return again
 
     def dismiss(self, job):
@@ -92,6 +113,8 @@ class JobModel(QObject):
             return
         self._jobs.remove(job)
         self._origins.pop(job.id, None)
+        self._predecessors.pop(job.id, None)
+        self._samples.pop(job.id, None)
         self._ended.discard(job.id)
         self.job_removed.emit(job)
 
@@ -128,6 +151,7 @@ class JobModel(QObject):
     def _on_reported(self, job):
         if job not in self._jobs:
             return
+        self._sample(job)
         self.job_changed.emit(job)
         if not job.state.is_final or job.id in self._ended:
             return
@@ -139,11 +163,21 @@ class JobModel(QObject):
         if not self.active_count():
             self.idle.emit()
 
+    def _sample(self, job):
+        now = time.monotonic()
+        samples = self._samples.setdefault(job.id, deque())
+        samples.append((now, job.progress.bytes_done))
+        while now - samples[0][0] > _SPEED_WINDOW_SECONDS:
+            samples.popleft()
+
 
 def title(job):
     """One line saying what the job is, or how it ended."""
-    if job.state.is_final:
-        return job.summary
+    return job.summary if job.state.is_final else heading(job)
+
+
+def heading(job):
+    """What the job is doing, whatever state it is in: "Copying 3 items to Pictures"."""
     count = len(job.sources)
     what = f"“{locations.basename(job.sources[0])}”" if count == 1 else f"{count} items"
     if job.kind is JobKind.TRASH:
@@ -154,8 +188,17 @@ def title(job):
     return f"{verb} {what} to {locations.display_name(job.destination)}"
 
 
-def text(job):
-    """The line under the title: what is happening now, or what went wrong."""
+def error_text(job):
+    """The first error of a failed job, and how many more there are."""
+    if not job.errors:
+        return ""
+    more = len(job.errors) - 1
+    return str(job.error) + (f", and {more} more" if more else "")
+
+
+def text(job, speed=None):
+    """The line under the title: what is happening now, or what went wrong.
+    `speed` is in bytes per second, from `JobModel.speed`."""
     state = job.state
     if state is JobState.QUEUED:
         return "Waiting to start"
@@ -165,11 +208,13 @@ def text(job):
         return "Waiting for your answer"
     if state is JobState.RUNNING:
         progress = job.progress
+        line = progress.current
         if progress.files_total > 1:
             position = min(progress.files_done + 1, progress.files_total)
-            return f"{progress.current} ({position} of {progress.files_total})"
-        return progress.current
-    if state is JobState.FAILED and job.errors:
-        more = len(job.errors) - 1
-        return str(job.error) + (f", and {more} more" if more else "")
+            line += f" ({position} of {progress.files_total})"
+        if speed:
+            line += f", {QLocale().formattedDataSize(int(speed))}/s"
+        return line
+    if state is JobState.FAILED:
+        return error_text(job)
     return ""

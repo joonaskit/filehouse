@@ -508,6 +508,13 @@ class MainWindow(QMainWindow):
         self._model.close()
         super().closeEvent(event)
 
+    def come_forward(self):
+        """Show this window to the user, also when it was hidden to let jobs finish."""
+        self._closing_when_idle = False
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def _on_jobs_idle(self):
         if self._closing_when_idle:
             self._closing_when_idle = False

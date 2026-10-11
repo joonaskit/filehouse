@@ -153,3 +153,63 @@ def test_a_model_that_goes_away_cancels_its_waiting_jobs(qtbot, files):
 
     qtbot.waitUntil(lambda: job.state is JobState.CANCELLED, timeout=5000)
     assert (files / "dst" / "a.txt").read_text() == "old"
+
+
+def test_speed_is_measured_over_the_last_few_seconds(qtbot, bare_jobs, files, monkeypatch):
+    jobs = bare_jobs
+    job = jobs.start(JobKind.TRASH, [])
+    clock = [100.0]
+    monkeypatch.setattr(job_model.time, "monotonic", lambda: clock[0])
+
+    class Running:
+        id = job.id
+        state = JobState.RUNNING
+        progress = None
+
+    def report(seconds, megabytes):
+        clock[0] = 100.0 + seconds
+        Running.progress = type("P", (), {"bytes_done": megabytes * 1_000_000})
+        jobs._sample(Running)
+
+    report(0, 0)
+    assert jobs.speed(Running) is None
+    report(0.2, 1)
+    # Too little time to tell
+    assert jobs.speed(Running) is None
+    report(1, 10)
+    assert jobs.speed(Running) == 10_000_000
+    report(10, 30)
+    report(11, 50)
+    # Only the recent past counts
+    assert jobs.speed(Running) == 20_000_000
+    Running.state = JobState.WAITING
+    assert jobs.speed(Running) is None
+
+
+def test_running_text_names_the_file_its_position_and_the_speed(qtbot):
+    class Job:
+        state = JobState.RUNNING
+        progress = type("P", (), {"current": "film.mkv", "files_done": 2, "files_total": 12})
+
+    assert job_model.text(Job) == "film.mkv (3 of 12)"
+    assert job_model.text(Job, 2_500_000).startswith("film.mkv (3 of 12), 2")
+    assert job_model.text(Job, 2_500_000).endswith("/s")
+
+
+def test_a_retry_is_added_before_the_job_it_replaces_is_removed(
+    qtbot, bare_jobs, files, wait_final
+):
+    jobs = bare_jobs
+    jobs.question_asked.connect(lambda job, question: question.answer(Answer.SKIP))
+    locked = files / "src" / "a.txt"
+    locked.chmod(0)
+    failed = wait_final(jobs, jobs.start(JobKind.COPY, [gfile(locked)], gfile(files / "dst")))
+    locked.chmod(0o600)
+    events = []
+    jobs.job_added.connect(lambda job: events.append(("added", job, jobs.predecessor(job))))
+    jobs.job_removed.connect(lambda job: events.append(("removed", job)))
+
+    again = jobs.retry(failed)
+
+    assert events == [("added", again, failed), ("removed", failed)]
+    wait_final(jobs, again)

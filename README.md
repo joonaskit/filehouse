@@ -6,7 +6,7 @@ It does not try to replace Dolphin. It covers everyday browsing and hands off to
 
 ## Status: 0.1 alpha
 
-Browsing and file operations work. Progress in the shell's island is not implemented yet.
+Browsing and file operations work, and operations show in the shell's island when it is running.
 
 - Copy, cut and paste, drag and drop, move to trash, permanent delete, rename and new folder
 - Operations run in the background, with progress, cancel, retry and error details in a panel at the bottom of the window

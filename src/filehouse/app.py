@@ -6,10 +6,12 @@ import sys
 
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
+from shiboken6 import isValid
 
 from filehouse import APP_ID, __version__
 from filehouse.core import locations
 from filehouse.integration import style, theme
+from filehouse.integration.island import IslandClient, IslandReporter
 from filehouse.qt_models.job_model import JobModel
 from filehouse.ui import clipboard
 from filehouse.ui.dialogs.prompter import Prompter
@@ -40,6 +42,19 @@ def main(argv=None):
     app.aboutToQuit.connect(clipboard.release)
     # Every launch is its own process; windows are kept alive here until closed
     windows = []
+
+    # The island mirrors the jobs. With no island running this does nothing
+    client = IslandClient()
+    reporter = IslandReporter(jobs, client, jobs)
+
+    def show_window_of(job):
+        origin = jobs.origin(job)
+        window = origin if origin in windows and isValid(origin) else next(iter(windows), None)
+        if window is not None:
+            window.come_forward()
+
+    reporter.show_requested.connect(show_window_of)
+    client.start()
     for target in targets:
         window = MainWindow(
             target.location, select=target.select, message=target.message, jobs=jobs

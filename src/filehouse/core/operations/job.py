@@ -99,6 +99,7 @@ class Job:
 
         self._prompt = prompt
         self._state = JobState.QUEUED
+        self._started = False
         self._lock = threading.Lock()
         self._items = [(source, destination, source.get_basename()) for source in self.sources]
         self._steps = []
@@ -110,6 +111,11 @@ class Job:
     @property
     def state(self):
         return self._state
+
+    @property
+    def started(self):
+        """Whether the job ever ran. False for one cancelled while it was still queued."""
+        return self._started
 
     @property
     def error(self):
@@ -152,6 +158,7 @@ class Job:
         with self._lock:
             if self._state is not JobState.QUEUED:
                 return
+            self._started = True
             self._state = JobState.PLANNING
         self._notify()
 

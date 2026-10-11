@@ -218,7 +218,7 @@ The **operations panel** is a collapsible strip at the bottom of the window. It 
 
 ### Island integration (`integration/island.py`)
 
-A small client of the activities API. It observes `JobModel` and translates; it holds no job logic.
+A small client of the activities API. It observes `JobModel` and translates; it holds no job logic. It has two parts: `IslandClient` does the D-Bus work and knows nothing about jobs, and `IslandReporter` maps jobs to activities and is tested against a stand-in for the client.
 
 **Connecting**
 
@@ -233,12 +233,13 @@ A small client of the activities API. It observes `JobModel` and translates; it 
 | id | `job-<n>`, unique within the process |
 | kind and count | `title`: "Copying 12 files", "Moving 3 items to Pictures", "Moving 40 items to the trash" |
 | planning | `progress: -1` (indeterminate), `text`: "Preparing…" |
-| running | `progress`: bytes done / bytes planned; `text`: current file name and speed |
+| running | `progress`: bytes done / bytes planned; `text`: current file name, its position and the speed ("film.mkv (3 of 12), 24 MB/s") |
 | waiting for user | progress unchanged, `text`: "Waiting for you in Files" |
 | queued | not published until it starts |
+| over before it was seen running | not published, unless it failed: a paste that finishes at once doesn't flash in the island |
 | — | `icon`: `edit-copy`, `transform-move`, `user-trash`, `edit-delete` by kind |
 | — | `actions`: `[("cancel", "Cancel")]` while running; on failure `[("retry", "Retry"), ("show", "Show")]` |
-| done | `state: done`, final title ("Copied 12 files"), empty `text` |
+| done | `state: done`, final title ("Copied 12 files"), empty `text`, `progress: 1.0` |
 | cancelled | `state: cancelled`, `text`: "Cancelled after 5 of 12 files" |
 | failed | `state: failed`, `error`: "report.pdf: permission denied" |
 
@@ -246,9 +247,10 @@ Rules from the API spec that the client must follow:
 
 - **Throttle** progress updates to at most 4 per second per job, and always send the final state immediately. The island's limit is 20 calls per second per sender.
 - **Cancel is a request.** On `ActionInvoked(id, "cancel")` cancel the job's `Gio.Cancellable`; the activity stays `running` until the job reports how it ended, and then the client sends that state. Never send `cancelled` before the work has actually stopped.
-- **Show for a retry.** A finished activity can't go back to `running` with `Update`. Retry starts a new job, published with `Show` under the old id.
+- **Show for a retry.** A finished activity can't go back to `running` with `Update`. Retry starts a new job, published with `Show` under the old id. `JobModel` adds the new job before it removes the failed one and says which job it replaces, so the reporter can hand the activity over; the failure stays on show until the new job starts.
+- **Only what changed is sent.** The reporter remembers the fields the island has and puts only the differences in an `Update`. If a call fails, those fields count as not sent.
 - **`Dismissed(id)`** on a failed job also dismisses it in the in-app panel, so the two stay in sync. Dismissing it in the app calls `Dismiss(id)`.
-- **Errors from the island** are logged and never stop a job. `NotFound` means the activity is gone (dismissed or timed out): stop updating it. `LimitExceeded` means too many failed activities are still showing: dismiss the oldest failed one this app owns and try once more. `RateLimited` means drop this update; the next one carries newer values anyway.
+- **Errors from the island** are logged and never stop a job. `NotFound` means the activity is gone (dismissed or timed out): stop updating it. `LimitExceeded` means too many failed activities are still showing: dismiss the oldest failed one this app owns from the island (it stays in the app's own panel) and try once more. `RateLimited` means drop this update; the next one carries newer values anyway. A refused `Show`, and a refused final state, are tried again a few times, because nothing newer will follow them.
 - **All D-Bus calls are asynchronous** and made from the UI thread, so a slow or hung island never blocks the app.
 - **Crashes need no code.** If the app dies, the island turns its running activities into failures because the connection closed. That is why every job must hold its activity under the app's long-lived connection, not a short-lived one.
 
@@ -274,7 +276,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2 and 3 are implemented and tested. Phase 4 is next.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is next.
 
 ### Phase 0: skeleton and integration basics
 
@@ -322,7 +324,7 @@ The tests use `/dev/shm` as the second file system when it is one, and also alwa
 ### Phase 4: island integration
 
 - `island.py`: version check, name watching, mapping, throttling, actions, dismissal sync, error handling.
-- Test the reporter against a fake activities service on a private bus (`dbus-run-session`), or against a fake transport object.
+- Test the reporter against a fake activities service on a private bus (`dbus-run-session`), or against a fake transport object. Both are done: the reporter against a stand-in client, and the client against a stand-in service on a `dbus-daemon` started by the test, so the real session bus is never used.
 - Manual checks with the shell running:
   - a copy shows in the island and ends as "done";
   - Cancel in the island stops the copy and shows "Cancelled after N of M files";

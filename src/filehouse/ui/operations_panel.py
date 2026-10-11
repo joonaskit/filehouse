@@ -80,7 +80,7 @@ class JobRow(QWidget):
         state = job.state
         self.title.setText(job_model.title(job))
         self.title.setToolTip(self.title.text())
-        self.text.setText(job_model.text(job))
+        self.text.setText(job_model.text(job, self._jobs.speed(job)))
         self.text.setToolTip(self.text.text())
         self.text.setVisible(bool(self.text.text()))
 
