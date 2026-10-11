@@ -197,6 +197,11 @@ def short_heading(job):
     return f"{'Copying' if job.kind is JobKind.COPY else 'Moving'} {what}"
 
 
+def verb(job):
+    """The one word for what the job is doing: "Copying"."""
+    return short_heading(job).split()[0]
+
+
 def heading(job):
     """What the job is doing, whatever state it is in: "Copying 3 items to Pictures"."""
     text = short_heading(job)

@@ -132,6 +132,7 @@ filehouse/
 │       ├── folder_view.py       list and grid modes, delegates
 │       ├── operations_panel.py  in-app list of jobs, with cancel, retry and details
 │       ├── job_status.py        the running jobs as one line in the status bar
+│       ├── sheet.py             a panel that slides up from the bottom, for the narrow window
 │       ├── details_pane.py      what is selected, beside the list
 │       ├── clipboard.py         cut, copy and paste of files as `text/uri-list`
 │       ├── settings.py          what is remembered between runs
@@ -286,7 +287,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a to 6d are done.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a to 6e are done.
 
 ### Phase 0: skeleton and integration basics
 
@@ -470,6 +471,19 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 
 **Done when:** resizing the window across the width switches between the two layouts without losing the selection or the place in the list.
 
+**Done.** How it was built:
+
+- **The width** is 800 pixels, unscaled (`NARROW_BELOW` in `ui/main_window.py`), and the layout follows the window's width with no setting to force one (open question 4, decided). A window can't be made narrower than 460 by 360, which is what the narrow toolbar needs.
+- **One window, two arrangements.** Nothing is rebuilt on the switch: the same list, model and selection stay, and each part is told to change its form. That is why the selection and the scroll position survive it.
+  - `Sidebar.set_rail`: icons only, at a fixed width, names as tooltips, a line where the "Devices" heading was.
+  - `PathBar.set_short`: "… › parent › folder". The "…" opens a menu of the folders above.
+  - The toolbar loses Forward (Alt+Right still works) and its action group, and gains a "⋯" button for the folder menu.
+  - The list loses its Modified column. The status bar says what the list no longer has room for: "Dock.qml · rw-r--r--", and the job line is one word, "Copying".
+- **The action bar** is a rounded group centred under the list, with Copy, Rename, Move to trash, Details and "⋯" (the selection's menu, which opens upwards). It is there only while something is selected. It is part of the layout, not laid over the list: floating as in the picture, it would hide the last rows, and whatever is selected there.
+- **The details sheet** (`ui/sheet.py`) is a second `DetailsPane` in a compact form: icon beside the name, a close button, the mode spelled out ("rw-r--r-- · 644") and no Open button. The Details button in the action bar opens it, and its close button, the same button again or Escape closes it. It slides by animating its height, pushes the list up, and the list then scrolls just enough to keep the selected entry in view. While it is open the action bar is hidden and the sheet follows the selection.
+- Going back to a wide window closes the sheet and puts the splitter back as it was.
+- Not in this step, because they are steps of their own: Move and the lock button in the action bar (6f, 6g), and the search button in the toolbar (later).
+
 **6f. Small additions from the menus.**
 
 - Copy path.
@@ -490,7 +504,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 1. ~~Colours of the icon tiles~~ Decided: from the theme's `colors.palette`, see "Theme in this phase". Which colour goes with which place and file type is fixed in the app.
 2. **Folder presets.** 600 or 444 on a folder makes it impossible to open. Do folders get their own presets (700, 775, 755, 555), and is a preset applied to what is inside a folder as well?
 3. **The permissions grid.** Is it only a display, or are the dots switches?
-4. **The width at which the layout changes**, and whether the user can force one layout.
+4. ~~The width at which the layout changes~~ Decided: 800 pixels, and no setting to force a layout. See 6e.
 5. **Properties dialog.** Remove it when the details pane is done, or keep it for several items?
 6. **New file.** An empty file with a typed name, or a list of templates as the submenu arrow suggests?
 

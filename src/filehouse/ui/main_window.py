@@ -1,6 +1,6 @@
 """One browser window: toolbar, sidebar, file list, operations panel and status bar."""
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from filehouse.core import locations
 from filehouse.core.errors import OperationError
 from filehouse.core.history import History
+from filehouse.core.listing import mode_text
 from filehouse.core.operations import JobKind, quick
 from filehouse.core.operations.conflicts import split_extension
 from filehouse.integration import desktop, style
@@ -41,10 +42,16 @@ from filehouse.ui.folder_view import FolderView
 from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
 from filehouse.ui.path_bar import PathBar
+from filehouse.ui.sheet import Sheet
 from filehouse.ui.sidebar import Sidebar
 
 _MESSAGE_MS = 8000
 _DETAILS_MS = 200
+# A window less wide than this, unscaled, gets the narrow layout: the sidebar as a
+# rail of icons, the actions in a bar at the bottom, the details as a sheet
+NARROW_BELOW = 800
+# The least the narrow layout needs, unscaled: its toolbar side by side, a few rows
+_MINIMUM_SIZE = (460, 360)
 # What "Sort by" offers, with the order each starts in: the newest and the largest first
 _SORTS = (
     ("Name", NAME, Qt.SortOrder.AscendingOrder),
@@ -85,6 +92,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(QIcon.fromTheme("system-file-manager"))
+        self.setMinimumSize(style.px(_MINIMUM_SIZE[0]), style.px(_MINIMUM_SIZE[1]))
         self.resize(settings.window_size(QSize(style.px(1080), style.px(660))))
 
         self._history = History()
@@ -92,6 +100,8 @@ class MainWindow(QMainWindow):
         self._pending_select = None
         self._error = None
         self._closing_when_idle = False
+        self._narrow = False
+        self._wide_sizes = None
 
         if jobs is None:
             jobs = JobModel(self)
@@ -126,8 +136,20 @@ class MainWindow(QMainWindow):
         self._details_timer.setInterval(_DETAILS_MS)
         self._details_timer.timeout.connect(self._update_details)
         self._proxy.dataChanged.connect(self._update_details_soon)
+        # The same details for a narrow window: a sheet that slides up from the bottom
+        self._sheet_details = DetailsPane(compact=True)
+        self._sheet = Sheet(self._sheet_details)
+        # The sheet takes the list's lower part: what is selected stays in view.
+        # A moment later, once the list has its new height
+        self._sheet.settled.connect(lambda: QTimer.singleShot(0, self._view.show_current))
 
-        splitter = QSplitter()
+        self._path_bar = PathBar()
+        self._path_bar.location_chosen.connect(self.navigate)
+        self._path_bar.text_entered.connect(self._on_path_entered)
+        self._create_actions()
+        self._sheet_details.close_requested.connect(lambda: self._show_details.setChecked(False))
+
+        splitter = self._splitter = QSplitter()
         splitter.addWidget(self._sidebar)
         splitter.addWidget(self._view)
         splitter.addWidget(self._details)
@@ -135,11 +157,23 @@ class MainWindow(QMainWindow):
         splitter.setSizes([style.px(200), style.px(620), style.px(250)])
         splitter.setHandleWidth(style.px(8))
         splitter.setContentsMargins(style.px(8), 0, style.px(8), style.px(4))
+        # Only in a narrow window, and only with something selected to act on
+        self._action_bar = self._group(
+            self._copy, self._rename, self._trash, self._show_details, self._more
+        )
+        bar_row = QHBoxLayout()
+        bar_row.setContentsMargins(0, 0, 0, style.px(4))
+        bar_row.addStretch(1)
+        bar_row.addWidget(self._action_bar)
+        bar_row.addStretch(1)
+        self._action_bar.hide()
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(splitter, 1)
+        layout.addLayout(bar_row)
+        layout.addWidget(self._sheet)
         layout.addWidget(self._panel)
         self.setCentralWidget(central)
 
@@ -152,10 +186,6 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self._job_status)
         self.statusBar().setSizeGripEnabled(False)
 
-        self._path_bar = PathBar()
-        self._path_bar.location_chosen.connect(self.navigate)
-        self._path_bar.text_entered.connect(self._on_path_entered)
-        self._create_actions()
         QApplication.clipboard().dataChanged.connect(self._update_state)
 
         for signal in (
@@ -257,6 +287,23 @@ class MainWindow(QMainWindow):
             "Properties", "document-properties", [QKeySequence("Alt+Return")], self.properties
         )
 
+        # For the narrow window. Neither has a key of its own
+        self._show_details = action("Details", "documentinfo", [], lambda: None)
+        self._show_details.setCheckable(True)
+        # Not `triggered`: the sheet's own button and Escape uncheck it too
+        self._show_details.toggled.connect(self._set_sheet_open)
+        self._close_details = action(
+            "Close details",
+            "window-close",
+            [QKeySequence("Escape")],
+            lambda: self._show_details.setChecked(False),
+        )
+        self._close_details.setEnabled(False)
+        self._more = action("More…", "view-more-horizontal", [], self._show_selection_menu)
+        self._folder_menu = action(
+            "Folder menu", "view-more-horizontal", [], self._show_folder_menu
+        )
+
         # One row of rounded groups: where you are, what you can do, how it is shown
         toolbar = QToolBar()
         toolbar.setMovable(False)
@@ -266,9 +313,21 @@ class MainWindow(QMainWindow):
         location.layout().addWidget(self._path_bar)
         location.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(location)
-        toolbar.addWidget(self._group(self._copy, self._rename, self._trash))
+        # In a narrow window the actions are in a bar at the bottom, and the folder
+        # menu has a button
+        self._toolbar_actions = toolbar.addWidget(
+            self._group(self._copy, self._rename, self._trash)
+        )
         toolbar.addWidget(self._group(self._details_mode, self._icons_mode))
+        self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
+        self._toolbar_menu.setVisible(False)
         self.addToolBar(toolbar)
+
+    def _button_for(self, action):
+        """The toolbar or action bar button of an action."""
+        return next(
+            button for button in self.findChildren(QToolButton) if button.defaultAction() is action
+        )
 
     def _group(self, *actions):
         """A rounded group for the toolbar, holding an icon button per action."""
@@ -429,7 +488,11 @@ class MainWindow(QMainWindow):
                 text += f" · {infos[0].display_name} selected"
             elif selected:
                 text += f" · {selected} selected"
+            if self._narrow and selected == 1 and infos[0].mode is not None:
+                # Short, and with what the narrow list has no column to spare for
+                text = f"{infos[0].display_name} · {mode_text(infos[0].mode)}"
         self._count_label.setText(text)
+        self._update_narrow_parts(selected)
         self._update_details(infos)
 
     def _update_details_soon(self, *_args):
@@ -442,7 +505,64 @@ class MainWindow(QMainWindow):
         if infos is None:
             infos = self._view.selected_infos()
         count = None if self._model.loading or self._error else self._proxy.rowCount()
-        self._details.show_items(self._location, infos, count)
+        if not self._narrow:
+            self._details.show_items(self._location, infos, count)
+        elif self._sheet.is_open:
+            self._sheet_details.show_items(self._location, infos, count)
+
+    # The narrow layout
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._set_narrow(self.width() < style.px(NARROW_BELOW))
+
+    @property
+    def is_narrow(self):
+        return self._narrow
+
+    def _set_narrow(self, narrow):
+        if narrow == self._narrow:
+            return
+        self._narrow = narrow
+        if narrow:
+            self._wide_sizes = self._splitter.sizes()
+        else:
+            self._show_details.setChecked(False)
+        self._details.setVisible(not narrow)
+        self._sidebar.set_rail(narrow)
+        self._path_bar.set_short(narrow)
+        self._view.set_compact(narrow)
+        self._job_status.set_compact(narrow)
+        self._button_for(self._forward).setVisible(not narrow)
+        self._toolbar_actions.setVisible(not narrow)
+        self._toolbar_menu.setVisible(narrow)
+        if narrow:
+            # All the width the rail leaves is the list's
+            rail = self._sidebar.maximumWidth()
+            self._splitter.setSizes([rail, max(1, self._splitter.width() - rail), 0])
+        elif self._wide_sizes:
+            self._splitter.setSizes(self._wide_sizes)
+        self._update_state()
+
+    def _update_narrow_parts(self, selected):
+        # The bar acts on the selection, and makes way for the sheet
+        self._action_bar.setVisible(self._narrow and selected > 0 and not self._sheet.is_open)
+
+    def _set_sheet_open(self, open_):
+        self._sheet.set_open(open_ and self._narrow, animate=self.isVisible())
+        self._close_details.setEnabled(self._sheet.is_open)
+        self._update_state()
+
+    def _show_folder_menu(self):
+        button = self._button_for(self._folder_menu)
+        self._on_context_menu(None, button.mapToGlobal(button.rect().bottomLeft()))
+
+    def _show_selection_menu(self):
+        infos = self._view.selected_infos()
+        if infos:
+            button = self._button_for(self._more)
+            # The bar is at the bottom of the window: the menu opens upwards
+            self._on_context_menu(infos[0], button.mapToGlobal(button.rect().topLeft()), True)
 
     # Items
 
@@ -469,7 +589,15 @@ class MainWindow(QMainWindow):
     def _show_error(self, message):
         self.statusBar().showMessage(message, _MESSAGE_MS)
 
-    def _on_context_menu(self, info, position):
+    def _on_context_menu(self, info, position, above=False):
+        """The menu of an entry, or of the folder for None. `above` puts the menu's
+        bottom at `position` instead of its top."""
+        menu = self._menu_for(info)
+        if above:
+            position = QPoint(position.x(), position.y() - menu.sizeHint().height())
+        menu.exec(position)
+
+    def _menu_for(self, info):
         menu = menus.menu(self)
         if self._in_trash():
             if info is not None:
@@ -480,8 +608,7 @@ class MainWindow(QMainWindow):
                 menu.addActions([self._empty_trash, self._select_all])
                 menu.addSeparator()
                 self._add_sort_and_view(menu)
-            menu.exec(position)
-            return
+            return menu
         if info is None:
             # The folder's own menu
             menu.addActions([self._new_folder, self._paste, self._select_all])
@@ -491,8 +618,7 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
             self._add_open_in_manager(menu, self._location)
             menu.addAction(self._properties)
-            menu.exec(position)
-            return
+            return menu
         target = locations.child(self._location, info.name)
         folder = self._location
         menu.addAction(
@@ -521,7 +647,7 @@ class MainWindow(QMainWindow):
         menu.addActions([self._rename, self._trash, self._delete])
         menu.addSeparator()
         menu.addAction(self._properties)
-        menu.exec(position)
+        return menu
 
     def _add_open_in_manager(self, menu, folder):
         manager = desktop.file_manager()

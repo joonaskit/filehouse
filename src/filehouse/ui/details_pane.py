@@ -1,4 +1,6 @@
-"""The pane beside the list: what is selected, or the open folder when nothing is."""
+"""The pane beside the list: what is selected, or the open folder when nothing is.
+
+In a narrow window the same details are a sheet at the bottom: the compact form."""
 
 import getpass
 
@@ -7,15 +9,18 @@ from PySide6.QtGui import QFont, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from filehouse.core import locations
 from filehouse.core.errors import OperationError
+from filehouse.core.listing import mode_text
 from filehouse.integration import style
 from filehouse.qt_models import dates
 from filehouse.qt_models.details import Reading
@@ -23,6 +28,7 @@ from filehouse.qt_models.icons import icon_for_content_type
 from filehouse.qt_models.measure import Measurement
 
 _ICON = 64
+_COMPACT_ICON = 40
 _NAME_FONT_PX = 16
 # A longer name is cut in the middle. The whole of it is in the tooltip
 _NAME_LENGTH = 80
@@ -65,11 +71,15 @@ class _Dot(QWidget):
 
 class DetailsPane(QFrame):
     open_requested = Signal()  # the Open button, for the one item shown
+    close_requested = Signal()  # the close button of the compact form
 
-    def __init__(self, parent=None):
+    def __init__(self, compact=False, parent=None):
+        """`compact` is the form for a sheet: the icon beside the name, a button
+        to close it, and no Open button."""
         super().__init__(parent)
         self.setObjectName("card")
         self.setMinimumWidth(style.px(220))
+        self._compact = compact
         self._locale = QLocale()
         self._shown = None  # what show_items was last asked for
         self._reading = None
@@ -88,7 +98,8 @@ class DetailsPane(QFrame):
         strong = QFont(self.font())
         strong.setWeight(QFont.Weight.DemiBold)
         for label in (self.name, self.kind):
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if not compact:
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             label.setWordWrap(True)
             label.setTextFormat(Qt.TextFormat.PlainText)
             # Narrower than its text is fine: it wraps
@@ -146,18 +157,34 @@ class DetailsPane(QFrame):
         margin = style.px(16)
         layout.setContentsMargins(margin, margin, margin, margin)
         layout.setSpacing(style.px(12))
-        layout.addWidget(self._icon)
         names = QVBoxLayout()
         names.setSpacing(style.px(2))
         names.addWidget(self.name)
         names.addWidget(self.kind)
-        layout.addLayout(names)
+        if compact:
+            self.close_button = QToolButton()
+            self.close_button.setIcon(style.icon("window-close-symbolic", "window-close"))
+            self.close_button.setToolTip("Close")
+            self.close_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self.close_button.clicked.connect(self.close_requested)
+            header = QHBoxLayout()
+            header.setSpacing(style.px(12))
+            header.addWidget(self._icon)
+            header.addLayout(names, 1)
+            header.addWidget(self.close_button, 0, Qt.AlignmentFlag.AlignTop)
+            layout.addLayout(header)
+        else:
+            layout.addWidget(self._icon)
+            layout.addLayout(names)
         layout.addWidget(self._first_divider)
         layout.addLayout(rows)
         layout.addWidget(self._second_divider)
         layout.addWidget(self._permissions)
-        layout.addStretch(1)
-        layout.addWidget(self.open_button)
+        if compact:
+            self.open_button.setParent(self)
+        else:
+            layout.addStretch(1)
+            layout.addWidget(self.open_button)
         self._show_nothing()
 
     @staticmethod
@@ -232,7 +259,7 @@ class DetailsPane(QFrame):
         self._set_row("Owner", " · ".join(part for part in (owner, item.group) if part) or None)
         self._first_divider.show()
         self._set_mode(item.mode, item.is_dir)
-        self.open_button.setVisible(not self._is_folder)
+        self.open_button.setVisible(not self._is_folder and not self._compact)
         if item.is_dir and not self._is_folder:
             self._measure([target], inside_one=True)
 
@@ -289,7 +316,7 @@ class DetailsPane(QFrame):
     # The parts
 
     def _set_icon(self, content_type):
-        side = style.px(_ICON)
+        side = style.px(_COMPACT_ICON if self._compact else _ICON)
         self._icon.setPixmap(icon_for_content_type(content_type).pixmap(QSize(side, side)))
 
     def _set_name(self, name):
@@ -314,7 +341,9 @@ class DetailsPane(QFrame):
         self._second_divider.setVisible(mode is not None)
         if mode is None:
             return
-        self.mode.setText(f"{mode & 0o777:03o}")
+        octal = f"{mode & 0o777:03o}"
+        # The sheet has the room to spell it out as well
+        self.mode.setText(f"{mode_text(mode & 0o777)} · {octal}" if self._compact else octal)
         words = ("read", "write", "open" if is_dir else "run")
         self._can[2].setText(words[2].capitalize())
         for dots, who, shift in zip(self.dots, _WHO, (6, 3, 0), strict=True):

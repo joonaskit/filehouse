@@ -148,11 +148,12 @@ def test_status_names_a_single_selection_and_counts_several(qtbot, tree):
 
 
 def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
-    from PySide6.QtWidgets import QFrame, QToolButton
+    from PySide6.QtWidgets import QFrame, QToolBar, QToolButton
 
     window = open_window(qtbot, tree / "Downloads")
 
-    groups = [frame for frame in window.findChildren(QFrame) if frame.objectName() == "group"]
+    toolbar = window.findChild(QToolBar)
+    groups = [frame for frame in toolbar.findChildren(QFrame) if frame.objectName() == "group"]
     buttons = [
         [
             button.defaultAction().text()
@@ -168,6 +169,8 @@ def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
         [],
         ["Copy", "Rename…", "Move to trash"],
         ["Details", "Icons"],
+        # Only shown in a narrow window
+        ["Folder menu"],
     ]
     # The location sits in a group of its own
     assert window._path_bar.parent() is groups[1]

@@ -9,6 +9,7 @@ from filehouse.qt_models import job_model
 
 _PROGRESS_STEPS = 1000
 _BAR_WIDTH = 120
+_COMPACT_BAR_WIDTH = 64
 
 
 class JobStatus(QToolButton):
@@ -25,6 +26,7 @@ class JobStatus(QToolButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("Show the operations")
         self._jobs = jobs
+        self._compact = False
 
         self.title = QLabel()
         self.title.setTextFormat(Qt.TextFormat.PlainText)
@@ -52,6 +54,14 @@ class JobStatus(QToolButton):
     def minimumSizeHint(self):
         return self.sizeHint()
 
+    def set_compact(self, on):
+        """For a narrow window: one word for the job, and a shorter bar."""
+        if on == self._compact:
+            return
+        self._compact = on
+        self.bar.setFixedWidth(style.px(_COMPACT_BAR_WIDTH if on else _BAR_WIDTH))
+        self.refresh()
+
     def refresh(self, *_args):
         jobs = self._jobs.jobs
         active = [job for job in jobs if not job.state.is_final]
@@ -59,7 +69,8 @@ class JobStatus(QToolButton):
         self.setVisible(bool(jobs))
         colour = None
         if len(active) == 1:
-            text = job_model.short_heading(active[0])
+            job = active[0]
+            text = job_model.verb(job) if self._compact else job_model.short_heading(job)
         elif active:
             text = f"{len(active)} operations"
         elif failed:

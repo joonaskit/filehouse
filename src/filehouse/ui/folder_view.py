@@ -214,6 +214,20 @@ class FolderView(QWidget):
     def selection_model(self):
         return self._tree.selectionModel()
 
+    def set_compact(self, on):
+        """For a narrow window: the table without its Modified column."""
+        self._tree.setColumnHidden(MODIFIED, on)
+
+    def show_current(self):
+        """Scroll as little as it takes to have the current entry in view."""
+        current = self.selection_model().currentIndex()
+        if current.isValid():
+            self._items().scrollTo(current)
+
+    def scroll_position(self):
+        """How far down the list is scrolled, to compare before and after a change."""
+        return self._items().verticalScrollBar().value()
+
     def select_all(self):
         self._items().selectAll()
 
