@@ -131,6 +131,8 @@ filehouse/
 │       ├── path_bar.py          breadcrumbs, editable on click or Ctrl+L
 │       ├── folder_view.py       list and grid modes, delegates
 │       ├── operations_panel.py  in-app list of jobs, with cancel, retry and details
+│       ├── job_status.py        the running jobs as one line in the status bar
+│       ├── details_pane.py      what is selected, beside the list
 │       ├── clipboard.py         cut, copy and paste of files as `text/uri-list`
 │       ├── settings.py          what is remembered between runs
 │       └── dialogs/             questions (conflict, error, no trash, confirm delete) and the
@@ -218,7 +220,7 @@ This is the part that has to be right. Every user action that changes files beco
 
 `JobModel` holds all jobs from this process: one instance, made in `app.py` and given to every window. It is a `QObject` with signals (`job_added`, `job_changed`, `job_removed`, `question_asked`, `idle`), not an item model, because its observers are a panel of widgets and the island reporter. Worker threads report through queued signals; the model passes on every state change and otherwise at most about 10 updates per second per job. It also decides how long an ended job stays listed: finished and cancelled jobs for a few seconds, failed jobs until dismissed. Retry replaces the failed job with a new one for the failed items.
 
-The **operations panel** is a collapsible strip at the bottom of the window. It shows every job with its title, text, progress and Cancel, and for a failed job Retry, Details (every error) and Dismiss. Each window has a panel and they all show the same jobs. This panel is the primary progress display. The island mirrors it.
+The **status bar** shows the running jobs as one line (since step 6d), and the **operations panel** is a strip at the bottom of the window that opens from that line, or by itself when a job fails or asks something. The panel shows every job with its title, text, progress and Cancel, and for a failed job Retry, Details (every error) and Dismiss. Each window has both and they all show the same jobs. Together they are the primary progress display. The island mirrors it.
 
 **Questions.** One `Prompter` listens to `JobModel.question_asked` and shows one question at a time as a window-modal message box on the window that started the job, or on the active window when that one is gone. If the job is cancelled meanwhile the box closes; if the box's window is closed the question is asked again on another window. Closing a box without choosing cancels the job.
 
@@ -284,7 +286,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a, 6b and 6c are done.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is under way: steps 6a to 6d are done.
 
 ### Phase 0: skeleton and integration basics
 
@@ -452,6 +454,14 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 - Clicking it opens the existing operations panel, which stays the place for cancel, retry, details and for failures. A failed job or a waiting question opens the panel by itself.
 
 **Done when:** a copy shows in the status bar as in the picture, and nothing the panel does today is lost.
+
+**Done.** How it was built:
+
+- `ui/job_status.py` is a button at the right end of the status bar, hidden without jobs. The item count moved to the left end, where temporary messages take its place while they show.
+- **What the line says.** One job running: what it does without where to ("Copying 4 items"), a bar and the percentage. Several: "3 operations" and how far they are together, by bytes when all of them count bytes, otherwise the mean, with a job that is still being planned counted as not started. None running: "1 operation failed" in the danger colour if any did, otherwise how the last one ended ("Copied 4 items"), for as long as `JobModel` keeps it.
+- **Never 100 %.** While a job runs the line shows at most 99 %: all bytes written is not done, only the job's state says that (safety rule 1).
+- **The panel is closed until it is wanted.** Before this step it showed whenever there was a job. Now a click on the line opens and closes it, and its header closes it. It opens by itself when a job goes into `failed` or `waiting`, once per time it does: closed again by the user, it stays closed until something new needs them. When the last job is gone the panel is closed again for the next one.
+- Nothing the panel did is gone: cancel, retry, details and dismiss are where they were, one click further away for a job that runs without trouble.
 
 **6e. Narrow window.**
 

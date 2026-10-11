@@ -1,7 +1,8 @@
 """The strip at the bottom of a window that lists file operations.
 
 It shows what `JobModel` holds and nothing more: every window's panel, and the
-island, are views of the same jobs.
+island, are views of the same jobs. It is closed until it is asked for from the
+status bar, or until a job needs the user: a failure, or a question.
 """
 
 from PySide6.QtCore import QSize, Qt
@@ -107,23 +108,29 @@ class JobRow(QWidget):
         ErrorDetails(self.job, self.window()).open()
 
 
+# A job in one of these needs the user, so the panel opens by itself
+_NEEDS_THE_USER = (JobState.FAILED, JobState.WAITING)
+
+
 class OperationsPanel(QFrame):
-    """Hidden while there are no jobs. Click the header to fold the list away."""
+    """Shown when it is open and there are jobs. Click the header to close it."""
 
     def __init__(self, jobs, parent=None):
         super().__init__(parent)
         self.setObjectName("operations")
         self._jobs = jobs
         self._rows = {}
+        self._open = False
+        self._states = {}  # job id -> the state it was last seen in
 
         self._header = QToolButton()
         self._header.setObjectName("operationsHeader")
         self._header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._header.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._header.setCheckable(True)
-        self._header.setChecked(True)
+        self._header.setArrowType(Qt.ArrowType.DownArrow)
+        self._header.setToolTip("Hide the operations")
         self._header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._header.toggled.connect(self._on_toggled)
+        self._header.clicked.connect(lambda: self.set_open(False))
 
         self._list = QVBoxLayout()
         self._list.setContentsMargins(0, 0, 0, 0)
@@ -155,32 +162,54 @@ class OperationsPanel(QFrame):
     def row(self, job):
         return self._rows.get(job.id)
 
+    @property
+    def is_open(self):
+        return self._open
+
+    def set_open(self, open_):
+        """Show the list, or put it away. Without jobs there is nothing to show either way."""
+        self._open = open_
+        self._update()
+
+    def toggle(self):
+        self.set_open(not self._open)
+
     def _add(self, job):
         row = JobRow(job, self._jobs)
         self._rows[job.id] = row
         self._list.insertWidget(self._list.count() - 1, row)
+        self._notice(job)
         self._update()
 
     def _change(self, job):
         row = self._rows.get(job.id)
         if row is not None:
             row.refresh()
+            self._notice(job)
             self._update()
 
     def _remove(self, job):
         row = self._rows.pop(job.id, None)
+        self._states.pop(job.id, None)
         if row is not None:
             self._list.removeWidget(row)
             row.deleteLater()
             self._update()
 
-    def _on_toggled(self, expanded):
-        self._scroll.setVisible(expanded)
-        self._update()
+    def _notice(self, job):
+        """Open when a job starts to need the user. Once per time it does: a panel
+        the user has closed again stays closed."""
+        before = self._states.get(job.id)
+        self._states[job.id] = job.state
+        if job.state is not before and job.state in _NEEDS_THE_USER:
+            self._open = True
 
     def _update(self):
         rows = list(self._rows.values())
-        self.setVisible(bool(rows))
+        if not rows:
+            # The next job starts with the panel closed
+            self._open = False
+        self.setVisible(self._open and bool(rows))
         running = sum(not row.job.state.is_final for row in rows)
         failed = sum(row.job.state is JobState.FAILED for row in rows)
         if running:
@@ -192,6 +221,3 @@ class OperationsPanel(QFrame):
         self._header.setText(text)
         # As tall as its rows, up to a limit; more rows than that scroll
         self._scroll.setFixedHeight(min(self._holder.sizeHint().height(), style.px(_MAX_HEIGHT)))
-        self._header.setArrowType(
-            Qt.ArrowType.DownArrow if self._header.isChecked() else Qt.ArrowType.RightArrow
-        )

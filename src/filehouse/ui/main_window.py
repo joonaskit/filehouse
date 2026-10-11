@@ -38,6 +38,7 @@ from filehouse.ui.dialogs.name import NameDialog
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
 from filehouse.ui.folder_view import FolderView
+from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
 from filehouse.ui.path_bar import PathBar
 from filehouse.ui.sidebar import Sidebar
@@ -142,9 +143,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._panel)
         self.setCentralWidget(central)
 
-        # Item counts sit on the right; the left is for temporary messages
+        # Item counts on the left, where temporary messages take their place for a
+        # while; the running operations on the right, which open the panel
         self._count_label = QLabel()
-        self.statusBar().addPermanentWidget(self._count_label)
+        self.statusBar().addWidget(self._count_label, 1)
+        self._job_status = JobStatus(self._jobs)
+        self._job_status.clicked.connect(self._panel.toggle)
+        self.statusBar().addPermanentWidget(self._job_status)
         self.statusBar().setSizeGripEnabled(False)
 
         self._path_bar = PathBar()

@@ -184,8 +184,8 @@ def title(job):
     return job.summary if job.state.is_final else heading(job)
 
 
-def heading(job):
-    """What the job is doing, whatever state it is in: "Copying 3 items to Pictures"."""
+def short_heading(job):
+    """What the job is doing, without where to: "Copying 3 items". For where room is short."""
     count = len(job.sources)
     what = f"“{locations.basename(job.sources[0])}”" if count == 1 else f"{count} items"
     if job.kind is JobKind.TRASH:
@@ -194,8 +194,29 @@ def heading(job):
         return f"Restoring {what}"
     if job.kind is JobKind.DELETE:
         return f"Deleting {what}"
-    verb = "Copying" if job.kind is JobKind.COPY else "Moving"
-    return f"{verb} {what} to {locations.display_name(job.destination)}"
+    return f"{'Copying' if job.kind is JobKind.COPY else 'Moving'} {what}"
+
+
+def heading(job):
+    """What the job is doing, whatever state it is in: "Copying 3 items to Pictures"."""
+    text = short_heading(job)
+    if job.kind in (JobKind.COPY, JobKind.MOVE):
+        text += f" to {locations.display_name(job.destination)}"
+    return text
+
+
+def overall_fraction(jobs):
+    """How far several jobs are together, 0.0 to 1.0: by bytes when all of them count
+    bytes, otherwise the mean of how far each is. None while none of them knows.
+    As with one job, 1.0 does not mean done."""
+    known = [job.progress for job in jobs if job.progress.fraction is not None]
+    if not known:
+        return None
+    if len(known) == len(jobs) and all(progress.bytes_total for progress in known):
+        total = sum(progress.bytes_total for progress in known)
+        return min(1.0, sum(progress.bytes_done for progress in known) / total)
+    # A job that is still being planned counts as not started
+    return sum(progress.fraction for progress in known) / len(jobs)
 
 
 def error_text(job):

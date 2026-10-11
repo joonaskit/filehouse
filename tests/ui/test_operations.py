@@ -606,15 +606,112 @@ def test_every_window_shows_the_same_jobs(
     assert first._panel.row(job) is None
 
 
-def test_the_panel_folds(qtbot, tree, open_window, jobs, wait_final):
+def test_a_job_that_needs_nothing_runs_without_opening_the_panel(
+    qtbot, tree, open_window, jobs, wait_final
+):
+    window = open_window(tree / "dst")
+
+    job = wait_final(jobs, drop(window, [tree / "src" / "a.txt"]))
+
+    assert window._panel.row(job) is not None
+    assert not window._panel.isVisible()
+    # The status bar says how it ended
+    assert window._job_status.isVisible()
+    assert window._job_status.title.text() == "Moved 1 file"
+
+
+def test_the_status_bar_opens_the_panel_and_its_header_closes_it(
+    qtbot, tree, open_window, jobs, wait_final
+):
     window = open_window(tree / "dst")
     wait_final(jobs, drop(window, [tree / "src" / "a.txt"]))
-    assert window._panel._scroll.isVisible()
+
+    window._job_status.click()
+    assert window._panel.isVisible() and window._panel.is_open
 
     window._panel._header.click()
+    assert not window._panel.isVisible()
 
+    window._job_status.click()
+    window._job_status.click()
+    assert not window._panel.isVisible()
+
+
+def test_a_question_opens_the_panel_and_a_closed_panel_stays_closed(
+    qtbot, tree, open_window, jobs, wait_final, wait_question
+):
+    (tree / "dst" / "a.txt").write_text("old")
+    window = open_window(tree / "dst")
+    clipboard.put(uris(tree / "src" / "a.txt"), cut=False)
+
+    job = window.paste()
+    box = wait_question(jobs)
     assert window._panel.isVisible()
-    assert not window._panel._scroll.isVisible()
+    assert window._job_status.title.text() == "Copying “a.txt”"
+
+    # Closed by the user: more news about the same wait doesn't open it again
+    window._panel.set_open(False)
+    jobs.job_changed.emit(job)
+    assert not window._panel.isVisible()
+
+    box.button_for(Answer.SKIP).click()
+    wait_final(jobs, job)
+    assert not window._panel.isVisible()
+
+
+@needs_permissions
+def test_a_failure_opens_the_panel_in_every_window(
+    qtbot, tree, open_window, jobs, wait_final, wait_question
+):
+    (tree / "src" / "a.txt").chmod(0)
+    window = open_window(tree / "dst")
+    other = open_window(tree / "src")
+    clipboard.put(uris(tree / "src" / "a.txt"), cut=False)
+    job = window.paste()
+    wait_question(jobs).button_for(Answer.SKIP).click()
+    wait_final(jobs, job)
+    assert job.state is JobState.FAILED
+    assert window._panel.isVisible() and other._panel.isVisible()
+    assert window._job_status.title.text() == "1 operation failed"
+
+    # Closed by the user: more news about the same failure leaves it closed
+    for each in (window, other):
+        each._panel.set_open(False)
+    jobs.job_changed.emit(job)
+    assert not window._panel.isVisible()
+
+    # A retry that fails as well is a new failure
+    again = jobs.retry(job)
+    wait_question(jobs).button_for(Answer.SKIP).click()
+    wait_final(jobs, again)
+    assert window._panel.isVisible() and other._panel.isVisible()
+    assert window._job_status.title.text() == "1 operation failed"
+
+
+def test_the_panel_starts_closed_again_after_the_jobs_are_gone(
+    qtbot, tree, open_window, jobs, wait_final
+):
+    window = open_window(tree / "dst")
+    job = wait_final(jobs, drop(window, [tree / "src" / "a.txt"]))
+    window._job_status.click()
+    assert window._panel.isVisible()
+
+    jobs.dismiss(job)
+    assert not window._panel.isVisible() and not window._job_status.isVisible()
+
+    wait_final(jobs, drop(window, [tree / "src" / "b.txt"]))
+    assert not window._panel.isVisible()
+
+
+def test_item_counts_are_on_the_left_and_operations_on_the_right(
+    qtbot, tree, open_window, jobs, wait_final
+):
+    window = open_window(tree / "src")
+    wait_final(jobs, drop(window, [tree / "dst"], keys=Qt.KeyboardModifier.ControlModifier))
+    qtbot.waitUntil(lambda: window._job_status.isVisible(), timeout=TIMEOUT)
+
+    assert window._count_label.isVisible()
+    assert window._count_label.geometry().right() < window._job_status.geometry().left()
 
 
 # Closing

@@ -344,6 +344,8 @@ def _stylesheet():
 
         QStatusBar, QStatusBar QLabel {{ color: {colors["textSecondary"]}; }}
         QStatusBar QLabel {{ padding: 0 {px(8)}px; }}
+        QStatusBar::item {{ border: none; }}
+        #jobStatus {{ border-radius: {radius_within("small", 24)}px; padding: 0; }}
         #operations {{ border-top: 1px solid {divider}; }}
         #operationsHeader {{ border-radius: 0; padding: {px(6)}px {px(10)}px; }}
         QProgressBar {{
