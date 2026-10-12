@@ -293,12 +293,16 @@ For a job that ends while the process has no window to show it (the user chose "
 
 ### Preview (`ui/preview.py`, `qt_models/previews.py`)
 
-Space opens a window with a larger look at the selection, as Quick Look does on the Mac; Space or Escape close it, and "Preview" is in the menu of a file. It is a tool window of the main window that follows the selection: the arrow keys, Home, End and Page Up/Down pressed in it are passed on to the list, so the selection moves and the preview shows what is selected now. With nothing selected it closes.
+Space opens a window with a larger look at the selection, as Quick Look does on the Mac; Space closes it, and "Preview" is in the menu of a file. It is a tool window of the main window that follows the selection: the arrow keys, Home, End and Page Up/Down pressed in it are passed on to the list, so the selection moves and the preview shows what is selected now. With nothing selected it closes.
 
 - **Pictures** (what `QImageReader` reads, so PDFs too where Qt has its PDF plugin, which draws the first page) are loaded on a worker thread, upright, to at most 4096 pixels on the long side (scaled while decoding) and 256 MB of file. Shown as large as fits and never distorted; a small one is enlarged at most twice. The line under it says the type, the size, when it changed and the picture's size.
+- **Text** (`text/*`, and the types of the icons' "code" kind: JSON, XML, scripts and the like): the first 64 KB, in the fixed font, read-only, not wrapped. The encoding is told from the bytes: a byte order mark, then UTF-8, and a file that is not valid UTF-8 is read as Western European (cp1252), which any bytes are. A cut inside a character is not an error. A file with NUL bytes is not text whatever its name says, and shows "No preview for this type". A cut file says "the first 64 KiB" in the line under it. No syntax colouring. The text box never takes the keys, so the arrows move the list's selection as for a picture.
+- **Zoom and pan** for a picture: the wheel (around the pointer), + and −, and 0 to fit again; from a quarter to 16 times what fits. Drag to move a picture larger than the window; one that fits stays in the middle. Each new picture starts fitted. Fitted, it is scaled once with the smooth filter; zoomed, the painter scales it.
+- **Full screen:** Return or a double click toggle it. Escape leaves full screen first and closes the window the second time; Space closes it at once. A window closed in full screen opens as a window again.
 - **Anything else** shows the type's tile with "No preview for this type"; a folder says "Folder"; a selection of several says how many; a file that is not on this computer, or a picture that can't be read, says so.
 - **The same file is not loaded twice** (by path, date and size), because the window is asked again every time the list's state changes.
-- Opens at 80 % of the main window's size. Not done: text and other types, video, zooming, and a full-screen mode.
+- Opens at 80 % of the main window's size, and where the compositor puts it: not remembered (a tool window is placed by KWin on Wayland).
+- Not done (#24): video and audio, more than the first page of a PDF, showing several files one after another, a preview as a sheet in the narrow layout, and Space during the list's type-ahead search (it opens the preview).
 
 ### Thumbnails for any type (`qt_models/thumbnails.py`, #20)
 
