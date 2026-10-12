@@ -99,6 +99,7 @@ filehouse/
 │   ├── core/
 │   │   ├── locations.py         path/URI handling, places (home, Downloads, …), display names
 │   │   ├── listing.py           batched directory enumeration, file info records
+│   │   ├── search.py            finding files by name in the folders below one
 │   │   ├── history.py           back and forward history for one window
 │   │   ├── properties.py        details of a file, size of a folder all the way down
 │   │   ├── errors.py            OperationError: which file, which step, readable message
@@ -144,6 +145,7 @@ filehouse/
 │       ├── tab_bar.py           the row of tabs, a drop target
 │       ├── sidebar.py           places and mounted volumes
 │       ├── path_bar.py          breadcrumbs, editable on click or Ctrl+L
+│       ├── search_field.py      the search field of the toolbar
 │       ├── folder_view.py       list and grid modes, delegates
 │       ├── operations_panel.py  in-app list of jobs, with cancel, retry and details
 │       ├── job_status.py        the running jobs as one line in the status bar
@@ -233,6 +235,19 @@ This is the part that has to be right. Every user action that changes files beco
 **Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. The core starts no threads: `JobQueue` is given a `spawn` function by `qt_models/`. A job cancelled while it is still queued reports `cancelled` at once and is never started. This also keeps the app well inside the island's limit of 8 activities per sender.
 
 **Undo.** Not in v1. Trash is the safety net. A later "Undo" can cover rename, move (same device) and trash.
+
+### Search (`core/search.py`, `ui/search_field.py`, #18)
+
+A field in the toolbar, reached with Ctrl+F. What is typed is a list of words; a name matches when it has every one of them, in any order and any case ("2024 rep" finds "Report 2024.pdf"). Names only, no contents, and always by walking: no index is asked.
+
+- **The folder itself is filtered at once**, in the sort proxy (`DirectorySortProxy.set_filter_text`), on every key.
+- **The folders below are searched 250 ms after the last key**, on a worker thread (`search.search_below`), breadth first so what is near comes first, in batches like a listing. A link to a folder is found and never gone into, so the walk ends; a folder that cannot be read is passed over; `/proc`, `/sys`, `/dev` and `/run` are not searched. Hidden files and folders are searched only while they are shown, and a search follows the switch. It stops at 5000 results and says there are more. The trash and the recent files are only filtered.
+- **A result is an entry of the open folder whose name is its path below it** ("docs/old/report.txt", with the file's own name as its display name). `Gio.File.get_child` resolves such a name, so `locations.child(folder, info.name)` and `entry_location` give the real file, and opening, renaming, trashing, dragging out, thumbnails, the preview and the details all work on results with the code that was there. `FileInfo.folder` is the path part, empty for an entry of the folder itself. The model adds results to its rows (`DirectoryModel.set_search`) and takes them away when the text changes.
+- **Where a result is:** while a search is on, the Permissions column is "Folder" and shows the path below the open folder, sorts by it, and the tooltip of a row is the whole path; the status bar says "report.txt in docs/old" for a selected result and "3 found", with "searching…" while more may come. The menu of a result has "Show in folder".
+- **Nothing watches the folders below**, so results are a snapshot: the search runs again when the jobs of the process have ended and after a rename, and reloading keeps it.
+- **A search belongs to the folder it was typed in.** Each pane has its own, the field shows the active pane's, going to another folder ends it, and it is not a place in the history. Escape in the field ends it and returns to the list; Down or Return go to the list with the results kept.
+- **In a narrow window** a button in the toolbar opens the field, which takes the place of the path for as long as it has the keyboard or a text.
+- **Not done:** searching contents or by type, asking an index (Baloo), results as a place in the history, and a wider Folder column (it has the width of the Permissions column, and cuts long paths).
 
 ### Archives (`core/archives.py`, `core/operations/archive.py`, #19)
 
@@ -359,14 +374,17 @@ A modal dialog, opened with Ctrl+, or the gear button at the right end of the to
 
 Space opens a window with a larger look at the selection, as Quick Look does on the Mac; Space closes it, and "Preview" is in the menu of a file. It is a tool window of the main window that follows the selection: the arrow keys, Home, End and Page Up/Down pressed in it are passed on to the list, so the selection moves and the preview shows what is selected now. With nothing selected it closes.
 
-- **Pictures** (what `QImageReader` reads, so PDFs too where Qt has its PDF plugin, which draws the first page) are loaded on a worker thread, upright, to at most 4096 pixels on the long side (scaled while decoding) and 256 MB of file. Shown as large as fits and never distorted; a small one is enlarged at most twice. The line under it says the type, the size, when it changed and the picture's size.
+- **Pictures** (what `QImageReader` reads) are loaded on a worker thread, upright, to at most 4096 pixels on the long side (scaled while decoding) and 256 MB of file. Shown as large as fits and never distorted; a small one is enlarged at most twice. The line under it says the type, the size, when it changed and the picture's size.
 - **Text** (`text/*`, and the types of the icons' "code" kind: JSON, XML, scripts and the like): the first 64 KB, in the fixed font, read-only, not wrapped. The encoding is told from the bytes: a byte order mark, then UTF-8, and a file that is not valid UTF-8 is read as Western European (cp1252), which any bytes are. A cut inside a character is not an error. A file with NUL bytes is not text whatever its name says, and shows "No preview for this type". A cut file says "the first 64 KiB" in the line under it. No syntax colouring. The text box never takes the keys, so the arrows move the list's selection as for a picture.
+- **Documents** (PDF, where PySide6 has `QtPdf`): a page at a time, drawn on a worker thread with `QPdfDocument` at 1400 pixels high or more, on white, since a page is drawn without its paper. The line under it says "Page 2 of 14". Page Up and Page Down turn the pages and stop at the first and the last; for anything else those keys are still the list's. Each document opens at its first page, and a page zooms and moves like a picture. Without `QtPdf` a PDF is a picture of its first page, where Qt's image plugin has it.
 - **Zoom and pan** for a picture: the wheel (around the pointer), + and −, and 0 to fit again; from a quarter to 16 times what fits. Drag to move a picture larger than the window; one that fits stays in the middle. Each new picture starts fitted. Fitted, it is scaled once with the smooth filter; zoomed, the painter scales it.
 - **Full screen:** Return or a double click toggle it. Escape leaves full screen first and closes the window the second time; Space closes it at once. A window closed in full screen opens as a window again.
 - **Anything else** shows the type's tile with "No preview for this type"; a folder says "Folder"; a selection of several says how many; a file that is not on this computer, or a picture that can't be read, says so.
 - **The same file is not loaded twice** (by path, date and size), because the window is asked again every time the list's state changes.
 - Opens at 80 % of the main window's size, and where the compositor puts it: not remembered (a tool window is placed by KWin on Wayland).
-- Not done (#24): video and audio, more than the first page of a PDF, showing several files one after another, a preview as a sheet in the narrow layout, and Space during the list's type-ahead search (it opens the preview).
+- **In a narrow window it is a sheet** at the bottom, as the details are: a second `PreviewWindow` made with `sheet=True`, in a `Sheet` of 45 % of the window's height, with the file's name in the line under it (there is no title bar) and a close button. It takes no keys: the list keeps the keyboard, so the arrows move the selection as ever, and the window has actions for the sheet that are enabled only while it is open (Escape to close, and Page Up and Page Down while it shows a document of several pages). One sheet at a time: opening the preview closes the details and the other way round, and the action bar makes way for either. The wheel zooms and a drag moves, as in the window. A double click opens the same file in the preview window in full screen, and leaving the full screen closes that window again, the sheet being as it was. A preview that is open changes form when the window crosses the narrow width.
+- **Space while a name is typed.** Typing at the list jumps to a name (Qt's keyboard search), and Space is the preview's key. `FolderView` notes when a letter of a name was typed; for as long as Qt waits for the next letter (`keyboardInputInterval`, 400 ms), Space is a part of the name ("my file") and not the shortcut: the view accepts the shortcut override and hands the space to the search. After that Space opens the preview again.
+- Not done (#24): video and audio, and showing several files one after another.
 
 ### Thumbnails for any type (`qt_models/thumbnails.py`, #20)
 
@@ -639,7 +657,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 - **Afterwards** the status bar says what was changed. One failure is named in the status bar; several open the "What went wrong" list with every one of them by name. The list and the details pane update by themselves, through the folder's monitor.
 - **The grid stays a display** (open question 3, decided). Permissions are changed through the presets only.
 
-**Left for later:** search (the field in the toolbar). Compress was left for later here and is built since: see "Archives".
+**Left for later** here, and built since: search (see "Search") and Compress (see "Archives").
 
 **Open questions for this phase**
 
@@ -660,7 +678,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - A notification for a job that finished while the window was hidden (shell #24, point 7): #15, built; see below.
 - Undo for rename, move and trash: #16.
 - Remote locations through GVFS: #17.
-- Search: #18.
+- Search: #18, built; see "Search".
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19, built; see "Archives".
 - Video and PDF thumbnails: #20, built; see below.
 

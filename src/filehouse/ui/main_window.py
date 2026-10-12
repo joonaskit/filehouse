@@ -44,12 +44,16 @@ from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
 from filehouse.ui.pane import Pane
 from filehouse.ui.path_bar import PathBar
-from filehouse.ui.preview import PreviewWindow
+from filehouse.ui.preview import SHEET_SHARE, PreviewWindow
+from filehouse.ui.search_field import SearchField
 from filehouse.ui.sheet import Sheet
 from filehouse.ui.sidebar import Sidebar
 from filehouse.ui.tab import Tab
 from filehouse.ui.tab_bar import TabBar
 
+# Width of the search field in a wide window, unscaled
+_SEARCH_WIDTH = 220
+_NO_LIMIT = 16777215
 _MESSAGE_MS = 8000
 _DETAILS_MS = 200
 _COPIED_MS = 2500
@@ -186,6 +190,14 @@ class MainWindow(QMainWindow):
         self._sheet = Sheet(self._sheet_details)
         self._preview = PreviewWindow(self)
         self._preview.navigate.connect(self._on_preview_key)
+        self._preview.shown_changed.connect(lambda _shown: self._update_sheet_actions())
+        # The same preview for a narrow window: a sheet too, in place of the details'
+        self._sheet_preview = PreviewWindow(self, sheet=True)
+        self._preview_sheet = Sheet(self._sheet_preview)
+        self._sheet_preview.close_requested.connect(self._close_preview)
+        self._sheet_preview.full_screen_requested.connect(self._preview_full_screen)
+        self._sheet_preview.pages_changed.connect(lambda _count: self._update_sheet_actions())
+        self._preview_sheet.settled.connect(lambda: QTimer.singleShot(0, self._view.show_current))
         # The sheet takes the list's lower part: what is selected stays in view.
         # A moment later, once the list has its new height
         self._sheet.settled.connect(lambda: QTimer.singleShot(0, self._view.show_current))
@@ -193,6 +205,11 @@ class MainWindow(QMainWindow):
         self._path_bar = PathBar()
         self._path_bar.location_chosen.connect(self.navigate)
         self._path_bar.text_entered.connect(self._on_path_entered)
+        self._search_field = SearchField()
+        self._search_field.textChanged.connect(self._on_search_text)
+        self._search_field.cancelled.connect(self.end_search)
+        self._search_field.left.connect(self._to_the_list)
+        self._search_field.editingFinished.connect(self._sync_search_field)
         self._create_actions()
         self._sheet_details.close_requested.connect(lambda: self._show_details.setChecked(False))
 
@@ -242,6 +259,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter, 1)
         layout.addLayout(bar_row)
         layout.addWidget(self._sheet)
+        layout.addWidget(self._preview_sheet)
         layout.addWidget(self._panel)
         self.setCentralWidget(central)
 
@@ -432,6 +450,19 @@ class MainWindow(QMainWindow):
         self._preview_action = action(
             "Preview", "view-preview", [QKeySequence("Space")], self.toggle_preview
         )
+        # For the preview as a sheet, which takes no keys itself. Only while it is open,
+        # and the page keys only for a document: they are the list's otherwise
+        self._close_preview_sheet = action(
+            "Close preview", "window-close", [QKeySequence("Escape")], self._close_preview
+        )
+        self._next_page = action(
+            "Next page", "go-down", [QKeySequence("PgDown")], lambda: self._turn_page(1)
+        )
+        self._previous_page = action(
+            "Previous page", "go-up", [QKeySequence("PgUp")], lambda: self._turn_page(-1)
+        )
+        for item in (self._close_preview_sheet, self._next_page, self._previous_page):
+            item.setEnabled(False)
         # In the recent files the Delete key takes the entry off the list
         self._forget = action(
             "Remove from recent files",
@@ -455,6 +486,7 @@ class MainWindow(QMainWindow):
         self._folder_menu = action(
             "Folder menu", "view-more-horizontal", [], self._show_folder_menu
         )
+        self._search = action("Search", "edit-find", [QKeySequence("Ctrl+F")], self.start_search)
 
         # One row of rounded groups: where you are, what you can do, how it is shown
         toolbar = QToolBar()
@@ -464,14 +496,20 @@ class MainWindow(QMainWindow):
         location = self._group()
         location.layout().addWidget(self._path_bar)
         location.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(location)
+        self._toolbar_location = toolbar.addWidget(location)
+        # In a wide window the field is always there; in a narrow one it takes the
+        # place of the path while it is in use, and a button opens it
+        self._search_group = self._group()
+        self._search_group.layout().addWidget(self._search_field)
+        self._search_group.setFixedWidth(style.px(_SEARCH_WIDTH))
+        self._toolbar_search = toolbar.addWidget(self._search_group)
         # In a narrow window the actions are in a bar at the bottom, and the folder
         # menu has a button
         self._toolbar_actions = toolbar.addWidget(
             self._group(self._copy, self._move_to, self._rename, self._trash)
         )
         toolbar.addWidget(self._group(self._details_mode, self._icons_mode, self._split_view))
-        self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
+        self._toolbar_menu = toolbar.addWidget(self._group(self._search, self._folder_menu))
         self._toolbar_menu.setVisible(False)
         toolbar.addWidget(self._group(self._settings))
         self.addToolBar(toolbar)
@@ -489,6 +527,8 @@ class MainWindow(QMainWindow):
         self._sidebar.retheme()
         self._details.retheme()
         self._sheet_details.retheme()
+        self._sheet_preview.retheme()
+        self._search_field.retheme()
 
     def _button_for(self, action):
         """The toolbar or action bar button of an action."""
@@ -871,7 +911,16 @@ class MainWindow(QMainWindow):
             text = "Loading…"
         else:
             text = "1 item" if count == 1 else f"{count} items"
-            if selected == 1:
+            if self._pane.search_text.strip():
+                text = f"{count} found"
+                if self._pane.searching:
+                    text += " · searching…"
+                elif self._model.search_truncated:
+                    text += " · there are more: type more of the name"
+            if selected == 1 and infos[0].folder:
+                # A result of a search: where it is
+                text += f" · {infos[0].display_name} in {infos[0].folder}"
+            elif selected == 1:
                 text += f" · {infos[0].display_name} selected"
             elif selected:
                 text += f" · {selected} selected"
@@ -879,30 +928,84 @@ class MainWindow(QMainWindow):
                 # Short, and with what the narrow list has no column to spare for
                 text = f"{infos[0].display_name} · {mode_text(infos[0].mode)}"
         self._count_label.setText(text)
+        self._sync_search_field()
         self._update_narrow_parts(selected)
         self._update_details(infos)
         self._preview_action.setEnabled(selected > 0)
         self._update_preview(infos)
 
+    @property
+    def preview_is_open(self):
+        return self._preview.isVisible() or self._preview_sheet.is_open
+
     def toggle_preview(self):
-        """Open the preview of the selection, or close it."""
-        if self._preview.isVisible():
-            self._preview.hide()
+        """Open the preview of the selection, or close it. In a narrow window it is a
+        sheet at the bottom, otherwise a window of its own."""
+        if self.preview_is_open:
+            self._close_preview()
         elif self._view.selected_infos():
-            self._update_preview(self._view.selected_infos(), force=True)
+            self._open_preview()
+
+    def _open_preview(self):
+        infos = self._view.selected_infos()
+        if self._narrow:
+            # One sheet at a time
+            self._show_details.setChecked(False)
+            self._show_in(self._sheet_preview, infos)
+            self._set_preview_sheet_open(True)
+        else:
+            self._show_in(self._preview, infos)
             self._preview.open_over(self)
 
-    def _update_preview(self, infos, force=False):
+    def _close_preview(self):
+        self._preview.hide()
+        self._set_preview_sheet_open(False)
+
+    def _set_preview_sheet_open(self, open_):
+        if open_ == self._preview_sheet.is_open:
+            return
+        self._preview_sheet.set_open(open_, animate=self.isVisible())
+        self._update_sheet_actions()
+        self._update_narrow_parts(len(self._view.selected_infos()))
+
+    def _preview_full_screen(self):
+        """A double click on the sheet: the same file in the preview window, full screen.
+        Leaving the full screen closes that window, and the sheet is as it was."""
+        self._show_in(self._preview, self._view.selected_infos())
+        self._preview.open_over(self)
+        self._preview.showFullScreen()
+        self._preview.only_full_screen = True
+
+    def _update_sheet_actions(self):
+        """The keys of the preview as a sheet. Not while the preview window is up over
+        it, in full screen: that window has the same keys, and they are its own then."""
+        sheet = self._preview_sheet.is_open and not self._preview.isVisible()
+        self._close_preview_sheet.setEnabled(sheet)
+        pages = sheet and self._sheet_preview.page_count > 1
+        self._next_page.setEnabled(pages)
+        self._previous_page.setEnabled(pages)
+
+    def _turn_page(self, by):
+        self._sheet_preview.turn_page(by)
+
+    def _update_preview(self, infos):
         """Make an open preview show what is selected now."""
-        if not (self._preview.isVisible() or force):
+        if not self.preview_is_open:
             return
         if not infos:
-            self._preview.hide()
-        elif len(infos) > 1:
-            self._preview.show_message(f"{len(infos)} items selected")
+            self._close_preview()
+            return
+        if self._preview.isVisible():
+            self._show_in(self._preview, infos)
+        if self._preview_sheet.is_open:
+            self._show_in(self._sheet_preview, infos)
+
+    def _show_in(self, preview, infos):
+        if len(infos) != 1:
+            preview.show_message(f"{len(infos)} items selected")
         else:
             path = locations.local_path(locations.entry_location(self._location, infos[0]))
-            self._preview.show_item(infos[0], path)
+            preview.show_item(infos[0], path)
 
     def _on_preview_key(self, event):
         """An arrow key pressed in the preview moves the selection of the list."""
@@ -930,6 +1033,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._sheet_preview.set_sheet_height(round(self.height() * SHEET_SHARE))
         self._set_narrow(self.width() < style.px(NARROW_BELOW))
 
     @property
@@ -948,6 +1052,10 @@ class MainWindow(QMainWindow):
                     self._remove_other_pane(tab)
                     self._mark_active(tab)
         self._narrow = narrow
+        if self.preview_is_open and not self._preview.isFullScreen():
+            # The preview goes with the window: a sheet when narrow, a window when not
+            self._close_preview()
+            self._open_preview()
         if narrow:
             self._wide_sizes = self._splitter.sizes()
         else:
@@ -963,6 +1071,12 @@ class MainWindow(QMainWindow):
         self._button_for(self._forward).setVisible(not narrow)
         self._toolbar_actions.setVisible(not narrow)
         self._toolbar_menu.setVisible(narrow)
+        self._search_group.setMinimumWidth(0 if narrow else style.px(_SEARCH_WIDTH))
+        self._search_group.setMaximumWidth(_NO_LIMIT if narrow else style.px(_SEARCH_WIDTH))
+        self._search_group.setSizePolicy(
+            QSizePolicy.Policy.Expanding if narrow else QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Preferred,
+        )
         if narrow:
             # All the width the rail leaves is the list's
             rail = self._sidebar.maximumWidth()
@@ -973,12 +1087,51 @@ class MainWindow(QMainWindow):
 
     def _update_narrow_parts(self, selected):
         # The bar acts on the selection, and makes way for the sheet
-        self._action_bar.setVisible(self._narrow and selected > 0 and not self._sheet.is_open)
+        sheet_open = self._sheet.is_open or self._preview_sheet.is_open
+        self._action_bar.setVisible(self._narrow and selected > 0 and not sheet_open)
 
     def _set_sheet_open(self, open_):
+        if open_ and self._narrow:
+            # One sheet at a time
+            self._set_preview_sheet_open(False)
         self._sheet.set_open(open_ and self._narrow, animate=self.isVisible())
         self._close_details.setEnabled(self._sheet.is_open)
         self._update_state()
+
+    # Search
+
+    def start_search(self):
+        """Ctrl+F: to the search field, which a narrow window shows in place of the path."""
+        self._show_search_field(True)
+        self._search_field.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._search_field.selectAll()
+
+    def end_search(self):
+        """Escape in the field: the whole folder again, and back to the list."""
+        self._search_field.clear()
+        self._to_the_list()
+
+    def _to_the_list(self):
+        self._view.setFocus()
+        self._sync_search_field()
+
+    def _on_search_text(self, text):
+        self._pane.set_search(text)
+
+    def _sync_search_field(self):
+        """The field shows the search of the active pane, and in a narrow window it is
+        there only while it is in use."""
+        text = self._pane.search_text
+        if self._search_field.text() != text:
+            self._search_field.blockSignals(True)
+            self._search_field.setText(text)
+            self._search_field.blockSignals(False)
+        self._show_search_field(bool(text) or self._search_field.hasFocus())
+
+    def _show_search_field(self, in_use):
+        shown = in_use or not self._narrow
+        self._toolbar_search.setVisible(shown)
+        self._toolbar_location.setVisible(not (self._narrow and in_use))
 
     def _show_folder_menu(self):
         button = self._button_for(self._folder_menu)
@@ -1048,7 +1201,8 @@ class MainWindow(QMainWindow):
         self._recent.clear(self._pane.reload if self._in_recent() else None)
 
     def show_in_folder(self, info):
-        """Go to the folder a file of the recent files is in, with the file selected."""
+        """Go to the folder a file of the recent files, or a result of a search, is in,
+        with the file selected."""
         target = locations.entry_location(self._location, info)
         parent = target.get_parent()
         if parent is not None:
@@ -1236,6 +1390,13 @@ class MainWindow(QMainWindow):
             "Open",
             lambda: self._on_item_activated(info),
         )
+        if info.folder:
+            # A result of a search, from a folder below this one
+            menu.addAction(
+                style.icon("folder-open-symbolic", "folder-open"),
+                "Show in folder",
+                lambda: self.show_in_folder(info),
+            )
         if info.is_dir:
             folder = target
             menu.addAction(
@@ -1681,11 +1842,15 @@ class MainWindow(QMainWindow):
             except OperationError as error:
                 return f"Could not rename “{info.display_name}”: {error.message}."
             self._select_when_listed(folder, locations.basename(renamed))
+            # Nothing watches the folders below: a result that was renamed is found again
+            self._pane.search_again()
             return None
 
-        stem = info.name if info.is_dir else split_extension(info.name)[0]
+        # Not `info.name`: for a result of a search that is its path below this folder
+        name = locations.basename(target)
+        stem = name if info.is_dir else split_extension(name)[0]
         return self._ask_name(
-            "Rename", f"New name for “{info.display_name}”:", info.name, apply, len(stem)
+            "Rename", f"New name for “{info.display_name}”:", name, apply, len(stem)
         )
 
     def _ask_name(self, title, label, name, apply, select_to=None):
@@ -1806,6 +1971,8 @@ class MainWindow(QMainWindow):
     def _on_jobs_idle(self):
         for pane in self._all_panes():
             pane.model.recount()
+            # What a job moved or deleted below a folder is not told by any monitor
+            pane.search_again()
         # What a job copied or deleted shows in how full the drives are
         self._volumes.refresh_usage()
         if self._closing_when_idle:

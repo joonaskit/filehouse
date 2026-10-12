@@ -457,3 +457,258 @@ def test_closed_in_full_screen_it_opens_as_a_window_again(qtbot, window):
 
     assert window._preview.isVisible()
     assert not window._preview.isFullScreen()
+
+
+# The pages of a document
+
+needs_pdf = pytest.mark.skipif(previews.QPdfDocument is None, reason="Qt has no PDF module")
+
+
+def document(path, pages):
+    from PySide6.QtGui import QPageSize, QPainter, QPdfWriter
+
+    writer = QPdfWriter(str(path))
+    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A5))
+    painter = QPainter(writer)
+    for number in range(pages):
+        if number:
+            writer.newPage()
+        painter.drawText(200, 400, f"Page {number + 1}")
+    painter.end()
+
+
+def page_shown(qtbot, shown, number):
+    qtbot.waitUntil(
+        lambda: shown._canvas._image is not None and f"Page {number} of" in shown._details.text(),
+        timeout=TIMEOUT,
+    )
+
+
+@needs_pdf
+def test_a_document_opens_at_its_first_page_and_says_how_many(qtbot, window, folder):
+    document(folder / "paper.pdf", 3)
+    qtbot.waitUntil(lambda: window._model.row_for_name("paper.pdf") >= 0, timeout=TIMEOUT)
+    window._view.select_name("paper.pdf")
+
+    window.toggle_preview()
+    page_shown(qtbot, window._preview, 1)
+
+    assert window._preview.page_count == 3
+    assert window._preview._details.text().endswith("Page 1 of 3")
+    # On paper: a page is drawn without any
+    image = window._preview._canvas._image
+    assert image.pixelColor(2, 2) == QColor("white")
+    assert image.height() >= 1400
+
+
+@needs_pdf
+def test_the_page_keys_turn_the_pages_and_stop_at_the_ends(qtbot, window, folder):
+    document(folder / "paper.pdf", 2)
+    qtbot.waitUntil(lambda: window._model.row_for_name("paper.pdf") >= 0, timeout=TIMEOUT)
+    window._view.select_name("paper.pdf")
+    window.toggle_preview()
+    shown = window._preview
+    page_shown(qtbot, shown, 1)
+
+    qtbot.keyClick(shown, Qt.Key.Key_PageDown)
+    page_shown(qtbot, shown, 2)
+    qtbot.keyClick(shown, Qt.Key.Key_PageDown)
+    assert shown.page == 1
+    # The list behind did not move
+    assert [info.name for info in window._view.selected_infos()] == ["paper.pdf"]
+
+    qtbot.keyClick(shown, Qt.Key.Key_PageUp)
+    page_shown(qtbot, shown, 1)
+
+
+@needs_pdf
+def test_the_page_keys_are_the_lists_for_anything_but_a_document(qtbot, window):
+    window._view.select_name("a.png")
+    window.toggle_preview()
+    loaded(qtbot, window)
+    seen = []
+    window._preview.navigate.connect(lambda event: seen.append(event.key()))
+
+    qtbot.keyClick(window._preview, Qt.Key.Key_PageDown)
+
+    assert seen == [Qt.Key.Key_PageDown]
+    assert window._preview.page_count == 0
+
+
+@needs_pdf
+def test_each_document_starts_at_its_first_page(qtbot, window, folder):
+    document(folder / "one.pdf", 2)
+    document(folder / "two.pdf", 2)
+    qtbot.waitUntil(lambda: window._model.row_for_name("two.pdf") >= 0, timeout=TIMEOUT)
+    window._view.select_name("one.pdf")
+    window.toggle_preview()
+    page_shown(qtbot, window._preview, 1)
+    window._preview.turn_page(1)
+    page_shown(qtbot, window._preview, 2)
+
+    window._view.select_name("two.pdf")
+
+    qtbot.waitUntil(lambda: window._preview.windowTitle() == "two.pdf", timeout=TIMEOUT)
+    page_shown(qtbot, window._preview, 1)
+
+
+@needs_pdf
+def test_a_document_that_cannot_be_read_says_so(qtbot, window, folder):
+    (folder / "broken.pdf").write_bytes(b"%PDF-1.4\nnot really")
+    qtbot.waitUntil(lambda: window._model.row_for_name("broken.pdf") >= 0, timeout=TIMEOUT)
+    window._view.select_name("broken.pdf")
+
+    window.toggle_preview()
+
+    canvas = window._preview._canvas
+    qtbot.waitUntil(lambda: canvas._text == "Could not read it", timeout=TIMEOUT)
+    assert window._preview.page_count == 0
+
+
+# As a sheet in a narrow window
+
+NARROW, WIDE = 560, 1000
+
+
+def test_in_a_narrow_window_the_preview_is_a_sheet(qtbot, window):
+    window.resize(NARROW, 600)
+    window._view.select_name("a.png")
+
+    qtbot.keyClick(window._view, Qt.Key.Key_Space)
+
+    assert window._preview_sheet.is_open and not window._preview.isVisible()
+    assert window.preview_is_open
+    sheet = window._sheet_preview
+    qtbot.waitUntil(lambda: sheet._canvas._image is not None, timeout=TIMEOUT)
+    # No title bar: the line under the picture names the file
+    assert sheet._details.text().startswith("a.png")
+    qtbot.waitUntil(lambda: sheet.height() >= 600 * preview.SHEET_SHARE - 30, timeout=TIMEOUT)
+    assert not window._action_bar.isVisible()
+
+    qtbot.keyClick(window._view, Qt.Key.Key_Space)
+    assert not window.preview_is_open
+
+
+def test_the_sheet_follows_the_selection_and_closes_with_escape_or_its_button(qtbot, window):
+    window.resize(NARROW, 600)
+    window._view.select_name("a.png")
+    window.toggle_preview()
+
+    window._view.select_name("notes.txt")
+    sheet = window._sheet_preview
+    qtbot.waitUntil(lambda: sheet._text.toPlainText() == "hello\nworld\n", timeout=TIMEOUT)
+
+    assert window._close_preview_sheet.isEnabled()
+    window._close_preview_sheet.trigger()
+    assert not window.preview_is_open and not window._close_preview_sheet.isEnabled()
+
+    window.toggle_preview()
+    sheet.close_button.click()
+    assert not window.preview_is_open
+
+
+def test_one_sheet_at_a_time(qtbot, window):
+    window.resize(NARROW, 600)
+    window._view.select_name("a.png")
+    window._show_details.setChecked(True)
+    assert window._sheet.is_open
+
+    window.toggle_preview()
+    assert window._preview_sheet.is_open and not window._sheet.is_open
+    assert not window._show_details.isChecked()
+
+    window._show_details.setChecked(True)
+    assert window._sheet.is_open and not window._preview_sheet.is_open
+
+
+def test_the_preview_changes_form_with_the_window(qtbot, window):
+    window._view.select_name("a.png")
+    window.toggle_preview()
+    assert window._preview.isVisible()
+
+    window.resize(NARROW, 600)
+    assert window._preview_sheet.is_open and not window._preview.isVisible()
+
+    window.resize(WIDE, 600)
+    assert window._preview.isVisible() and not window._preview_sheet.is_open
+
+
+def test_a_double_click_on_the_sheet_asks_for_the_full_screen(qtbot, window):
+    window.resize(NARROW, 600)
+    window._view.select_name("a.png")
+    window.toggle_preview()
+
+    window._sheet_preview.full_screen_requested.emit()
+
+    assert window._preview.isVisible() and window._preview.isFullScreen()
+    assert window._preview.windowTitle() == "a.png"
+    # Leaving the full screen leaves the sheet as it was
+    qtbot.keyClick(window._preview, Qt.Key.Key_Escape)
+    assert not window._preview.isVisible()
+    assert window._preview_sheet.is_open
+
+
+@needs_pdf
+def test_in_the_sheet_the_page_keys_turn_pages_only_for_a_document(qtbot, window, folder):
+    document(folder / "paper.pdf", 2)
+    qtbot.waitUntil(lambda: window._model.row_for_name("paper.pdf") >= 0, timeout=TIMEOUT)
+    window.resize(NARROW, 600)
+    window._view.select_name("a.png")
+    window.toggle_preview()
+    assert not window._next_page.isEnabled()
+
+    window._view.select_name("paper.pdf")
+    page_shown(qtbot, window._sheet_preview, 1)
+    assert window._next_page.isEnabled() and window._previous_page.isEnabled()
+
+    window._next_page.trigger()
+    page_shown(qtbot, window._sheet_preview, 2)
+
+    window.toggle_preview()
+    assert not window._next_page.isEnabled()
+
+
+# Space while a name is being typed at the list
+
+
+def test_space_in_the_middle_of_a_typed_name_is_part_of_the_name(qtbot, window, folder):
+    (folder / "my file.txt").write_text("mine")
+    (folder / "my other.txt").write_text("other")
+    (folder / "myzz.txt").write_text("zz")
+    qtbot.waitUntil(lambda: window._model.row_for_name("myzz.txt") >= 0, timeout=TIMEOUT)
+    window._view.select_name("a.png")
+    view = window._view.focusProxy()
+    view.setFocus()
+
+    qtbot.keyClicks(view, "my")
+    assert window._view.is_searching()
+    qtbot.keyClick(view, Qt.Key.Key_Space)
+    qtbot.keyClicks(view, "o")
+
+    assert not window.preview_is_open
+    assert [info.name for info in window._view.selected_infos()] == ["my other.txt"]
+
+
+def test_space_opens_the_preview_again_once_the_typing_has_stopped(qtbot, window, monkeypatch):
+    window._view.select_name("a.png")
+    view = window._view.focusProxy()
+    view.setFocus()
+    qtbot.keyClicks(view, "b")
+    assert window._view.is_searching()
+
+    # Longer ago than Qt waits for the next letter of a name
+    window._view._typed_at -= 10
+    assert not window._view.is_searching()
+    qtbot.keyClick(view, Qt.Key.Key_Space)
+
+    assert window.preview_is_open
+
+
+def test_a_key_with_control_is_not_a_typed_name(qtbot, window):
+    window._view.select_name("a.png")
+    view = window._view.focusProxy()
+
+    qtbot.keyClick(view, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    qtbot.keyClick(view, Qt.Key.Key_Down)
+
+    assert not window._view.is_searching()

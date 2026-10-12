@@ -19,7 +19,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 
-from filehouse.core import locations
+from filehouse.core import locations, search
 from filehouse.core.listing import (
     ATTRIBUTES,
     ListingError,
@@ -53,6 +53,30 @@ class _ListingSignals(QObject):
     failed = Signal(int, str)
     counted = Signal(int, object)  # {file name: Count, or None for a folder that can't be read}
     counts_done = Signal(int)
+    found = Signal(int, object)  # a batch of the results of a search
+    search_finished = Signal(int, bool)  # whether it stopped at the limit
+
+
+class _SearchTask(QRunnable):
+    def __init__(self, generation, location, text, show_hidden, cancellable, signals):
+        super().__init__()
+        self._arguments = (generation, location, text, show_hidden, cancellable)
+        self._signals = signals
+
+    def run(self):
+        generation, location, text, show_hidden, cancellable = self._arguments
+        try:
+            truncated = search.search_below(
+                location,
+                text,
+                lambda batch: self._signals.found.emit(generation, batch),
+                cancellable,
+                show_hidden,
+            )
+            self._signals.search_finished.emit(generation, truncated)
+        except RuntimeError:
+            # The model was destroyed while this was still searching
+            pass
 
 
 class _ListingTask(QRunnable):
@@ -113,6 +137,8 @@ class _CountTask(QRunnable):
 class DirectoryModel(QAbstractTableModel):
     loaded = Signal()
     load_failed = Signal(str)
+    # A search below the folder started or ended
+    search_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -128,6 +154,14 @@ class DirectoryModel(QAbstractTableModel):
         self._removed_at = {}
         self._locale = QLocale()
         self.loading = False
+        # A search adds what it finds below the folder to the rows: entries whose name
+        # is a path ("sub/report.pdf"). The folder's own entries are filtered by the proxy
+        self._search_text = ""
+        self._search_hidden = False
+        self._search_generation = 0
+        self._search_cancellable = None
+        self.searching = False
+        self.search_truncated = False
         # Thumbnails by file name: (modified, QIcon or None). None means there is none to show
         self._thumbnails = {}
         self._thumbnails_on = False
@@ -149,6 +183,8 @@ class DirectoryModel(QAbstractTableModel):
         self._signals.failed.connect(self._on_failed)
         self._signals.counted.connect(self._on_counted)
         self._signals.counts_done.connect(self._on_counts_done)
+        self._signals.found.connect(self._on_found)
+        self._signals.search_finished.connect(self._on_search_finished)
 
     # Loading
 
@@ -177,6 +213,8 @@ class DirectoryModel(QAbstractTableModel):
         """Stop listing and monitoring. Safe to call more than once."""
         self._generation += 1
         self.loading = False
+        self._stop_search()
+        self._set_search_text("")
         self._count_timer.stop()
         self._to_count = set()
         self._counting = False
@@ -211,6 +249,86 @@ class DirectoryModel(QAbstractTableModel):
             return
         self.loading = False
         self.load_failed.emit(message)
+
+    # Searching below the folder
+
+    @property
+    def search_text(self):
+        return self._search_text
+
+    def set_search(self, text, show_hidden=False):
+        """Find what matches `text` in the folders below this one and add it to the
+        rows; an empty text takes the results away again. Also searches again when
+        given the text it has."""
+        self._stop_search()
+        self._remove_results()
+        self._set_search_text(text)
+        self._search_hidden = show_hidden
+        if self._location is None or not search.words(text):
+            self.search_changed.emit()
+            return
+        if search.can_search_below(self._location):
+            self._search_cancellable = Gio.Cancellable()
+            self.searching = True
+            QThreadPool.globalInstance().start(
+                _SearchTask(
+                    self._search_generation,
+                    self._location,
+                    text,
+                    show_hidden,
+                    self._search_cancellable,
+                    self._signals,
+                )
+            )
+        self.search_changed.emit()
+
+    def set_search_hidden(self, show_hidden):
+        """Hidden files are shown or not from now on: a search follows."""
+        if self._search_text and show_hidden != self._search_hidden:
+            self.set_search(self._search_text, show_hidden)
+
+    def _set_search_text(self, text):
+        was = bool(self._search_text)
+        self._search_text = text
+        if was != bool(text):
+            # The column that says where a result is
+            self.headerDataChanged.emit(Qt.Orientation.Horizontal, PERMISSIONS, PERMISSIONS)
+
+    def _stop_search(self):
+        self._search_generation += 1
+        self.searching = False
+        self.search_truncated = False
+        if self._search_cancellable is not None:
+            self._search_cancellable.cancel()
+            self._search_cancellable = None
+
+    def _remove_results(self):
+        rows = [row for row, info in enumerate(self._infos) if info.folder]
+        # From the end, a stretch of rows at a time
+        while rows:
+            last = rows.pop()
+            first = last
+            while rows and rows[-1] == first - 1:
+                first = rows.pop()
+            self.beginRemoveRows(QModelIndex(), first, last)
+            for info in self._infos[first : last + 1]:
+                self._names.discard(info.name)
+                self._counts.pop(info.name, None)
+                self._thumbnails.pop(info.name, None)
+            del self._infos[first : last + 1]
+            self.endRemoveRows()
+
+    def _on_found(self, generation, batch):
+        if generation == self._search_generation:
+            self._append([info for info in batch if info.name not in self._names])
+
+    def _on_search_finished(self, generation, truncated):
+        if generation != self._search_generation:
+            return
+        self.searching = False
+        self.search_truncated = truncated
+        self._search_cancellable = None
+        self.search_changed.emit()
 
     # Following changes
 
@@ -439,6 +557,9 @@ class DirectoryModel(QAbstractTableModel):
         if orientation != Qt.Orientation.Horizontal:
             return None
         if role == Qt.ItemDataRole.DisplayRole:
+            if section == PERMISSIONS and self._search_text:
+                # Results come from many folders: where each is matters more
+                return "Folder"
             return _HEADERS[section]
         if role == Qt.ItemDataRole.TextAlignmentRole and section == SIZE:
             return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
@@ -481,7 +602,7 @@ class DirectoryModel(QAbstractTableModel):
             if column == NAME:
                 return info.display_name
             if column == PERMISSIONS:
-                return mode_text(info.mode)
+                return info.folder if self._search_text else mode_text(info.mode)
             if column == MODIFIED:
                 return dates.friendly(info.shown_date, self._locale)
             if not info.is_dir:
@@ -497,8 +618,10 @@ class DirectoryModel(QAbstractTableModel):
             return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         if role == Qt.ItemDataRole.ForegroundRole and column != NAME:
             return style.color("textSecondary")
-        if role == Qt.ItemDataRole.FontRole and column == PERMISSIONS:
+        if role == Qt.ItemDataRole.FontRole and column == PERMISSIONS and not self._search_text:
             return style.fixed_font()
+        if role == Qt.ItemDataRole.ToolTipRole and info.folder:
+            return locations.display_path(locations.entry_location(self._location, info))
         return None
 
 
@@ -508,10 +631,20 @@ class DirectorySortProxy(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._show_hidden = False
+        self._filter = []
 
     @property
     def show_hidden(self):
         return self._show_hidden
+
+    def set_filter_text(self, text):
+        """Show only the entries whose name has every word of `text`."""
+        wanted = search.words(text)
+        if wanted == self._filter:
+            return
+        self.beginFilterChange()
+        self._filter = wanted
+        self.endFilterChange()
 
     def set_show_hidden(self, show):
         if show == self._show_hidden:
@@ -520,9 +653,13 @@ class DirectorySortProxy(QSortFilterProxyModel):
         self._show_hidden = show
         self.endFilterChange()
         self.sourceModel().set_count_hidden(show)
+        self.sourceModel().set_search_hidden(show)
 
     def filterAcceptsRow(self, source_row, source_parent):
-        return self._show_hidden or not self.sourceModel().info(source_row).is_hidden
+        info = self.sourceModel().info(source_row)
+        if info.is_hidden and not self._show_hidden:
+            return False
+        return not self._filter or search.matches(self._filter, info.display_name)
 
     def lessThan(self, left, right):
         model = self.sourceModel()
@@ -542,6 +679,9 @@ class DirectorySortProxy(QSortFilterProxyModel):
                 return size_a < size_b
         if column == MODIFIED and a.shown_date != b.shown_date:
             return a.shown_date < b.shown_date
-        if column == PERMISSIONS and a.mode != b.mode:
+        if column == PERMISSIONS and model.search_text:
+            if a.folder != b.folder:
+                return natural_key(a.folder) < natural_key(b.folder)
+        elif column == PERMISSIONS and a.mode != b.mode:
             return (a.mode or 0) < (b.mode or 0)
         return a.sort_key < b.sort_key

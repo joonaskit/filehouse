@@ -158,8 +158,9 @@ def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
         [
             button.defaultAction().text()
             for button in group.findChildren(QToolButton)
-            # The breadcrumbs are buttons too, without an action
-            if button.defaultAction() is not None
+            # The breadcrumbs are buttons too, without an action, and the search field
+            # has buttons of its own, without a text
+            if button.defaultAction() is not None and button.defaultAction().text()
         ]
         for group in groups
     ]
@@ -167,10 +168,12 @@ def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
     assert buttons == [
         ["Back", "Forward", "Up"],
         [],
+        # The search field
+        [],
         ["Copy", "Move to…", "Rename…", "Move to trash"],
         ["Details", "Icons", "Split view"],
         # Only shown in a narrow window
-        ["Folder menu"],
+        ["Search", "Folder menu"],
         ["Settings"],
     ]
     # The location sits in a group of its own
