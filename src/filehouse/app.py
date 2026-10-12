@@ -13,9 +13,10 @@ from filehouse.core import locations
 from filehouse.integration import style, theme
 from filehouse.integration.island import IslandClient, IslandReporter
 from filehouse.integration.notifications import NotificationReporter, Notifier
+from filehouse.integration.recent import RecentFiles
 from filehouse.integration.theme_watcher import ThemeWatcher
 from filehouse.qt_models.job_model import JobModel
-from filehouse.ui import clipboard
+from filehouse.ui import clipboard, settings
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.main_window import MainWindow
 
@@ -64,6 +65,11 @@ def main(argv=None):
     def window_visible():
         return any(isValid(w) and w.isVisible() and not w.isMinimized() for w in windows)
 
+    # What is opened is told to the desktop's lists of recent files, unless the user
+    # chose not to, here or in Plasma's settings
+    recent = RecentFiles(settings.remember_opened)
+    recent.start()
+
     notifier = Notifier()
     NotificationReporter(jobs, notifier, window_visible, lambda: client.available, jobs)
     notifier.start()
@@ -71,7 +77,7 @@ def main(argv=None):
     app.aboutToQuit.connect(notifier.flush)
     for target in targets:
         window = MainWindow(
-            target.location, select=target.select, message=target.message, jobs=jobs
+            target.location, select=target.select, message=target.message, jobs=jobs, recent=recent
         )
         windows.append(window)
         window.destroyed.connect(lambda _obj=None, w=window: windows.remove(w))

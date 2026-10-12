@@ -96,8 +96,10 @@ def quit_app():
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, location, select=None, message=None, jobs=None):
-        """`jobs` is the process's JobModel. A window made without one gets its own."""
+    def __init__(self, location, select=None, message=None, jobs=None, recent=None):
+        """`jobs` is the process's JobModel. A window made without one gets its own.
+        `recent` records the files opened from the window for the desktop's lists of
+        recent files; without one nothing is recorded."""
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(QIcon.fromTheme("system-file-manager"))
@@ -112,6 +114,7 @@ class MainWindow(QMainWindow):
             jobs = JobModel(self)
             self._prompter = Prompter(jobs, self)
         self._jobs = jobs
+        self._recent = recent
         self._jobs.idle.connect(self._on_jobs_idle)
 
         # Tabs, each with a folder or two side by side. `_tab` is the shown one and
@@ -270,6 +273,16 @@ class MainWindow(QMainWindow):
         )
         self._hidden.setCheckable(True)
         self._hidden.setChecked(self._proxy.show_hidden)
+        # For the user who does not want the desktop to follow what they open. A setting
+        # of the app, not of a window, as the browsers' private mode is not either
+        self._private = action(
+            "Don't remember opened files",
+            "view-private",
+            [],
+            self._set_remember_opened,
+        )
+        self._private.setCheckable(True)
+        self._private.setChecked(not settings.remember_opened())
 
         # The same keys as Dolphin
         self._icons_mode = action(
@@ -900,7 +913,20 @@ class MainWindow(QMainWindow):
         elif self._in_trash():
             self._show_error(f"Restore “{info.display_name}” to open it.")
         else:
+            self._remember_opened(target, info.content_type)
             desktop.open_default(target, self._show_error)
+
+    def _open_with(self, app, target, content_type):
+        self._remember_opened(target, content_type)
+        desktop.open_with(app, target, self._show_error)
+
+    def _remember_opened(self, target, content_type):
+        """Tell the desktop's lists of recent files, unless the user would rather not."""
+        if self._recent is not None:
+            self._recent.add(target, content_type)
+
+    def _set_remember_opened(self, forget):
+        settings.set_remember_opened(not forget)
 
     def _open_selected(self):
         infos = self._view.selected_infos()
@@ -938,6 +964,7 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
             self._add_sort_and_view(menu)
             menu.addAction(self._hidden)
+            menu.addAction(self._private)
             menu.addSeparator()
             menu.addActions([self._copy_path, self._terminal])
             self._add_open_in_manager(menu, self._location)
@@ -967,7 +994,7 @@ class MainWindow(QMainWindow):
                     open_with.addAction(
                         QIcon.fromTheme(app.icon) if app.icon else QIcon(),
                         app.name,
-                        lambda app=app: desktop.open_with(app, target, self._show_error),
+                        lambda app=app: self._open_with(app, target, info.content_type),
                     )
         self._add_open_in_manager(menu, folder)
         menu.addSeparator()

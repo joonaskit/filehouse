@@ -128,6 +128,7 @@ filehouse/
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
 │   │   ├── theme_watcher.py     follows the theme file while the app runs
+│   │   ├── recent.py            tells the desktop's lists of recent files what was opened
 │   │   ├── notifications.py     a desktop notification for a job that ends with no window visible
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
@@ -273,6 +274,23 @@ Rules from the API spec that the client must follow:
 - **Errors from the island** are logged and never stop a job. `NotFound` means the activity is gone (dismissed or timed out): stop updating it. `LimitExceeded` means too many failed activities are still showing: dismiss the oldest failed one this app owns from the island (it stays in the app's own panel) and try once more. `RateLimited` means drop this update; the next one carries newer values anyway. A refused `Show`, and a refused final state, are tried again a few times, because nothing newer will follow them.
 - **All D-Bus calls are asynchronous** and made from the UI thread, so a slow or hung island never blocks the app.
 - **Crashes need no code.** If the app dies, the island turns its running activities into failures because the connection closed. That is why every job must hold its activity under the app's long-lived connection, not a short-lived one.
+
+### Recent files (`integration/recent.py`, #14)
+
+A file opened from the app (Enter, a double click, Open, Open with, the details pane's Open button) is told to the two lists the desktop has:
+
+- **The freedesktop list**, `$XDG_DATA_HOME/recently-used.xbel`, which GTK apps, the portals and file dialogs read: written with `GLib.BookmarkFile` on a thread of its own (one write at a time; each reads the list, adds the file with its type and this app, and writes it again atomically), kept to the newest 500, and left untouched if it exists and can't be read.
+- **Plasma's**, kept by KActivities, which Kickoff and Dolphin's Recent Files read: `RegisterResourceEvent` (accessed) and `RegisterResourceMimetype` on `org.kde.ActivityManager.Resources`, asynchronously and without starting the service. Checked on this system: the portal writes the first list, and Plasma's menus read the second, so both are needed. The shell's own "recent files" (the dock's downloads stack) does not read either yet.
+
+**Privacy.** Nothing is told when:
+
+- the user chose **"Don't remember opened files"** (the folder menu): a setting of the app, not of a window, remembered between runs, and the same switch in every window, as the browsers' private mode is not per window either. Thumbnails written to the shared cache are not covered yet;
+- **Plasma's own setting** says no (System Settings, Recent Files, `kactivitymanagerd-pluginsrc`): "Do not remember" (`what-to-remember=2`), this app on the excluded list, or "only for specific applications" with this app not on the list. The values were read off the KCM's own files, not tested by changing the system's setting;
+- the thing is a folder, a file that does not exist, a place off this computer, or in the trash. Only files.
+
+It is silent, and can't stop a file from opening. A window made without a recorder (`recent=None`, the tests) tells nobody.
+
+Not done: a settings page for the switch (#23 is the place for it), and the thumbnail cache in the private mode.
 
 ### Notifications (`integration/notifications.py`, #15)
 
@@ -590,7 +608,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 
 - Live theme updates (file watch on the theme directory): #13, built; see the theme section.
 - Custom title bar: a decision of its own, #9 (and #21 comment in the shell repo).
-- Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14.
+- Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14, built; see below.
 - A notification for a job that finished while the window was hidden (shell #24, point 7): #15, built; see below.
 - Undo for rename, move and trash: #16.
 - Remote locations through GVFS: #17.
