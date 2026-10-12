@@ -292,6 +292,14 @@ It is silent, and can't stop a file from opening. A window made without a record
 
 Not done: a settings page for the switch (#23 is the place for it), and the thumbnail cache in the private mode.
 
+**The Recent place.** The sidebar has "Recent" (before the trash) when GVFS has `recent:///`, which lists `recently-used.xbel`. It is read like any folder, and an entry is not a file but stands for one, so:
+
+- `FileInfo` has `target_uri` (`standard::target-uri`) and `used` (`recent::modified`, an *int64*: reading it as uint64 asserts), and `locations.entry_location(folder, info)` is the file an entry means; everything that acts on a selection (open, copy, copy path, preview, properties, the details pane, thumbnails, drags) goes through it. The list's own name for an entry is a hash.
+- The Modified column shows when the file was **used**, not when it changed, and a pane that enters Recent sorts by it, the latest first; leaving it brings back the sort that was chosen. (Folders still come first, as everywhere.) The type of an entry is guessed from its name, since the list gives none.
+- **It is for looking at.** Cut, paste, rename, move, move to the other pane, new folder and file, permissions, trash and delete are off, and nothing can be dropped into it (`Pane.read_only` is the trash and the recent files). The Delete key takes the entry **off the list** ("Remove from recent files", which edits `recently-used.xbel` by `RecentFiles.forget` and leaves the file alone), and the list is read again. Plasma's own history is not touched: its entries for the file stay, and it is not what this view shows.
+- The menu of an entry: Open, Open with, Show in folder, Preview, Copy, Copy path, Remove from recent files, Properties. Copying the files to the other pane works; moving them does not.
+- What the list holds is what the freedesktop list holds: what this app, the portals (file dialogs) and GTK apps wrote. What KDE apps tell only KActivities (Dolphin) is not in it, though it shows in Plasma's menus.
+
 ### Notifications (`integration/notifications.py`, #15)
 
 For a job that ends while the process has no window to show it (the user chose "Keep running" and closed the last one). `Notifier` calls `Notify` on `org.freedesktop.Notifications` asynchronously and is silent when there is no service; `NotificationReporter` observes `JobModel` and decides, holding no job logic. The island already shows jobs, and the shell's own rule is that activities are for work in progress and notifications for finished work that may have been missed, so the two are not both sent for the same thing:

@@ -35,6 +35,7 @@ _PLACE_COLOURS = {
     "folder-music": "orange",
     "folder-videos": "red",
     "user-trash": "red",
+    "document-open-recent": "cyan",
 }
 _FOLDER_COLOUR = "orange"
 _ROW_HEIGHT = 42

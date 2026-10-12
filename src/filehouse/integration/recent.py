@@ -21,7 +21,7 @@ import logging
 import os
 
 from gi.repository import Gio, GLib
-from PySide6.QtCore import QRunnable, QThreadPool
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 
 from filehouse import APP_ID
 
@@ -110,6 +110,32 @@ class _Write(QRunnable):
             bookmarks.remove_item(uri)
 
 
+class _Forget(QRunnable):
+    def __init__(self, uris, path, signals):
+        super().__init__()
+        self._arguments = (uris, path, signals)
+
+    def run(self):
+        uris, path, signals = self._arguments
+        bookmarks = GLib.BookmarkFile()
+        try:
+            bookmarks.load_from_file(path)
+            for uri in uris:
+                if bookmarks.has_item(uri):
+                    bookmarks.remove_item(uri)
+            bookmarks.to_file(path)
+        except GLib.Error as error:
+            log.debug("could not take files off the recent files: %s", error.message)
+        try:
+            signals.forgotten.emit()
+        except RuntimeError:
+            pass
+
+
+class _Signals(QObject):
+    forgotten = Signal()
+
+
 class RecentFiles:
     """Records a file as opened. Create it on the main thread and call `start()`.
 
@@ -131,6 +157,7 @@ class RecentFiles:
         # One write at a time: each reads the list, adds to it and writes it again
         self._writer = QThreadPool()
         self._writer.setMaxThreadCount(1)
+        self._signals = _Signals()
 
     def start(self):
         if self._connection is None:
@@ -172,6 +199,16 @@ class RecentFiles:
         self._writer.start(_Write(uri, content_type, self._app_id, self._path))
         self._tell_plasma(uri, content_type)
         return True
+
+    def forget(self, locations, done=None):
+        """Take files off the freedesktop list, which is the one the app shows. The files
+        themselves are not touched, and neither is Plasma's own history. `done()` is
+        called on this thread when it is written."""
+        if done is not None:
+            self._signals.forgotten.connect(done, Qt.ConnectionType.SingleShotConnection)
+        self._writer.start(
+            _Forget([location.get_uri() for location in locations], self._path, self._signals)
+        )
 
     def _tell_plasma(self, uri, content_type):
         if self._connection is None:

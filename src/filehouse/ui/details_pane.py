@@ -219,10 +219,10 @@ class DetailsPane(QFrame):
         self._shown = asked
         self._stop()
         if len(infos) > 1:
-            self._show_several([locations.child(folder, info.name) for info in infos])
+            self._show_several([locations.entry_location(folder, info) for info in infos])
             return
         self._is_folder = not infos
-        target = locations.child(folder, infos[0].name) if infos else folder
+        target = locations.entry_location(folder, infos[0]) if infos else folder
         # What is on show stays until the answer is in, so the pane doesn't blink
         self._reading = Reading(target, self)
         self._reading.done.connect(

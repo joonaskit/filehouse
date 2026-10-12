@@ -307,3 +307,48 @@ def test_without_a_bus_nothing_breaks(qtbot, document, list_path):
 
     assert files.add(location(document), "application/pdf")
     settle(qtbot, files)
+
+
+# Taking files off the list
+
+
+def test_files_are_taken_off_the_list_and_stay_on_disk(qtbot, tmp_path, document, list_path):
+    other = tmp_path / "notes.txt"
+    other.write_text("x")
+    files = make(list_path)
+    files.add(location(document), "application/pdf")
+    files.add(location(other), "text/plain")
+    settle(qtbot, files)
+    done = []
+
+    files.forget([location(document)], lambda: done.append(True))
+    qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT)
+
+    assert load(list_path).get_uris() == [location(other).get_uri()]
+    assert document.exists()
+
+
+def test_taking_off_what_is_not_there_is_fine(qtbot, tmp_path, document, list_path):
+    files = make(list_path)
+    files.add(location(document), "application/pdf")
+    settle(qtbot, files)
+    done = []
+
+    files.forget([location(tmp_path / "never-there.txt")], lambda: done.append(True))
+    qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT)
+
+    assert load(list_path).get_uris() == [location(document).get_uri()]
+
+
+def test_a_list_that_cannot_be_read_is_not_touched_by_taking_off(qtbot, document, list_path):
+    shutil.os.makedirs(shutil.os.path.dirname(list_path))
+    with open(list_path, "w") as f:
+        f.write("this is not xml")
+    files = make(list_path)
+    done = []
+
+    files.forget([location(document)], lambda: done.append(True))
+    qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT)
+
+    with open(list_path) as f:
+        assert f.read() == "this is not xml"

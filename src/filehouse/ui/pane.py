@@ -1,10 +1,10 @@
 """One folder in a window: its model, sort order, list, history and selection."""
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 
 from filehouse.core import locations
 from filehouse.core.history import History
-from filehouse.qt_models.directory_model import DirectoryModel, DirectorySortProxy
+from filehouse.qt_models.directory_model import MODIFIED, DirectoryModel, DirectorySortProxy
 from filehouse.ui.folder_view import FolderView
 
 
@@ -20,6 +20,7 @@ class Pane(QObject):
         self.location = None
         self.error = None
         self._pending_select = None
+        self._sort_before_recent = None
 
         self.model = DirectoryModel(self)
         self.proxy = DirectorySortProxy(self)
@@ -69,11 +70,24 @@ class Pane(QObject):
         self.show(self.location)
 
     def show(self, location, select=None):
+        self._sort_for(location)
         self.location = location
         self._pending_select = select
         self.error = None
         self.model.set_location(location)
         self.location_changed.emit(location)
+
+    def _sort_for(self, location):
+        """The recent files are shown the latest first, and the sort that was chosen
+        comes back when the pane leaves them."""
+        now = locations.in_recent(location)
+        before = self.location is not None and locations.in_recent(self.location)
+        if now and not before:
+            self._sort_before_recent = (self.view.sort_column(), self.view.sort_order())
+            self.view.sort(MODIFIED, Qt.SortOrder.DescendingOrder)
+        elif before and not now and self._sort_before_recent is not None:
+            self.view.sort(*self._sort_before_recent)
+            self._sort_before_recent = None
 
     @staticmethod
     def _name_within(location, folder):
@@ -119,6 +133,8 @@ class Pane(QObject):
             self.view.show_message("Only hidden files here. Press Ctrl+H to show them.")
         elif self.at_trash:
             self.view.show_message("The trash is empty")
+        elif self.in_recent:
+            self.view.show_message("No recent files")
         else:
             self.view.show_message("This folder is empty")
 
@@ -127,11 +143,22 @@ class Pane(QObject):
         return self.location is not None and locations.in_trash(self.location)
 
     @property
+    def read_only(self):
+        """The trash and the recent files are for looking at: nothing is made or changed in them."""
+        return self.in_trash or self.in_recent
+
+    @property
+    def in_recent(self):
+        return self.location is not None and locations.in_recent(self.location)
+
+    @property
     def at_trash(self):
         return self.location is not None and locations.is_trash(self.location)
 
     def selected_locations(self):
-        return [locations.child(self.location, info.name) for info in self.view.selected_infos()]
+        return [
+            locations.entry_location(self.location, info) for info in self.view.selected_infos()
+        ]
 
     def close(self):
         self.model.close()

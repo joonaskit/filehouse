@@ -13,7 +13,7 @@ Everyday browsing and file operations work, and operations show in the shell's i
 - Breadcrumb path bar, editable with a click or Ctrl+L; back, forward and up, with history per pane
 - Details view (name, permissions, modified, size) and an icons view with thumbnails; sort by name, modified or size; hidden files on request
 - Folders load in batches on a worker thread and follow changes made elsewhere
-- A sidebar with home, the special folders, the trash and the drives, with a usage bar per drive and eject
+- A sidebar with home, the special folders, **Recent** (the files used lately), the trash and the drives, with a usage bar per drive and eject
 - **Tabs** (Ctrl+T, or middle-click a folder) and a **split view** (F3) with two folders side by side; each tab has its own split. Drop files on a tab or on the other pane
 - A narrow layout below 800 pixels: the sidebar becomes a rail of icons, the actions a bar under the list, and the details a sheet
 
