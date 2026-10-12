@@ -115,6 +115,7 @@ filehouse/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
 │   │   ├── icons.py             icon tile per kind of file
 │   │   ├── dates.py             "Today, 10:42", "Yesterday", a weekday, a date
+│   │   ├── favourites.py        the favourite folders: one list for the process, followed when the file changes
 │   │   ├── previews.py          loads a picture for the preview window on a worker thread
 │   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
 │   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
@@ -128,6 +129,7 @@ filehouse/
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
 │   │   ├── theme_watcher.py     follows the theme file while the app runs
+│   │   ├── places.py            the places file Dolphin keeps (user-places.xbel), edited in place
 │   │   ├── recent.py            tells the desktop's lists of recent files what was opened
 │   │   ├── notifications.py     a desktop notification for a job that ends with no window visible
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
@@ -277,6 +279,19 @@ Rules from the API spec that the client must follow:
 - **All D-Bus calls are asynchronous** and made from the UI thread, so a slow or hung island never blocks the app.
 - **Crashes need no code.** If the app dies, the island turns its running activities into failures because the connection closed. That is why every job must hold its activity under the app's long-lived connection, not a short-lived one.
 
+### Favourites (`integration/places.py`, `qt_models/favourites.py`, `ui/sidebar.py`, #26)
+
+The user's favourite folders are a group in the sidebar, between Places and Devices. (The first version was a bar under the toolbar; the sidebar replaced it, with room for names, the narrow layout's rail, and one list to look at.) A click goes there, a middle click opens it in a tab, a menu changes it, and files dropped on one are moved or copied into it (a job, by the rules of any drop: `MainWindow._drop_into`). Files can be dropped on the other places too, and on the trash. A window made without a `Favourites` (the tests) has no such group.
+
+- **Groups fold.** Each heading of the sidebar (Places, Favourites, Devices) is a click away from folding its group shut (a ▾ or ▸ in front of the name); which are folded is remembered between runs, for every window. The rail has no headings: a line stands between the groups, and nothing is folded there, so the favourites are icons with their names as tooltips in the narrow layout.
+- **They are Dolphin's places.** The list is `$XDG_DATA_HOME/user-places.xbel`, shared with Dolphin and the file dialogs of KDE both ways: a place added here is in Dolphin's Places panel and the other way round, and the file is watched, so a change made there shows here a moment later. The favourites are the bookmarks that are not **system items** (Home, Desktop, the trash, the network, the recent files: this app has its own for those) and not **hidden**.
+- **The file is edited as XML, not with `GBookmarkFile`.** It holds KDE's own notes on every entry (`ID`, `isSystemItem`, `IsHidden`, the group states, and `<separator>` entries that keep the place of a drive); a reader that knows only bookmarks would drop them when writing and break Dolphin's list. `PlacesFile` parses the file with `ElementTree`, changes only what it means to, and writes it back with the header, the `<!DOCTYPE xbel>`, the namespaces and the permissions it had, under another name and moved into place. A file it cannot read is left as it is. The one difference from what KDE writes is the order of the namespace declarations. A new place is made as KDE makes one (an `ID` of the time and a number one above the highest) and goes after the last bookmark, before the separators.
+- **No file, no favourites.** If `user-places.xbel` is not there nothing is written: Dolphin makes it with the system items, and a file made here would be taken for a finished one. The empty group says "Not available yet" (its tooltip "Open Dolphin once"), and adding says the same.
+- **Adding:** Ctrl+D (also the menu of the folder and of a folder in the list) puts the open folder in, and takes it out when it is there; a folder dropped on the heading or on the hint of the group is added, a file is not. Not the trash and not the recent files. An empty group says "Drag a folder here".
+- **A favourite's menu:** Open, Open in new tab, Rename…, Move up and down, Remove from favourites.
+- **Reordering by dragging.** A favourite is picked up and dropped between two others; an accent line shows the gap while it is over the group, and a drop on the heading puts it first. Only the favourites can be picked up. What is dragged carries `application/x-filehouse-favourite` (its ID) and **no file or URL**, so dropping it on a place, in a list or in another app cannot move the folder it stands for, and the sidebar accepts nothing but its own marker for it. The drop is answered as a copy, not a move: a list that is dragged from takes a move to mean the dragged rows are to be removed, and it is the favourites that change (`Favourites.move_to`, which is `PlacesFile.reorder`: the bookmark moves among the user's, and the system items and separators stay where they were), after which the sidebar is filled again.
+- **Decided on the issue's questions:** the file is KDE's (shared with Dolphin); a sidebar group of its own, not merged into Places; no bar. Not done: a keyboard way to jump to one.
+
 ### Recent files (`integration/recent.py`, #14)
 
 A file opened from the app (Enter, a double click, Open, Open with, the details pane's Open button) is told to the two lists the desktop has:
@@ -357,6 +372,7 @@ Not done: `QtMultimedia` for video, and KDE's thumbnail plugins through KIO: wit
   - `danger` and `success` for failed and finished jobs.
 - **Live updates (#13).** `integration/theme_watcher.py` watches the theme's directory with `QFileSystemWatcher` (the shell replaces the file atomically, which a watch on the file alone does not survive), and the file too, for a change in place. Before the shell has ever run it watches the directory above, to see the directory come. A change is read 200 ms after the last event, and `style.apply(app, theme, live=True)` runs again.
   - **Applies at once:** colours (the scheme, accent, palette, layers) and the corner radii. The palette and the stylesheet are set again; the icons are drawn in colours, so what holds one (the actions, the tab close buttons, the sidebar, the details pane) makes it again when `style.themed.changed` is emitted. The file list asks the model for its icons each time it paints, and the model's icons are cached per `style.generation`.
+  - **The font is the shell's everywhere.** `style.apply` sets the app font and then, after the style sheet, the same font for the kinds of widget a platform theme gives a font of its own (Plasma's theme does, in points: the lists, the toolbar's buttons, the status bar, the tooltips, which were Noto Sans at 12 to 13 pixels beside the shell's Cantarell). After the style sheet because a new style makes Qt read the platform theme's fonts again. The sidebar also sets the app font on itself, so a heading read from `font()` has a size in pixels before and after the window is shown.
   - **Applies at the next start:** `scale.ui`, `scale.font` and the font families. Sizes and fonts are set in the widgets when they are made (`setFixedSize`, margins, row heights, `QFont`), so a live apply keeps the scales and fonts of the running theme; a window with half its parts at the new scale would look worse than the old scale. This is the answer to the issue's open question.
   - A theme file that is gone or cannot be read leaves the look as it is; the defaults are for starting without one. The two job titles painted in the failure colour (`job_status`, `operations_panel`) are set again with the next update of the job.
 - Window decorations stay server-side (KWin draws them). Matching the frame to the shell is tracked in shell issue #56.

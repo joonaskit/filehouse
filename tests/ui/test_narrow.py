@@ -320,10 +320,10 @@ def test_the_rail_shows_icons_with_names_as_tooltips(qtbot, tmp_path):
 
     sidebar.set_rail(False)
     assert [sidebar.item(row).text() for row in range(sidebar.count())] == [
-        "Places",
+        "▾ Places",
         "Home",
         "Docs",
-        "Devices",
+        "▾ Devices",
         "USB stick",
     ]
     assert sidebar.maximumWidth() > 1000

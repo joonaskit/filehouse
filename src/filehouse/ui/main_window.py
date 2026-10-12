@@ -118,10 +118,13 @@ def quit_app():
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, location, select=None, message=None, jobs=None, recent=None):
+    def __init__(
+        self, location, select=None, message=None, jobs=None, recent=None, favourites=None
+    ):
         """`jobs` is the process's JobModel. A window made without one gets its own.
         `recent` records the files opened from the window for the desktop's lists of
-        recent files; without one nothing is recorded."""
+        recent files; without one nothing is recorded. `favourites` is the process's list
+        of favourite folders, shown in the sidebar; without one there is no such group."""
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(QIcon.fromTheme("system-file-manager"))
@@ -137,6 +140,7 @@ class MainWindow(QMainWindow):
             self._prompter = Prompter(jobs, self)
         self._jobs = jobs
         self._recent = recent
+        self._favourites = favourites
         self._jobs.idle.connect(self._on_jobs_idle)
 
         # Tabs, each with a folder or two side by side. `_tab` is the shown one and
@@ -157,8 +161,12 @@ class MainWindow(QMainWindow):
         self._volumes = Volumes(self)
         self._volumes.removed.connect(self._on_volume_removed)
         self._volumes.failed.connect(self._show_error)
-        self._sidebar = Sidebar(locations.places(), self._volumes)
+        self._sidebar = Sidebar(locations.places(), self._volumes, self._favourites)
         self._sidebar.place_activated.connect(self.navigate)
+        self._sidebar.new_tab_requested.connect(lambda place: self.new_tab(place, activate=False))
+        self._sidebar.favourite_menu_requested.connect(self._show_favourite_menu)
+        self._sidebar.files_dropped.connect(self._on_dropped_on_place)
+        self._sidebar.folders_dropped.connect(self._add_dropped_folders)
         self._panel = OperationsPanel(self._jobs)
         self._details = DetailsPane()
         self._details.open_requested.connect(self._open_selected)
@@ -426,6 +434,10 @@ class MainWindow(QMainWindow):
         self._clear_recent = action(
             "Clear recent files…", "edit-clear-history", [], self.clear_recent
         )
+        # The folder open here, or the one a menu is for, in the bar under the toolbar
+        self._favourite = action(
+            "Add to favourites", "bookmark-new", [QKeySequence("Ctrl+D")], self.toggle_favourite
+        )
         self._more = action("More…", "view-more-horizontal", [], self._show_selection_menu)
         self._permissions = action("Permissions", "object-locked", [], self._show_permissions_menu)
         self._folder_menu = action(
@@ -450,6 +462,8 @@ class MainWindow(QMainWindow):
         self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
         self._toolbar_menu.setVisible(False)
         self.addToolBar(toolbar)
+        if self._favourites is not None:
+            self._favourites.changed.connect(self._update_favourite_action)
 
     def _retheme(self):
         """The theme changed while the window is open: icons are drawn in its colours."""
@@ -805,6 +819,7 @@ class MainWindow(QMainWindow):
         # In the recent files it takes the entry off the list, not the file away
         self._forget.setEnabled(selected > 0 and self._in_recent())
         self._clear_recent.setEnabled(self._in_recent() and self._model.rowCount() > 0)
+        self._update_favourite_action()
         self._rename.setEnabled(selected == 1 and not read_only)
         self._move_to.setEnabled(selected > 0 and not read_only)
         self._permissions.setEnabled(selected > 0 and not read_only)
@@ -1007,6 +1022,108 @@ class MainWindow(QMainWindow):
         if parent is not None:
             self.navigate(parent, select=locations.basename(target))
 
+    # Favourites
+
+    def _on_dropped_on_place(self, location, uris, modifiers, position):
+        """Files were dropped on a place or favourite of the sidebar: into it. The trash
+        takes them as it does anywhere."""
+        self._drop_into(location, uris, modifiers, position, trash_ok=locations.is_trash(location))
+
+    def _update_favourite_action(self):
+        location = self._location
+        usable = (
+            self._favourites is not None
+            and location is not None
+            and not locations.in_trash(location)
+            and not locations.in_recent(location)
+        )
+        self._favourite.setEnabled(usable)
+        if usable:
+            self._favourite.setText(self._favourite_text(location))
+
+    def _favourite_text(self, location):
+        found = self._favourites is not None and self._favourites.find(location)
+        return "Remove from favourites" if found else "Add to favourites"
+
+    def toggle_favourite(self, location=None):
+        """Put a folder in the favourites, or take it out when it is there. By default the
+        folder that is open. Whether it is in them now, None where nothing could be done."""
+        location = location or self._location
+        if (
+            self._favourites is None
+            or location is None
+            or locations.in_trash(location)
+            or locations.in_recent(location)
+        ):
+            return None
+        if not self._favourites.available:
+            self._show_error("Open Dolphin once: the favourites live in its list of places.")
+            return None
+        name = locations.display_name(location)
+        found = self._favourites.find(location)
+        if found is not None:
+            done = self._favourites.remove(found)
+            message = f"“{name}” taken out of the favourites"
+        else:
+            done = self._favourites.add(location)
+            message = f"“{name}” added to the favourites"
+        if not done:
+            self._show_error(f"Could not change the favourites: {name}.")
+            return None
+        self.statusBar().showMessage(message, _COPIED_MS)
+        return found is None
+
+    def _add_dropped_folders(self, uris):
+        """Folders dropped among the favourites become favourites. Files do not."""
+        for uri in uris:
+            location = locations.from_uri(uri)
+            if locations.is_folder(location) and self._favourites.find(location) is None:
+                self.toggle_favourite(location)
+
+    def _show_favourite_menu(self, favourite, position):
+        menu = menus.menu(self)
+        menu.addAction(
+            style.icon("document-open-symbolic", "document-open"),
+            "Open",
+            lambda: self.navigate(favourite.location),
+        )
+        menu.addAction(
+            style.icon("tab-new-symbolic", "tab-new"),
+            "Open in new tab",
+            lambda: self.new_tab(favourite.location, activate=False),
+        )
+        menu.addSeparator()
+        menu.addAction("Rename…", lambda: self.rename_favourite(favourite))
+        items = self._favourites.items
+        index = items.index(favourite) if favourite in items else -1
+        up = menu.addAction("Move up", lambda: self._favourites.move(favourite, -1))
+        up.setEnabled(index > 0)
+        down = menu.addAction("Move down", lambda: self._favourites.move(favourite, 1))
+        down.setEnabled(0 <= index < len(items) - 1)
+        menu.addSeparator()
+        menu.addAction(
+            style.icon("edit-delete-symbolic", "edit-delete", colour="danger"),
+            "Remove from favourites",
+            lambda: self._favourites.remove(favourite),
+        )
+        menu.exec(position)
+
+    def rename_favourite(self, favourite):
+        def apply(text):
+            text = text.strip()
+            if not text:
+                return "A favourite needs a name."
+            if not self._favourites.rename(favourite, text):
+                return "Could not change the favourites."
+            return None
+
+        return self._ask_name(
+            "Rename favourite",
+            f"New name for “{favourite.title}”:",
+            favourite.title,
+            apply,
+        )
+
     def _open_with(self, app, target, content_type):
         self._remember_opened(target, content_type)
         desktop.open_with(app, target, self._show_error)
@@ -1068,6 +1185,7 @@ class MainWindow(QMainWindow):
             menu.addAction(self._hidden)
             menu.addAction(self._private)
             menu.addSeparator()
+            menu.addAction(self._favourite)
             menu.addActions([self._copy_path, self._terminal])
             self._add_open_in_manager(menu, self._location)
             menu.addAction(self._properties)
@@ -1100,6 +1218,12 @@ class MainWindow(QMainWindow):
         menu.addActions([self._trash, self._delete])
         menu.addSeparator()
         menu.addAction(self._copy_path)
+        if info.is_dir and self._favourites is not None:
+            menu.addAction(
+                self._favourite.icon(),
+                self._favourite_text(target),
+                lambda: self.toggle_favourite(target),
+            )
         if info.is_dir and self._terminal_folder(folder) is not None:
             # In the folder the menu is for, not the one it is listed in
             menu.addAction(
@@ -1473,13 +1597,21 @@ class MainWindow(QMainWindow):
         target = pane.location
         if folder_info is not None:
             target = locations.child(target, folder_info.name)
+        # The trash itself takes what is dropped on it, and nothing inside it does
+        trash_ok = pane.at_trash and folder_info is None
+        return self._drop_into(target, uris, modifiers, position, trash_ok)
+
+    def _drop_into(self, target, uris, modifiers, position, trash_ok=False):
+        """Move or copy dropped files into a folder, by the keys held and the file systems."""
+        if locations.in_recent(target):
+            return None
         sources = [locations.from_uri(uri) for uri in uris]
         if any(locations.same(source, target) for source in sources):
             # A folder dropped on itself
             return None
         if locations.in_trash(target):
             # Dropped on the trash: that is where they go. Not into a trashed folder
-            if not pane.at_trash or folder_info is not None:
+            if not trash_ok:
                 return None
             sources = [source for source in sources if not locations.in_trash(source)]
             return self._start(JobKind.TRASH, sources) if sources else None

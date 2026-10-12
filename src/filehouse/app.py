@@ -17,6 +17,7 @@ from filehouse.integration.island import IslandClient, IslandReporter
 from filehouse.integration.notifications import NotificationReporter, Notifier
 from filehouse.integration.recent import RecentFiles
 from filehouse.integration.theme_watcher import ThemeWatcher
+from filehouse.qt_models.favourites import Favourites
 from filehouse.qt_models.job_model import JobModel
 from filehouse.ui import clipboard, settings
 from filehouse.ui.dialogs.prompter import Prompter
@@ -82,6 +83,8 @@ def main(argv=None):
     # chose not to, here or in Plasma's settings
     recent = RecentFiles(settings.remember_opened)
     recent.start()
+    # The folders the user keeps in the bar under the toolbar: Dolphin's list of places
+    favourites = Favourites(parent=app)
 
     notifier = Notifier()
     NotificationReporter(jobs, notifier, window_visible, lambda: client.available, jobs)
@@ -90,7 +93,12 @@ def main(argv=None):
     app.aboutToQuit.connect(notifier.flush)
     for target in targets:
         window = MainWindow(
-            target.location, select=target.select, message=target.message, jobs=jobs, recent=recent
+            target.location,
+            select=target.select,
+            message=target.message,
+            jobs=jobs,
+            recent=recent,
+            favourites=favourites,
         )
         windows.append(window)
         window.destroyed.connect(lambda _obj=None, w=window: windows.remove(w))
