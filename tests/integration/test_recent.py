@@ -352,3 +352,35 @@ def test_a_list_that_cannot_be_read_is_not_touched_by_taking_off(qtbot, document
 
     with open(list_path) as f:
         assert f.read() == "this is not xml"
+
+
+def test_the_list_can_be_emptied_whoever_wrote_what_is_on_it(qtbot, tmp_path, document, list_path):
+    other = GLib.BookmarkFile()
+    other.set_mime_type("file:///home/me/old.odt", "application/vnd.oasis.opendocument.text")
+    other.add_application("file:///home/me/old.odt", "libreoffice", "soffice %u")
+    shutil.os.makedirs(shutil.os.path.dirname(list_path))
+    other.to_file(list_path)
+    files = make(list_path)
+    files.add(location(document), "application/pdf")
+    settle(qtbot, files)
+    done = []
+
+    files.clear(lambda: done.append(True))
+    qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT)
+
+    assert load(list_path).get_uris() == []
+    assert document.exists()
+
+
+def test_a_list_that_cannot_be_read_is_not_cleared(qtbot, list_path):
+    shutil.os.makedirs(shutil.os.path.dirname(list_path))
+    with open(list_path, "w") as f:
+        f.write("this is not xml")
+    files = make(list_path)
+    done = []
+
+    files.clear(lambda: done.append(True))
+    qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT)
+
+    with open(list_path) as f:
+        assert f.read() == "this is not xml"

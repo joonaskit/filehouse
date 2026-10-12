@@ -12,6 +12,7 @@ from filehouse.core.operations import JobKind
 from filehouse.integration import desktop
 from filehouse.qt_models import directory_model
 from filehouse.ui import clipboard
+from filehouse.ui import main_window as main_window_module
 from filehouse.ui.main_window import MainWindow
 
 
@@ -23,6 +24,11 @@ class FakeRecent:
     def add(self, location, content_type=None):
         self.added.append(location.get_basename())
         return True
+
+    def clear(self, done=None):
+        self.cleared = getattr(self, "cleared", 0) + 1
+        if done is not None:
+            done()
 
     def forget(self, locations_, done=None):
         self.forgotten.append([location.get_basename() for location in locations_])
@@ -328,3 +334,64 @@ def test_a_listing_of_the_recent_files_is_read_into_entries():
     assert entry_.modified == 1_600_000_000
     assert entry_.used == 1_700_000_000
     assert entry_.shown_date == 1_700_000_000
+
+
+# Clearing the list
+
+
+@pytest.fixture
+def asked(monkeypatch):
+    """What the question about clearing was, and how it is answered."""
+    answers = {"clear": True, "asked": []}
+
+    def ask(_parent, count):
+        answers["asked"].append(count)
+        return answers["clear"]
+
+    monkeypatch.setattr(main_window_module, "ask_to_clear_recent", ask)
+    return answers
+
+
+def test_the_list_can_be_cleared_after_asking(qtbot, window, asked, places):
+    go_recent(qtbot, window)
+
+    assert window._clear_recent.isEnabled()
+    assert window.clear_recent()
+
+    assert asked["asked"] == [4]
+    assert window.recent.cleared == 1
+    # The files are the files' own business
+    assert (places / "new.txt").exists()
+
+
+def test_saying_no_clears_nothing(qtbot, window, asked):
+    go_recent(qtbot, window)
+    asked["clear"] = False
+
+    assert not window.clear_recent()
+
+    assert getattr(window.recent, "cleared", 0) == 0
+
+
+def test_there_is_nothing_to_clear_elsewhere_or_in_an_empty_list(qtbot, window, asked):
+    assert not window._clear_recent.isEnabled()
+    assert not window.clear_recent()
+
+    window.state["entries"] = []
+    window.navigate(locations.recent())
+    qtbot.waitUntil(lambda: not window._model.loading, timeout=TIMEOUT)
+    window._update_state()
+
+    assert not window._clear_recent.isEnabled()
+    assert not window.clear_recent()
+    assert asked["asked"] == []
+
+
+def test_it_is_in_the_menu_of_the_list_and_nowhere_else(qtbot, window):
+    go_recent(qtbot, window)
+
+    assert window._clear_recent in window._menu_for(None).actions()
+    assert window._clear_recent not in window._menu_for(window._model.info(0)).actions()
+    window.go_back()
+    qtbot.waitUntil(lambda: not window._model.loading, timeout=TIMEOUT)
+    assert window._clear_recent not in window._menu_for(None).actions()

@@ -120,7 +120,8 @@ class _Forget(QRunnable):
         bookmarks = GLib.BookmarkFile()
         try:
             bookmarks.load_from_file(path)
-            for uri in uris:
+            # None is all of them
+            for uri in bookmarks.get_uris() if uris is None else uris:
                 if bookmarks.has_item(uri):
                     bookmarks.remove_item(uri)
             bookmarks.to_file(path)
@@ -209,6 +210,14 @@ class RecentFiles:
         self._writer.start(
             _Forget([location.get_uri() for location in locations], self._path, self._signals)
         )
+
+    def clear(self, done=None):
+        """Empty the freedesktop list: every file on it, whichever app put it there. The
+        files themselves are not touched, and neither is Plasma's own history, which is
+        cleared in System Settings."""
+        if done is not None:
+            self._signals.forgotten.connect(done, Qt.ConnectionType.SingleShotConnection)
+        self._writer.start(_Forget(None, self._path, self._signals))
 
     def _tell_plasma(self, uri, content_type):
         if self._connection is None:

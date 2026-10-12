@@ -86,6 +86,28 @@ def ask_about_running_jobs(parent, count):
     return {keep: KEEP_RUNNING, cancel: CANCEL_ALL}.get(box.clickedButton(), STAY_OPEN)
 
 
+def ask_to_clear_recent(parent, count):
+    """Whether to empty the list of recent files. It is shared with other apps, so it asks."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("Clear the recent files?")
+    box.setText(
+        "Remove the one file from the list of recent files?"
+        if count == 1
+        else f"Remove all {count} files from the list of recent files?"
+    )
+    box.setInformativeText(
+        "The files themselves are not touched. Plasma's own history is cleared in "
+        "System Settings, under Recent Files."
+    )
+    clear = box.addButton("Clear", QMessageBox.ButtonRole.DestructiveRole)
+    cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(cancel)
+    box.setEscapeButton(cancel)
+    box.exec()
+    return box.clickedButton() is clear
+
+
 def pick_folder(parent, title, start):
     """Ask for a folder with the desktop's own dialog. Returns its path, or "" for none."""
     return QFileDialog.getExistingDirectory(parent, title, start)
@@ -401,6 +423,9 @@ class MainWindow(QMainWindow):
             self.remove_from_recent,
         )
         self._forget.setEnabled(False)
+        self._clear_recent = action(
+            "Clear recent files…", "edit-clear-history", [], self.clear_recent
+        )
         self._more = action("More…", "view-more-horizontal", [], self._show_selection_menu)
         self._permissions = action("Permissions", "object-locked", [], self._show_permissions_menu)
         self._folder_menu = action(
@@ -779,6 +804,7 @@ class MainWindow(QMainWindow):
             item.setEnabled(selected > 0 and (at_trash or not read_only))
         # In the recent files it takes the entry off the list, not the file away
         self._forget.setEnabled(selected > 0 and self._in_recent())
+        self._clear_recent.setEnabled(self._in_recent() and self._model.rowCount() > 0)
         self._rename.setEnabled(selected == 1 and not read_only)
         self._move_to.setEnabled(selected > 0 and not read_only)
         self._permissions.setEnabled(selected > 0 and not read_only)
@@ -964,6 +990,16 @@ class MainWindow(QMainWindow):
         self._recent.forget(selected, pane.reload)
         return selected
 
+    def clear_recent(self):
+        """Empty the list of recent files, after asking. Whether it was done."""
+        if not self._in_recent() or self._recent is None:
+            return False
+        count = self._model.rowCount()
+        if count == 0 or not ask_to_clear_recent(self, count):
+            return False
+        self._recent.clear(self._pane.reload)
+        return True
+
     def show_in_folder(self, info):
         """Go to the folder a file of the recent files is in, with the file selected."""
         target = locations.entry_location(self._location, info)
@@ -1082,6 +1118,8 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
             self._add_sort_and_view(menu)
             menu.addAction(self._private)
+            menu.addSeparator()
+            menu.addAction(self._clear_recent)
             return menu
         target = locations.entry_location(self._location, info)
         menu.addAction(
