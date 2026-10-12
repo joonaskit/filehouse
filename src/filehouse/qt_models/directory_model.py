@@ -19,6 +19,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 
+from filehouse.core import locations
 from filehouse.core.listing import (
     ATTRIBUTES,
     ListingError,
@@ -383,15 +384,16 @@ class DirectoryModel(QAbstractTableModel):
         known = self._thumbnails.get(info.name)
         if known is not None and known[0] == info.modified:
             return known[1]
-        path = self._location.get_path()
+        target = locations.entry_location(self._location, info)
+        path = locations.local_path(target)
         if path is None or info.is_dir:
             return None
         # Marked as "nothing to show" until the answer comes, so it is asked for once
         self._thumbnails[info.name] = (info.modified, None)
         self._thumbnailer.request(
             (self._generation, info.name, info.modified),
-            self._location.get_child(info.name).get_uri(),
-            f"{path}/{info.name}",
+            target.get_uri(),
+            path,
             info.modified,
             info.size,
             info.content_type,
@@ -463,7 +465,10 @@ class DirectoryModel(QAbstractTableModel):
 
     def uris(self, rows):
         """The URIs of the entries on these rows."""
-        return [self._location.get_child(self._infos[row].name).get_uri() for row in sorted(rows)]
+        return [
+            locations.entry_location(self._location, self._infos[row]).get_uri()
+            for row in sorted(rows)
+        ]
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
@@ -478,7 +483,7 @@ class DirectoryModel(QAbstractTableModel):
             if column == PERMISSIONS:
                 return mode_text(info.mode)
             if column == MODIFIED:
-                return dates.friendly(info.modified, self._locale)
+                return dates.friendly(info.shown_date, self._locale)
             if not info.is_dir:
                 return self._locale.formattedDataSize(info.size)
             count = self.item_count(info.name)
@@ -535,8 +540,8 @@ class DirectorySortProxy(QSortFilterProxyModel):
                 size_a, size_b = a.size, b.size
             if size_a != size_b:
                 return size_a < size_b
-        if column == MODIFIED and a.modified != b.modified:
-            return a.modified < b.modified
+        if column == MODIFIED and a.shown_date != b.shown_date:
+            return a.shown_date < b.shown_date
         if column == PERMISSIONS and a.mode != b.mode:
             return (a.mode or 0) < (b.mode or 0)
         return a.sort_key < b.sort_key

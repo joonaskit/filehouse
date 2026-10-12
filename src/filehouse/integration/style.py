@@ -372,6 +372,9 @@ def _stylesheet():
             padding: {px(8)}px {px(14)}px; border-radius: {medium}px; margin: 0 {px(2)}px;
         }}
         QMenu::item:selected {{ background: {hover}; color: {colors["textPrimary"]}; }}
+        /* What is switched on: the menu draws no tick of its own with this style */
+        QMenu::item:checked {{ background: {selected}; color: {colors["textPrimary"]}; }}
+        QMenu::item:checked:selected {{ background: {tint("accent", 0.34)}; }}
         QMenu::item:disabled {{ color: {colors["textTertiary"]}; }}
         QMenu::icon {{ padding-left: {px(10)}px; }}
         QMenu::separator {{ height: 1px; background: {divider}; margin: {px(6)}px {px(8)}px; }}

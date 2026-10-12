@@ -59,6 +59,10 @@ class Totals:
     unreadable: int = 0  # folders that could not be looked into, so the rest is a minimum
 
 
+def _is_symlink(info):
+    return info.has_attribute("standard::is-symlink") and info.get_is_symlink()
+
+
 def read(location):
     """The properties of one file, a link not followed. Raises OperationError."""
     try:
@@ -76,8 +80,9 @@ def read(location):
         kind=Gio.content_type_get_description(content_type) if content_type else "",
         content_type=content_type or "application/octet-stream",
         is_dir=info.get_file_type() == Gio.FileType.DIRECTORY,
-        link_target=info.get_symlink_target() if info.get_is_symlink() else None,
-        size=info.get_size(),
+        link_target=info.get_symlink_target() if _is_symlink(info) else None,
+        # A virtual folder, such as the recent files, has neither
+        size=info.get_size() if info.has_attribute("standard::size") else 0,
         modified=info.get_attribute_uint64("time::modified"),
         accessed=info.get_attribute_uint64("time::access"),
         created=info.get_attribute_uint64("time::created"),

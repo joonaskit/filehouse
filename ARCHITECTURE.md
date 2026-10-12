@@ -128,6 +128,7 @@ filehouse/
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
 │   │   ├── theme_watcher.py     follows the theme file while the app runs
+│   │   ├── recent.py            tells the desktop's lists of recent files what was opened
 │   │   ├── notifications.py     a desktop notification for a job that ends with no window visible
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
@@ -222,6 +223,8 @@ This is the part that has to be right. Every user action that changes files beco
 
 **Trash and delete.** Trash uses `Gio.File.trash`. On a file system without trash support (some removable drives) the job stops and asks whether to delete permanently instead; it never falls back silently. Permanent delete always shows a confirmation with the item count: the delete job itself asks (`ConfirmDelete`) before it plans or touches anything, so no caller can skip it. Delete removes files one by one and each folder only once it is empty, never recursively and never through a link.
 
+**Garbage collection is for the main thread.** Python's cyclic collector runs in whichever thread allocates enough, and collecting a Qt object's wrapper in a worker thread aborts the process (seen as intermittent crashes in the test suite, in a pooled thread, while a thumbnailer or a listing ran). `app.py` turns it off and collects every 5 seconds from a timer on the main thread; the tests do the same, collecting after each test. A new thread that makes Qt objects must still not leave them to be collected.
+
 **Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. The core starts no threads: `JobQueue` is given a `spawn` function by `qt_models/`. A job cancelled while it is still queued reports `cancelled` at once and is never started. This also keeps the app well inside the island's limit of 8 activities per sender.
 
 **Undo.** Not in v1. Trash is the safety net. A later "Undo" can cover rename, move (same device) and trash.
@@ -273,6 +276,32 @@ Rules from the API spec that the client must follow:
 - **Errors from the island** are logged and never stop a job. `NotFound` means the activity is gone (dismissed or timed out): stop updating it. `LimitExceeded` means too many failed activities are still showing: dismiss the oldest failed one this app owns from the island (it stays in the app's own panel) and try once more. `RateLimited` means drop this update; the next one carries newer values anyway. A refused `Show`, and a refused final state, are tried again a few times, because nothing newer will follow them.
 - **All D-Bus calls are asynchronous** and made from the UI thread, so a slow or hung island never blocks the app.
 - **Crashes need no code.** If the app dies, the island turns its running activities into failures because the connection closed. That is why every job must hold its activity under the app's long-lived connection, not a short-lived one.
+
+### Recent files (`integration/recent.py`, #14)
+
+A file opened from the app (Enter, a double click, Open, Open with, the details pane's Open button) is told to the two lists the desktop has:
+
+- **The freedesktop list**, `$XDG_DATA_HOME/recently-used.xbel`, which GTK apps, the portals and file dialogs read: written with `GLib.BookmarkFile` on a thread of its own (one write at a time; each reads the list, adds the file with its type and this app, and writes it again atomically), kept to the newest 500, and left untouched if it exists and can't be read.
+- **Plasma's**, kept by KActivities, which Kickoff and Dolphin's Recent Files read: `RegisterResourceEvent` (accessed) and `RegisterResourceMimetype` on `org.kde.ActivityManager.Resources`, asynchronously and without starting the service. Checked on this system: the portal writes the first list, and Plasma's menus read the second, so both are needed. The shell's own "recent files" (the dock's downloads stack) does not read either yet.
+
+**Privacy.** Nothing is told when:
+
+- the user chose **"Don't remember opened files"** (the folder menu): a setting of the app, not of a window, remembered between runs, and the same switch in every window (`settings.changes` tells the others), as the browsers' private mode is not per window either. Turning it on or off says so in the status bar, and while it is on a "Private" sign sits in the status bar, which ends it when clicked. Thumbnails written to the shared cache are not covered yet. **To remember:** this belongs in a settings page when there is one (#23);
+- **Plasma's own setting** says no (System Settings, Recent Files, `kactivitymanagerd-pluginsrc`): "Do not remember" (`what-to-remember=2`), this app on the excluded list, or "only for specific applications" with this app not on the list. The values were read off the KCM's own files, not tested by changing the system's setting;
+- the thing is a folder, a file that does not exist, a place off this computer, or in the trash. Only files.
+
+It is silent, and can't stop a file from opening. A window made without a recorder (`recent=None`, the tests) tells nobody.
+
+Not done: a settings page for the switch (#23 is the place for it), and the thumbnail cache in the private mode.
+
+**The Recent place.** The sidebar has "Recent" (before the trash) when GVFS has `recent:///`, which lists `recently-used.xbel`. It is read like any folder, and an entry is not a file but stands for one, so:
+
+- `FileInfo` has `target_uri` (`standard::target-uri`) and `used` (`recent::modified`, an *int64*: reading it as uint64 asserts), and `locations.entry_location(folder, info)` is the file an entry means; everything that acts on a selection (open, copy, copy path, preview, properties, the details pane, thumbnails, drags) goes through it. The list's own name for an entry is a hash.
+- The Modified column shows when the file was **used**, not when it changed, and a pane that enters Recent sorts by it, the latest first; leaving it brings back the sort that was chosen. (Folders still come first, as everywhere.) The type of an entry is guessed from its name, since the list gives none.
+- **It is for looking at.** Cut, paste, rename, move, move to the other pane, new folder and file, permissions, trash and delete are off, and nothing can be dropped into it (`Pane.read_only` is the trash and the recent files). The Delete key takes the entry **off the list** ("Remove from recent files", which edits `recently-used.xbel` by `RecentFiles.forget` and leaves the file alone), and the list is read again. Plasma's own history is not touched: its entries for the file stay, and it is not what this view shows.
+- **Clear recent files…** is in the menu of the list (not of an entry), after a question that says how many and that the files are not touched. It empties the freedesktop list (`RecentFiles.clear`), whichever app put an entry there, as GTK's own "Clear recent" does, and leaves an unreadable list as it is. **Plasma's history is not cleared**: `DeleteEarlierStats` on KActivities would wipe every app's, which is more than a menu item here says; the question points to System Settings, Recent Files, where it has its own buttons. A fuller "forget everything" belongs with the settings page (#23).
+- The menu of an entry: Open, Open with, Show in folder, Preview, Copy, Copy path, Remove from recent files, Properties. Copying the files to the other pane works; moving them does not.
+- What the list holds is what the freedesktop list holds: what this app, the portals (file dialogs) and GTK apps wrote. What KDE apps tell only KActivities (Dolphin) is not in it, though it shows in Plasma's menus.
 
 ### Notifications (`integration/notifications.py`, #15)
 
@@ -590,7 +619,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 
 - Live theme updates (file watch on the theme directory): #13, built; see the theme section.
 - Custom title bar: a decision of its own, #9 (and #21 comment in the shell repo).
-- Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14.
+- Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14, built; see below.
 - A notification for a job that finished while the window was hidden (shell #24, point 7): #15, built; see below.
 - Undo for rename, move and trash: #16.
 - Remote locations through GVFS: #17.

@@ -86,6 +86,28 @@ def ask_about_running_jobs(parent, count):
     return {keep: KEEP_RUNNING, cancel: CANCEL_ALL}.get(box.clickedButton(), STAY_OPEN)
 
 
+def ask_to_clear_recent(parent, count):
+    """Whether to empty the list of recent files. It is shared with other apps, so it asks."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("Clear the recent files?")
+    box.setText(
+        "Remove the one file from the list of recent files?"
+        if count == 1
+        else f"Remove all {count} files from the list of recent files?"
+    )
+    box.setInformativeText(
+        "The files themselves are not touched. Plasma's own history is cleared in "
+        "System Settings, under Recent Files."
+    )
+    clear = box.addButton("Clear", QMessageBox.ButtonRole.DestructiveRole)
+    cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(cancel)
+    box.setEscapeButton(cancel)
+    box.exec()
+    return box.clickedButton() is clear
+
+
 def pick_folder(parent, title, start):
     """Ask for a folder with the desktop's own dialog. Returns its path, or "" for none."""
     return QFileDialog.getExistingDirectory(parent, title, start)
@@ -96,8 +118,10 @@ def quit_app():
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, location, select=None, message=None, jobs=None):
-        """`jobs` is the process's JobModel. A window made without one gets its own."""
+    def __init__(self, location, select=None, message=None, jobs=None, recent=None):
+        """`jobs` is the process's JobModel. A window made without one gets its own.
+        `recent` records the files opened from the window for the desktop's lists of
+        recent files; without one nothing is recorded."""
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(QIcon.fromTheme("system-file-manager"))
@@ -112,6 +136,7 @@ class MainWindow(QMainWindow):
             jobs = JobModel(self)
             self._prompter = Prompter(jobs, self)
         self._jobs = jobs
+        self._recent = recent
         self._jobs.idle.connect(self._on_jobs_idle)
 
         # Tabs, each with a folder or two side by side. `_tab` is the shown one and
@@ -213,6 +238,20 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self._count_label, 1)
         self._job_status = JobStatus(self._jobs)
         self._job_status.clicked.connect(self._panel.toggle)
+        # A sign that nothing is remembered, as long as it is so: a click ends it
+        self._private_button = QToolButton()
+        self._private_button.setIcon(self._private.icon())
+        self._private_button.setText("Private")
+        self._private_button.clicked.connect(self._private.trigger)
+        self._private_button.setToolTip(
+            "Opened files are not remembered. Click to remember them again."
+        )
+        self._private_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._private_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._private_button.setIconSize(QSize(style.px(14), style.px(14)))
+        self._private_button.setVisible(not settings.remember_opened())
+        settings.changes.remember_opened_changed.connect(self._on_remember_opened_changed)
+        self.statusBar().addPermanentWidget(self._private_button)
         self.statusBar().addPermanentWidget(self._job_status)
         self.statusBar().setSizeGripEnabled(False)
 
@@ -270,6 +309,16 @@ class MainWindow(QMainWindow):
         )
         self._hidden.setCheckable(True)
         self._hidden.setChecked(self._proxy.show_hidden)
+        # For the user who does not want the desktop to follow what they open. A setting
+        # of the app, not of a window, as the browsers' private mode is not either
+        self._private = action(
+            "Don't remember opened files",
+            "view-private",
+            [],
+            self._set_remember_opened,
+        )
+        self._private.setCheckable(True)
+        self._private.setChecked(not settings.remember_opened())
 
         # The same keys as Dolphin
         self._icons_mode = action(
@@ -366,6 +415,17 @@ class MainWindow(QMainWindow):
         self._preview_action = action(
             "Preview", "view-preview", [QKeySequence("Space")], self.toggle_preview
         )
+        # In the recent files the Delete key takes the entry off the list
+        self._forget = action(
+            "Remove from recent files",
+            "edit-clear-history",
+            [QKeySequence("Delete")],
+            self.remove_from_recent,
+        )
+        self._forget.setEnabled(False)
+        self._clear_recent = action(
+            "Clear recent files…", "edit-clear-history", [], self.clear_recent
+        )
         self._more = action("More…", "view-more-horizontal", [], self._show_selection_menu)
         self._permissions = action("Permissions", "object-locked", [], self._show_permissions_menu)
         self._folder_menu = action(
@@ -395,6 +455,7 @@ class MainWindow(QMainWindow):
         """The theme changed while the window is open: icons are drawn in its colours."""
         for item, icon, colour in self._action_icons:
             item.setIcon(style.icon(icon + "-symbolic", icon, colour=colour))
+        self._private_button.setIcon(self._private.icon())
         for index in range(self._tab_bar.count()):
             button = self._tab_bar.tabButton(index, QTabBar.ButtonPosition.RightSide)
             button.setIcon(style.icon("window-close-symbolic", "window-close"))
@@ -604,7 +665,7 @@ class MainWindow(QMainWindow):
 
     def _open_in_new_tab(self, info):
         """A folder of the list, in a tab behind this one."""
-        self.new_tab(locations.child(self._location, info.name), activate=False)
+        self.new_tab(locations.entry_location(self._location, info), activate=False)
 
     def close_tab(self, index):
         if len(self._tabs) < 2 or not 0 <= index < len(self._tabs):
@@ -732,24 +793,33 @@ class MainWindow(QMainWindow):
         selected = len(infos)
         in_trash = self._in_trash()
         at_trash = self._at_trash()
+        # The trash and the recent files are for looking at, and for what is said below
+        read_only = self._read_only()
         self._copy.setEnabled(selected > 0)
         self._properties.setEnabled(True)
         # What is in the trash can be restored or deleted, and nothing else
-        self._cut.setEnabled(selected > 0 and not in_trash)
+        self._cut.setEnabled(selected > 0 and not read_only)
         # In the trash the Delete key deletes for good (and asks first, as always)
         for item in (self._trash, self._delete):
-            item.setEnabled(selected > 0 and (at_trash or not in_trash))
-        self._rename.setEnabled(selected == 1 and not in_trash)
-        self._move_to.setEnabled(selected > 0 and not in_trash)
-        self._permissions.setEnabled(selected > 0 and not in_trash)
-        self._paste.setEnabled(bool(clipboard.get()[0]) and not in_trash)
+            item.setEnabled(selected > 0 and (at_trash or not read_only))
+        # In the recent files it takes the entry off the list, not the file away
+        self._forget.setEnabled(selected > 0 and self._in_recent())
+        self._clear_recent.setEnabled(self._in_recent() and self._model.rowCount() > 0)
+        self._rename.setEnabled(selected == 1 and not read_only)
+        self._move_to.setEnabled(selected > 0 and not read_only)
+        self._permissions.setEnabled(selected > 0 and not read_only)
+        self._paste.setEnabled(bool(clipboard.get()[0]) and not read_only)
         other = self._other_pane()
-        for item in (self._copy_other, self._move_other):
-            item.setEnabled(
-                selected > 0 and not in_trash and other is not None and not other.in_trash
-            )
+        # Copying what is in the recent files is copying the files; moving them is not
+        # something a list of what was used should do
+        self._copy_other.setEnabled(
+            selected > 0 and not in_trash and other is not None and not other.read_only
+        )
+        self._move_other.setEnabled(
+            selected > 0 and not read_only and other is not None and not other.read_only
+        )
         for item in (self._new_folder, self._new_file):
-            item.setEnabled(not in_trash)
+            item.setEnabled(not read_only)
         # A terminal starts in a folder of this computer: not in the trash or a remote place
         self._terminal.setVisible(self._terminal_folder() is not None)
         self._restore.setEnabled(
@@ -795,7 +865,7 @@ class MainWindow(QMainWindow):
         elif len(infos) > 1:
             self._preview.show_message(f"{len(infos)} items selected")
         else:
-            path = locations.local_path(locations.child(self._location, infos[0].name))
+            path = locations.local_path(locations.entry_location(self._location, infos[0]))
             self._preview.show_item(infos[0], path)
 
     def _on_preview_key(self, event):
@@ -890,17 +960,73 @@ class MainWindow(QMainWindow):
     def _in_trash(self):
         return self._pane.in_trash
 
+    def _in_recent(self):
+        return self._pane.in_recent
+
+    def _read_only(self):
+        return self._pane.read_only
+
     def _at_trash(self):
         return self._pane.at_trash
 
     def _on_item_activated(self, info):
-        target = locations.child(self._location, info.name)
+        target = locations.entry_location(self._location, info)
         if info.is_dir:
             self.navigate(target)
         elif self._in_trash():
             self._show_error(f"Restore “{info.display_name}” to open it.")
         else:
+            self._remember_opened(target, info.content_type)
             desktop.open_default(target, self._show_error)
+
+    def remove_from_recent(self):
+        """Take the selected entries off the list of recent files. The files stay."""
+        if not self._in_recent() or self._recent is None:
+            return None
+        selected = self._selected_locations()
+        if not selected:
+            return None
+        pane = self._pane
+        self._recent.forget(selected, pane.reload)
+        return selected
+
+    def clear_recent(self):
+        """Empty the list of recent files, after asking. Whether it was done."""
+        if not self._in_recent() or self._recent is None:
+            return False
+        count = self._model.rowCount()
+        if count == 0 or not ask_to_clear_recent(self, count):
+            return False
+        self._recent.clear(self._pane.reload)
+        return True
+
+    def show_in_folder(self, info):
+        """Go to the folder a file of the recent files is in, with the file selected."""
+        target = locations.entry_location(self._location, info)
+        parent = target.get_parent()
+        if parent is not None:
+            self.navigate(parent, select=locations.basename(target))
+
+    def _open_with(self, app, target, content_type):
+        self._remember_opened(target, content_type)
+        desktop.open_with(app, target, self._show_error)
+
+    def _remember_opened(self, target, content_type):
+        """Tell the desktop's lists of recent files, unless the user would rather not."""
+        if self._recent is not None:
+            self._recent.add(target, content_type)
+
+    def _set_remember_opened(self, forget):
+        settings.set_remember_opened(not forget)
+        self.statusBar().showMessage(
+            "Opened files are not remembered" if forget else "Opened files are remembered again",
+            _COPIED_MS,
+        )
+
+    def _on_remember_opened_changed(self, remember):
+        """Changed here or in another window: it is one setting."""
+        self._private.setChecked(not remember)
+        self._private_button.setVisible(not remember)
 
     def _open_selected(self):
         infos = self._view.selected_infos()
@@ -930,6 +1056,8 @@ class MainWindow(QMainWindow):
                 menu.addSeparator()
                 self._add_sort_and_view(menu)
             return menu
+        if self._in_recent():
+            return self._recent_menu(menu, info)
         if info is None:
             # The folder's own menu
             menu.addActions([self._new_folder, self._new_file])
@@ -938,6 +1066,7 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
             self._add_sort_and_view(menu)
             menu.addAction(self._hidden)
+            menu.addAction(self._private)
             menu.addSeparator()
             menu.addActions([self._copy_path, self._terminal])
             self._add_open_in_manager(menu, self._location)
@@ -958,17 +1087,7 @@ class MainWindow(QMainWindow):
                 lambda: self._open_in_new_tab(info),
             )
         else:
-            apps = desktop.apps_for_type(info.content_type)
-            if apps:
-                open_with = menus.menu(menu, "Open with")
-                open_with.setIcon(style.icon("view-grid-symbolic", "view-grid"))
-                menu.addMenu(open_with)
-                for app in apps:
-                    open_with.addAction(
-                        QIcon.fromTheme(app.icon) if app.icon else QIcon(),
-                        app.name,
-                        lambda app=app: desktop.open_with(app, target, self._show_error),
-                    )
+            self._add_open_with(menu, info, target)
         self._add_open_in_manager(menu, folder)
         menu.addSeparator()
         if not info.is_dir:
@@ -990,6 +1109,53 @@ class MainWindow(QMainWindow):
         menu.addMenu(self._permissions_menu(menu))
         menu.addAction(self._properties)
         return menu
+
+    def _recent_menu(self, menu, info):
+        """What a file of the recent files can do: be opened, found, copied or looked at,
+        and be taken off the list."""
+        if info is None:
+            menu.addActions([self._select_all])
+            menu.addSeparator()
+            self._add_sort_and_view(menu)
+            menu.addAction(self._private)
+            menu.addSeparator()
+            menu.addAction(self._clear_recent)
+            return menu
+        target = locations.entry_location(self._location, info)
+        menu.addAction(
+            style.icon("document-open-symbolic", "document-open"),
+            "Open",
+            lambda: self._on_item_activated(info),
+        )
+        if not info.is_dir:
+            self._add_open_with(menu, info, target)
+        menu.addAction(
+            style.icon("folder-open-symbolic", "folder-open"),
+            "Show in folder",
+            lambda: self.show_in_folder(info),
+        )
+        menu.addSeparator()
+        if not info.is_dir:
+            menu.addAction(self._preview_action)
+        menu.addActions([self._copy, self._copy_path])
+        menu.addSeparator()
+        menu.addAction(self._forget)
+        menu.addAction(self._properties)
+        return menu
+
+    def _add_open_with(self, menu, info, target):
+        apps = desktop.apps_for_type(info.content_type)
+        if not apps:
+            return
+        open_with = menus.menu(menu, "Open with")
+        open_with.setIcon(style.icon("view-grid-symbolic", "view-grid"))
+        menu.addMenu(open_with)
+        for app in apps:
+            open_with.addAction(
+                QIcon.fromTheme(app.icon) if app.icon else QIcon(),
+                app.name,
+                lambda app=app: self._open_with(app, target, info.content_type),
+            )
 
     def _permissions_menu(self, parent):
         """The presets, for the selection: each with the mode it gives, and a tick
@@ -1018,7 +1184,7 @@ class MainWindow(QMainWindow):
         return menu
 
     def _show_permissions_menu(self):
-        if not self._view.selected_infos() or self._in_trash():
+        if not self._view.selected_infos() or self._read_only():
             return
         menu = self._permissions_menu(self)
         button = self._button_for(self._permissions)
@@ -1085,7 +1251,7 @@ class MainWindow(QMainWindow):
     def paste(self):
         """Copy what is on the clipboard into this folder, or move it if it was cut."""
         uris, cut = clipboard.get()
-        if not uris or self._in_trash():
+        if not uris or self._read_only():
             return None
         sources = [locations.from_uri(uri) for uri in uris]
         if cut:
@@ -1096,6 +1262,9 @@ class MainWindow(QMainWindow):
         return self._start(JobKind.MOVE if cut else JobKind.COPY, sources, self._location)
 
     def trash_selected(self):
+        if self._in_recent():
+            # The Delete key takes the entry off the list
+            return self.remove_from_recent()
         if self._in_trash():
             # Already there: the Delete key means delete for good, which asks first
             return self.delete_selected()
@@ -1104,6 +1273,8 @@ class MainWindow(QMainWindow):
 
     def delete_selected(self):
         """Delete for good. The job asks for confirmation before it touches anything."""
+        if self._in_recent():
+            return None
         if self._in_trash() and not self._at_trash():
             # The trash only deletes whole items, not what is inside a trashed folder
             return None
@@ -1144,7 +1315,7 @@ class MainWindow(QMainWindow):
         """Give the selection the permissions of `preset`. Only the items themselves:
         nothing inside a selected folder is changed."""
         selected = self._selected_locations()
-        if not selected or self._in_trash():
+        if not selected or self._read_only():
             return None
         name = self._view.selected_infos()[0].display_name
         change = PermissionChange(preset, selected, self)
@@ -1194,7 +1365,7 @@ class MainWindow(QMainWindow):
     def move_selected(self):
         """Move the selection to a folder that is picked in a dialog."""
         selected = self._selected_locations()
-        if not selected or self._in_trash():
+        if not selected or self._read_only():
             return None
         start = locations.local_path(self._location) or locations.local_path(locations.home())
         path = pick_folder(self, "Move to", start)
@@ -1216,7 +1387,9 @@ class MainWindow(QMainWindow):
         """Copy or move the selection into the folder of the other pane."""
         other = self._other_pane()
         selected = self._selected_locations()
-        if other is None or not selected or self._in_trash() or other.in_trash:
+        if other is None or not selected or self._in_trash() or other.read_only:
+            return None
+        if kind is JobKind.MOVE and self._read_only():
             return None
         if kind is JobKind.MOVE and self._all_in(selected, other.location):
             # Already there
@@ -1224,7 +1397,7 @@ class MainWindow(QMainWindow):
         return self._start(kind, selected, other.location)
 
     def new_file(self):
-        if self._in_trash():
+        if self._read_only():
             return None
         folder = self._location
         name = quick.suggest_file_name(folder)
@@ -1240,7 +1413,7 @@ class MainWindow(QMainWindow):
         return self._ask_name("New file", "Name of the new file:", name, create)
 
     def new_folder(self):
-        if self._in_trash():
+        if self._read_only():
             return None
         folder = self._location
         name = quick.suggest_folder_name(folder)
@@ -1257,7 +1430,7 @@ class MainWindow(QMainWindow):
 
     def rename(self):
         infos = self._view.selected_infos()
-        if len(infos) != 1 or self._in_trash():
+        if len(infos) != 1 or self._read_only():
             return None
         info = infos[0]
         folder = self._location
@@ -1294,6 +1467,9 @@ class MainWindow(QMainWindow):
         return self._drop_on(self._pane, uris, folder_info, modifiers, position)
 
     def _drop_on(self, pane, uris, folder_info, modifiers, position):
+        if pane.read_only and not pane.at_trash:
+            # Nothing is put into the recent files, and not into a trashed folder
+            return None
         target = pane.location
         if folder_info is not None:
             target = locations.child(target, folder_info.name)

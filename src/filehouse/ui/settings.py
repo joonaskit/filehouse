@@ -1,10 +1,19 @@
-"""What the app remembers between runs: window size, view mode, hidden files and the split."""
+"""What the app remembers between runs: window size, view mode, hidden files, the split
+and whether opened files are remembered."""
 
-from PySide6.QtCore import QSettings, QSize
+from PySide6.QtCore import QObject, QSettings, QSize, Signal
 
 from filehouse import APP_ID
 
 DETAILS, ICONS = "details", "icons"
+
+
+class _Changes(QObject):
+    # A setting that is shown in every window changed
+    remember_opened_changed = Signal(bool)
+
+
+changes = _Changes()
 
 
 def _store():
@@ -44,6 +53,16 @@ def split():
 
 def set_split(split):
     _store().setValue("view/split", bool(split))
+
+
+def remember_opened():
+    """Whether files opened from the app are told to the desktop's lists of recent files."""
+    return _store().value("privacy/remember_opened", True, type=bool)
+
+
+def set_remember_opened(remember):
+    _store().setValue("privacy/remember_opened", bool(remember))
+    changes.remember_opened_changed.emit(bool(remember))
 
 
 def clear():

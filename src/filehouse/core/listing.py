@@ -24,6 +24,10 @@ ATTRIBUTES = ",".join(
         "unix::mode",
         # Only set for what is in the trash
         "trash::orig-path",
+        # Only set for what is in the list of recent files: the file it stands for, and
+        # when it was last used
+        "standard::target-uri",
+        "recent::modified",
     ]
 )
 
@@ -52,6 +56,14 @@ class FileInfo:
     sort_key: tuple
     original_path: str | None = None  # where a trashed item was, for restoring it
     mode: int | None = None  # permission bits, None where there are none
+    target_uri: str | None = None  # the file an entry of the recent files stands for
+    used: int = 0  # when an entry of the recent files was last used, 0 elsewhere
+
+    @property
+    def shown_date(self):
+        """The date the Modified column shows: in the recent files when it was used, which
+        is also their order, and elsewhere when the file changed."""
+        return self.used or self.modified
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +82,16 @@ def natural_key(name):
     return tuple(int(part) if index % 2 else part for index, part in enumerate(parts))
 
 
+def _content_type(info, display_name):
+    content_type = info.get_attribute_string("standard::fast-content-type")
+    if (not content_type or content_type == "application/octet-stream") and info.has_attribute(
+        "standard::target-uri"
+    ):
+        # The list of recent files has no guess from the name of its own
+        content_type = Gio.content_type_guess(display_name, None)[0]
+    return content_type or "application/octet-stream"
+
+
 def info_from_gio(info):
     name = info.get_name()
     display_name = info.get_display_name()
@@ -81,8 +103,7 @@ def info_from_gio(info):
         is_symlink=info.get_is_symlink(),
         size=info.get_size(),
         modified=info.get_attribute_uint64("time::modified"),
-        content_type=info.get_attribute_string("standard::fast-content-type")
-        or "application/octet-stream",
+        content_type=_content_type(info, display_name),
         sort_key=natural_key(display_name),
         original_path=info.get_attribute_byte_string("trash::orig-path"),
         mode=(
@@ -90,6 +111,8 @@ def info_from_gio(info):
             if info.has_attribute("unix::mode")
             else None
         ),
+        target_uri=info.get_attribute_string("standard::target-uri"),
+        used=max(0, info.get_attribute_int64("recent::modified")),
     )
 
 

@@ -39,6 +39,27 @@ def has_trash():
     return "trash" in Gio.Vfs.get_default().get_supported_uri_schemes()
 
 
+def recent():
+    """The files used lately, as GVFS lists them from `recently-used.xbel`."""
+    return Gio.File.new_for_uri("recent:///")
+
+
+def has_recent():
+    return "recent" in Gio.Vfs.get_default().get_supported_uri_schemes()
+
+
+def in_recent(location):
+    return location.get_uri_scheme() == "recent"
+
+
+def entry_location(folder, info):
+    """The location of an entry of a listing. In the recent files an entry stands for
+    a file somewhere else, and that file is meant."""
+    if in_recent(folder) and info.target_uri:
+        return Gio.File.new_for_uri(info.target_uri)
+    return child(folder, info.name)
+
+
 def in_trash(location):
     return location.get_uri_scheme() == "trash"
 
@@ -103,6 +124,8 @@ def display_name(location):
         return "Home"
     if is_trash(location):
         return "Trash"
+    if in_recent(location) and location.get_parent() is None:
+        return "Recent"
     if location.get_parent() is None:
         return "/" if location.is_native() else location.get_uri()
     return location.get_basename() or location.get_uri()
@@ -120,6 +143,8 @@ def segments(location):
         name = "/" if current.get_parent() is None and current.is_native() else None
         if is_trash(current):
             name = "Trash"
+        if in_recent(current) and current.get_parent() is None:
+            name = "Recent"
         if current.equal(home_location):
             result.append(("Home", current))
             break
@@ -152,6 +177,8 @@ def places():
         if location.equal(home_location) or not location.query_exists(None):
             continue
         result.append(Place(location.get_basename(), icon, location))
+    if has_recent():
+        result.append(Place("Recent", "document-open-recent", recent()))
     if has_trash():
         result.append(Place("Trash", "user-trash", trash()))
     return result
