@@ -5,7 +5,7 @@ In a narrow window the same details are a sheet at the bottom: the compact form.
 import getpass
 
 from PySide6.QtCore import QLocale, QSize, Qt, Signal
-from PySide6.QtGui import QFont, QPainter
+from PySide6.QtGui import QFont, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -22,13 +22,16 @@ from filehouse.core import locations
 from filehouse.core.errors import OperationError
 from filehouse.core.listing import mode_text
 from filehouse.integration import style
-from filehouse.qt_models import dates
+from filehouse.qt_models import dates, thumbnails
 from filehouse.qt_models.details import Reading
 from filehouse.qt_models.icons import icon_for_content_type
 from filehouse.qt_models.measure import Measurement
 
 _ICON = 64
 _COMPACT_ICON = 40
+# The longest side of a thumbnail in the place of the icon, unscaled
+_THUMBNAIL = 128
+_COMPACT_THUMBNAIL = 56
 _NAME_FONT_PX = 16
 # A longer name is cut in the middle. The whole of it is in the tooltip
 _NAME_LENGTH = 80
@@ -86,6 +89,9 @@ class DetailsPane(QFrame):
         self._measurement = None
         self._is_folder = False
         self._icon_type = None  # the content type of the icon on show
+        self._thumbnail_token = 0
+        self._thumbnailer = thumbnails.Thumbnailer(self)
+        self._thumbnailer.ready.connect(self._on_thumbnail)
         self.close_button = None
 
         self._icon = QLabel()
@@ -242,6 +248,7 @@ class DetailsPane(QFrame):
             return
         item = result
         self._set_icon(item.content_type)
+        self._ask_for_thumbnail(target, item)
         self._set_name(locations.display_name(target) if self._is_folder else item.name)
         self.kind.setText("Link to " + item.link_target if item.link_target else item.kind)
         self._set_row("Modified", dates.friendly(item.modified, self._locale))
@@ -276,6 +283,7 @@ class DetailsPane(QFrame):
         self._measure(selected, inside_one=False)
 
     def _show_nothing(self):
+        self._thumbnail_token += 1
         self._icon.clear()
         self._icon_type = None
         self.name.clear()
@@ -317,6 +325,53 @@ class DetailsPane(QFrame):
         self._set_row("Contains", ", ".join(parts))
 
     # The parts
+
+    def _ask_for_thumbnail(self, target, item):
+        """A picture of the file in the place of its icon, when there is one: from the
+        cache, or made. The icon stays until it is in."""
+        self._thumbnail_token += 1
+        path = locations.local_path(target)
+        if item.is_dir or path is None:
+            return
+        self._thumbnailer.request(
+            self._thumbnail_token,
+            locations.uri(target),
+            path,
+            item.modified,
+            item.size,
+            item.content_type,
+        )
+
+    def _on_thumbnail(self, token, image):
+        if token != self._thumbnail_token or image.isNull():
+            return
+        side = style.px(_COMPACT_THUMBNAIL if self._compact else _THUMBNAIL)
+        ratio = self.devicePixelRatioF()
+        scaled = QPixmap.fromImage(
+            image.scaled(
+                round(side * ratio),
+                round(side * ratio),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        scaled.setDevicePixelRatio(ratio)
+        size = scaled.deviceIndependentSize()
+        # With the corners of the cards
+        rounded = QPixmap(scaled.size())
+        rounded.setDevicePixelRatio(ratio)
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(
+            0, 0, size.width(), size.height(), style.radius("small"), style.radius("small")
+        )
+        painter.setClipPath(clip)
+        painter.drawPixmap(0, 0, scaled)
+        painter.end()
+        self._icon.setPixmap(rounded)
+        self._icon_type = None
 
     def retheme(self):
         """The icons again, in the colours of the theme now in use."""

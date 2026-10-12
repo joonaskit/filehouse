@@ -18,11 +18,19 @@ import os
 import shlex
 import shutil
 import signal
-import subprocess
 import tempfile
 from functools import cache
 
-from PySide6.QtCore import QObject, QRunnable, QSize, QStandardPaths, Qt, QThreadPool, Signal
+from PySide6.QtCore import (
+    QObject,
+    QProcess,
+    QRunnable,
+    QSize,
+    QStandardPaths,
+    Qt,
+    QThreadPool,
+    Signal,
+)
 from PySide6.QtGui import QImage, QImageReader
 
 # The spec's "normal" size
@@ -35,6 +43,8 @@ _MAX_EXTERNAL_BYTES = 4 * 1024**3
 _EXTERNAL_SECONDS = 15
 # How many run at once
 _EXTERNAL_AT_ONCE = 2
+# How long a program may take to start, in milliseconds
+_START_MS = 5000
 # What the spec's `fail` folder is called for this program
 _FAIL_NAME = "filehouse"
 
@@ -226,28 +236,30 @@ def make_with_thumbnailer(thumbnailer, uri, path, mtime, size):
 
 
 def _run(command, folder):
-    """Run a command in `folder`, for at most `_EXTERNAL_SECONDS`. Whether it succeeded."""
-    try:
-        process = subprocess.Popen(
-            command,
-            cwd=folder,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            # Its own process group, so what it started stops with it
-            start_new_session=True,
-        )
-    except (OSError, ValueError):
+    """Run a command in `folder`, for at most `_EXTERNAL_SECONDS`. Whether it succeeded.
+
+    With QProcess, used blocking on this worker thread: Python's `subprocess` forking
+    from one of Qt's pool threads brought the whole process down now and then."""
+    process = QProcess()
+    process.setWorkingDirectory(folder)
+    process.setProgram(command[0])
+    process.setArguments(command[1:])
+    process.setStandardInputFile(QProcess.nullDevice())
+    process.setStandardOutputFile(QProcess.nullDevice())
+    process.setStandardErrorFile(QProcess.nullDevice())
+    # Its own session, so what it started stops with it
+    process.setUnixProcessParameters(QProcess.UnixProcessFlag.CreateNewSession)
+    process.start()
+    if not process.waitForStarted(_START_MS):
         return False
-    try:
-        return process.wait(timeout=_EXTERNAL_SECONDS) == 0
-    except subprocess.TimeoutExpired:
+    if not process.waitForFinished(round(_EXTERNAL_SECONDS * 1000)):
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(process.processId(), signal.SIGKILL)
         except OSError:
             process.kill()
-        process.wait()
+        process.waitForFinished(_START_MS)
         return False
+    return process.exitStatus() == QProcess.ExitStatus.NormalExit and process.exitCode() == 0
 
 
 def _store(image, uri, mtime, size, full):
