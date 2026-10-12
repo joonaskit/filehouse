@@ -90,3 +90,24 @@ def test_segments_of_something_in_the_home_folder_start_at_home():
     assert [name for name, _ in segments] == ["Home", "Projects", "island"]
     assert path_of(segments[0][1]) == home
     assert [name for name, _ in locations.segments(locations.home())] == ["Home"]
+
+
+def test_an_item_is_shown_in_the_folder_it_is_in(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "a.txt").write_text("a")
+
+    file = locations.resolve_item(str(tmp_path / "docs" / "a.txt"))
+    folder = locations.resolve_item((tmp_path / "docs").as_uri())
+    gone = locations.resolve_item(str(tmp_path / "docs" / "gone.txt"))
+
+    assert (file.location.get_path(), file.select) == (str(tmp_path / "docs"), "a.txt")
+    # A folder too: it is the item, not the place to open
+    assert (folder.location.get_path(), folder.select) == (str(tmp_path), "docs")
+    # Not there any more: its folder is still the place to look
+    assert (gone.location.get_path(), gone.select) == (str(tmp_path / "docs"), "gone.txt")
+
+
+def test_the_root_has_no_folder_to_be_shown_in():
+    root = locations.resolve_item("/")
+
+    assert root.location.get_path() == "/" and root.select is None

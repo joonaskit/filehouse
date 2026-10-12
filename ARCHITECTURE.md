@@ -132,6 +132,7 @@ filehouse/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
+│   │   ├── instance.py          one process per session, and org.freedesktop.FileManager1
 │   │   ├── theme_watcher.py     follows the theme file while the app runs
 │   │   ├── places.py            the places file Dolphin keeps (user-places.xbel), edited in place
 │   │   ├── recent.py            tells the desktop's lists of recent files what was opened
@@ -165,12 +166,24 @@ filehouse/
 
 ### Startup (`app.py`)
 
+0. Ask to be the one process of the session (see "One process, and the desktop's file manager"). When another is, hand it the paths and end, before any of the application is set up.
 1. Parse arguments: zero or more paths or `file://` URIs (`%U` from the `.desktop` file). A file argument opens its folder with the file selected. A missing path opens home and shows a message.
 2. `QGuiApplication.setDesktopFileName("filehouse")`. On Wayland this sets the app id, which the shell's `DockService.findToplevels` compares **exactly** against `StartupWMClass`. This is what gives point 3a for free.
 3. Load the theme and apply the style before creating any window.
 4. Open one window per path argument (one window when there are none).
 
-Every launch is a new process. There is no single-instance logic and no D-Bus name in v1 (#24, point 6).
+### One process, and the desktop's file manager (`integration/instance.py`, #38)
+
+The app is meant to stand where Dolphin stood, so the desktop has to be able to hand it a folder.
+
+- **One process for the session.** The first start owns `io.github.joonaskit.filehouse` on the session bus. A later start is told the name is taken (`RequestName` with "do not queue"), sends its arguments to the owner with `Open(uris, activation_token)` and exits, in about a quarter of a second and before a `QApplication` is made. So there is one `JobModel`, one island client and one list of favourites however the app is started. The arguments go as URIs, because a relative path means something else in the other process. The owner opens **a window per folder** (not a tab: the first open question of the issue), and a home window when it was given nothing.
+- **Without a bus, or with an owner that does not answer** within five seconds, the start goes on as a process of its own, as every start used to be: better a second process than no window.
+- **`org.freedesktop.FileManager1`** is served by the same process, which is how other apps do "Show in folder". `ShowFolders` opens each folder; `ShowItems` opens the folder an item is in with the item selected (`locations.resolve_item`: a folder is an item too, shown in the one above it), one window per folder however many of its items were named; `ShowItemProperties` opens the properties dialog, without a window behind it. The name has one owner: when another file manager has it (Dolphin, while it runs), it keeps it, and this process is only the one process of this app (`Instance.file_manager` says which).
+- **Started by the bus.** `data/org.freedesktop.FileManager1.service.in` becomes a service file in the user's `dbus-1/services`, which comes before the system's (Dolphin's), so a call with nobody running starts `filehouse --service`: no window of its own, and it ends after ten seconds if no call opened one. That it takes the place of Dolphin's is the choice made by installing it (the second open question). Two things found on a real session (Fedora, dbus-broker): the bus reads service files only when it starts or is told to reload, and it outlives a logout, so `install.sh` calls `ReloadConfig`; and Dolphin's own background process (`plasma-dolphin.service`, started by the first call that reached it) holds the name until it is stopped. With both dealt with, the broker logs that it ignores Dolphin's duplicate, and a `ShowItems` call starts `filehouse --service`.
+- **The .desktop file** has `MimeType=inode/directory;`, so the app can be chosen as what opens a folder (`gio mime inode/directory filehouse.desktop`, or System Settings → Default Applications; `xdg-mime default` works too, with a harmless complaint about `qtpaths` on Fedora). It is not `DBusActivatable`: that would need the file to be named after the bus name, and the file's name is the app id (`filehouse`), which the shell's dock matches.
+- **Coming to the front.** On Wayland a window may only take the focus with a token from whoever asked. The later start passes its `XDG_ACTIVATION_TOKEN` (or the X11 startup id), `FileManager1` callers pass theirs as `startup_id`, and the owner puts it in its environment before it shows the window, where Qt looks for it. Checked only as far as the token arriving; whether KWin then raises the window was not seen in a session.
+- **The last window closing ends the process**, as before (the third open question): the next start is a fresh one.
+- No Qt in the module, so it can be asked before there is an application, and every call the app serves is answered before its handler runs: the caller waits for the reply, not for a window. The two calls a start makes itself (`RequestName`, and `Open` from a later start) are blocking, with timeouts: they decide whether there is to be an application at all.
 
 ### Window title
 

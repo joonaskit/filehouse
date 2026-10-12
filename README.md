@@ -64,6 +64,14 @@ filehouse ~/Downloads     # opens a folder
 filehouse ~/notes.txt     # opens the file's folder with the file selected
 ```
 
+There is one process per session: a second `filehouse` hands its folder to the one that runs, which opens a window for it. Other apps' "Show in folder" comes to it too (`org.freedesktop.FileManager1`). To open folders with it by default:
+
+```sh
+gio mime inode/directory filehouse.desktop
+```
+
+`install.sh` also installs the service file that lets the session bus start the app for "Show in folder", and tells the bus to read it. Dolphin answers those calls for as long as it runs, its background process included (`systemctl --user stop plasma-dolphin.service`).
+
 To show the app in the launcher and the shell's dock, install the desktop file and make sure `filehouse` is on your `PATH`:
 
 ```sh

@@ -7,5 +7,6 @@ Exec=filehouse %U
 Icon=system-file-manager
 Terminal=false
 Categories=Qt;System;FileTools;FileManager;
+MimeType=inode/directory;
 StartupNotify=true
 StartupWMClass=filehouse

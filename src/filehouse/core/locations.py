@@ -205,6 +205,16 @@ def resolve_start(arg):
     return StartTarget(folder, select=location.get_basename())
 
 
+def resolve_item(arg):
+    """Where to show an item in the folder it is in: that folder, with the item selected,
+    whether it is a file or a folder. Something with no folder above it opens as itself."""
+    location = from_argument(arg)
+    folder = location.get_parent()
+    if folder is None:
+        return StartTarget(location)
+    return StartTarget(folder, select=location.get_basename())
+
+
 def file_type(location, cancellable=None):
     """What is at `location`, links not followed: a `Gio.FileType`, or None when nothing is."""
     try:
