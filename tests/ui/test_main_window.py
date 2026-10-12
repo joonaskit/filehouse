@@ -4,6 +4,7 @@ import pytest
 from gi.repository import Gio
 from PySide6.QtCore import Qt
 
+from filehouse.integration import style
 from filehouse.ui.main_window import MainWindow
 
 
@@ -168,7 +169,7 @@ def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
     assert buttons == [
         ["Back", "Forward", "Up"],
         [],
-        ["Details", "Icons", "Split view"],
+        ["Details", "Icons", "Split view", "Details pane"],
         # The search field
         [],
         # Only shown in a narrow window
@@ -403,3 +404,114 @@ def test_the_toolbar_groups_keep_to_what_fits(qtbot, tree):
             left, right = edges(window, group)
             assert 0 <= left and right <= window.width()
     assert edges(window, window._settings_group)[1] > edges(window, window._search_group)[1]
+
+
+# The pane of details can be put away
+
+
+def test_the_details_pane_can_be_hidden_and_comes_back(qtbot, tree, home_dir):
+    from filehouse.ui import settings
+
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1100, 600)
+    window.show()
+    assert window._details.isVisible() and window._pane_toggle.isChecked()
+    list_width = window._view.width()
+
+    window._pane_toggle.trigger()
+
+    assert not window._details.isVisible() and not settings.details_pane()
+    # The list has the width the pane had
+    qtbot.waitUntil(lambda: window._view.width() > list_width, timeout=5000)
+
+    window.set_details_pane(True)
+    assert window._details.isVisible() and settings.details_pane()
+
+
+def test_a_hidden_pane_is_not_asked_for_details(qtbot, tree, home_dir, monkeypatch):
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1100, 600)
+    window.show()
+    window.set_details_pane(False)
+    shown = []
+    monkeypatch.setattr(window._details, "show_items", lambda *args: shown.append(args))
+
+    window._view.select_name("report.pdf")
+    window._update_details()
+
+    assert shown == []
+
+
+def test_the_hide_switch_is_the_same_in_every_window_and_remembered(qtbot, tree, home_dir):
+    from filehouse.ui import settings
+
+    first = open_window(qtbot, tree / "Downloads")
+    second = open_window(qtbot, tree / "Downloads")
+    for window in (first, second):
+        window.resize(1100, 600)
+        window.show()
+
+    first.set_details_pane(False)
+
+    assert not second._details.isVisible() and not second._pane_toggle.isChecked()
+    assert not settings.details_pane()
+    third = open_window(qtbot, tree / "Downloads")
+    third.resize(1100, 600)
+    third.show()
+    assert not third._details.isVisible()
+
+
+def test_a_hidden_pane_stays_hidden_through_a_split_and_a_narrow_window(qtbot, tree, home_dir):
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1100, 600)
+    window.show()
+    window.set_details_pane(False)
+
+    window.set_split(True)
+    window.set_split(False)
+    assert not window._details.isVisible()
+
+    window.resize(500, 600)
+    window.resize(1100, 600)
+    assert not window._details.isVisible()
+
+    window.set_details_pane(True)
+    assert window._details.isVisible()
+
+
+def test_the_switch_while_split_is_kept_for_when_the_split_ends(qtbot, tree, home_dir):
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1100, 600)
+    window.show()
+    window.set_split(True)
+    assert not window._details.isVisible()
+
+    window.set_details_pane(False)
+    window.set_split(False)
+
+    assert not window._details.isVisible()
+
+
+def test_the_search_field_keeps_its_width_at_the_right_end_without_the_pane(qtbot, tree, home_dir):
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1100, 600)
+    window.show()
+    qtbot.waitUntil(lambda: window._search_group.width() > 150, timeout=5000)
+
+    window.set_details_pane(False)
+
+    qtbot.waitUntil(lambda: window._search_group.width() == style.px(220), timeout=5000)
+    assert edges(window, window._settings_group)[1] > edges(window, window._search_group)[1]
+    assert edges(window, window._settings_group)[1] > window.width() - 20
+
+
+def test_the_pane_button_and_key_are_there_only_in_a_wide_window(qtbot, tree, home_dir):
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1100, 600)
+    window.show()
+    assert window._button_for(window._pane_toggle).isVisible()
+    assert window._pane_toggle.shortcut().toString() == "F11"
+
+    window.resize(500, 600)
+
+    qtbot.waitUntil(lambda: not window._button_for(window._pane_toggle).isVisible(), timeout=5000)

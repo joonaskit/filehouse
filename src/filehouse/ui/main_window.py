@@ -275,6 +275,8 @@ class MainWindow(QMainWindow):
         style.themed.changed.connect(self._retheme)
 
         self.set_view_mode(self._view_mode, remember=False)
+        # A window opens without the pane when the user has put it away
+        self._sync_details()
         self.navigate(location, select=select)
         if settings.split() and self.width() >= style.px(NARROW_BELOW):
             self.set_split(True, remember=False)
@@ -350,6 +352,14 @@ class MainWindow(QMainWindow):
             "Split view", "view-split-left-right", [QKeySequence("F3")], self.set_split
         )
         self._split_view.setCheckable(True)
+        # Whether a wide window has the pane of details. The narrow window's details are
+        # a sheet, and have a button of their own
+        self._pane_toggle = action(
+            "Details pane", "view-right-close", [QKeySequence("F11")], self.set_details_pane
+        )
+        self._pane_toggle.setCheckable(True)
+        self._pane_toggle.setChecked(settings.details_pane())
+        settings.changes.details_pane_changed.connect(self._on_details_pane_changed)
         modes = QActionGroup(self)
         for item in (self._icons_mode, self._details_mode):
             item.setCheckable(True)
@@ -488,7 +498,9 @@ class MainWindow(QMainWindow):
         location.layout().addWidget(self._path_bar)
         location.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._toolbar_location = toolbar.addWidget(location)
-        self._view_group = self._group(self._details_mode, self._icons_mode, self._split_view)
+        self._view_group = self._group(
+            self._details_mode, self._icons_mode, self._split_view, self._pane_toggle
+        )
         toolbar.addWidget(self._view_group)
         # In a wide window the field is always there; in a narrow one it takes the
         # place of the path while it is in use, and a button opens it
@@ -742,7 +754,22 @@ class MainWindow(QMainWindow):
         gone.deleteLater()
 
     def _details_wanted(self):
-        return not self._narrow and not self.is_split
+        return not self._narrow and not self.is_split and self._pane_toggle.isChecked()
+
+    def set_details_pane(self, show=None):
+        """Show or hide the pane of details in a wide window. It is the app's setting,
+        the same in every window; in a narrow or a split window it is kept for later."""
+        if show is None:
+            show = not settings.details_pane()
+        if show != settings.details_pane():
+            settings.set_details_pane(show)
+
+    def _on_details_pane_changed(self, show):
+        """Changed here or in another window: it is one setting."""
+        # The action is checked already when it was its own click that changed it
+        self._pane_toggle.setChecked(show)
+        self._sync_details()
+        self._update_state()
 
     def _sync_details(self):
         """No room for the details beside two lists: they come and go with the split."""
@@ -794,6 +821,22 @@ class MainWindow(QMainWindow):
     def _open_in_new_tab(self, info):
         """A folder of the list, in a tab behind this one."""
         self.new_tab(locations.entry_location(self._location, info), activate=False)
+
+    def _open_in_split(self, info):
+        """A folder of the list, in the other pane."""
+        self._open_location_in_split(locations.entry_location(self._location, info))
+
+    def _open_location_in_split(self, target):
+        """A folder in the other pane: the window is split first if it is not. The pane
+        the choice was made in stays the active one. It is not a choice of how new
+        windows open, as F3 is."""
+        if self._narrow:
+            return
+        if not self.is_split:
+            self.set_split(True, remember=False)
+        other = self._other_pane()
+        if other is not None:
+            other.navigate(target)
 
     def close_tab(self, index):
         if len(self._tabs) < 2 or not 0 <= index < len(self._tabs):
@@ -1127,6 +1170,7 @@ class MainWindow(QMainWindow):
             pane.view.set_compact(narrow)
         self._split_view.setEnabled(not narrow)
         self._button_for(self._split_view).setVisible(not narrow)
+        self._button_for(self._pane_toggle).setVisible(not narrow)
         self._job_status.set_compact(narrow)
         self._button_for(self._forward).setVisible(not narrow)
         self._toolbar_menu.setVisible(narrow)
@@ -1281,9 +1325,10 @@ class MainWindow(QMainWindow):
         found = self._favourites is not None and self._favourites.find(location)
         return "Remove from favourites" if found else "Add to favourites"
 
-    def toggle_favourite(self, location=None):
+    def toggle_favourite(self, location=None, index=None):
         """Put a folder in the favourites, or take it out when it is there. By default the
-        folder that is open. Whether it is in them now, None where nothing could be done."""
+        folder that is open, and a new one goes at the end or at `index`. Whether it is in
+        them now, None where nothing could be done."""
         location = location or self._location
         if (
             self._favourites is None
@@ -1301,7 +1346,7 @@ class MainWindow(QMainWindow):
             done = self._favourites.remove(found)
             message = f"“{name}” taken out of the favourites"
         else:
-            done = self._favourites.add(location)
+            done = self._favourites.add(location, index=index)
             message = f"“{name}” added to the favourites"
         if not done:
             self._show_error(f"Could not change the favourites: {name}.")
@@ -1309,12 +1354,15 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, _COPIED_MS)
         return found is None
 
-    def _add_dropped_folders(self, uris):
-        """Folders dropped among the favourites become favourites. Files do not."""
+    def _add_dropped_folders(self, uris, index=-1):
+        """Folders dropped among the favourites become favourites, at `index` of the list
+        (the end for -1), one after the other. Files do not, and a folder that is one
+        already stays where it is."""
         for uri in uris:
             location = locations.from_uri(uri)
             if locations.is_folder(location) and self._favourites.find(location) is None:
-                self.toggle_favourite(location)
+                if self.toggle_favourite(location, None if index < 0 else index):
+                    index += 1 if index >= 0 else 0
 
     def _show_favourite_menu(self, favourite, position):
         menu = menus.menu(self)
@@ -1328,6 +1376,12 @@ class MainWindow(QMainWindow):
             "Open in new tab",
             lambda: self.new_tab(favourite.location, activate=False),
         )
+        if not self._narrow:
+            menu.addAction(
+                self._split_view.icon(),
+                "Open in split view",
+                lambda: self._open_location_in_split(favourite.location),
+            )
         menu.addSeparator()
         menu.addAction("Rename…", lambda: self.rename_favourite(favourite))
         items = self._favourites.items
@@ -1454,6 +1508,12 @@ class MainWindow(QMainWindow):
                 "Open in new tab",
                 lambda: self._open_in_new_tab(info),
             )
+            if not self._narrow:
+                menu.addAction(
+                    self._split_view.icon(),
+                    "Open in split view",
+                    lambda: self._open_in_split(info),
+                )
         else:
             self._add_open_with(menu, info, target)
         self._add_open_in_manager(menu, folder)
@@ -1600,6 +1660,7 @@ class MainWindow(QMainWindow):
         view.addActions([self._details_mode, self._icons_mode])
         view.addSeparator()
         view.addAction(self._split_view)
+        view.addAction(self._pane_toggle)
         view.addAction(self._new_tab)
         density = menus.menu(view, "Density")
         current = settings.density()

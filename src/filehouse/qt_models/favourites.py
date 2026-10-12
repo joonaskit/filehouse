@@ -62,10 +62,18 @@ class Favourites(QObject):
 
     # Changes. Each says whether the file was written
 
-    def add(self, location, title=None):
+    def add(self, location, title=None, index=None):
+        """Add a folder at the end, or at `index` of the list where 0 is the first."""
         title = title or locations.display_name(location)
         done = self._file.add(location.get_uri(), title)
-        return self._after(done)
+        if not done:
+            return False
+        self.reload()
+        added = self.find(location)
+        if index is not None and added is not None:
+            # The folder is in already: failing to place it leaves it at the end
+            self.move_to(added, index)
+        return True
 
     def remove(self, favourite):
         return self._after(self._file.remove(favourite.id))

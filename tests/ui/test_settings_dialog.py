@@ -73,3 +73,13 @@ def test_clear_is_left_to_the_window(dialog):
     dialog.clear.click()
 
     assert dialog.calls.cleared == 1
+
+
+def test_the_details_pane_is_in_the_dialog_and_follows_other_changes(dialog):
+    assert dialog.pane.isChecked()
+
+    dialog.pane.setChecked(False)
+    assert not settings.details_pane()
+
+    settings.set_details_pane(True)
+    assert dialog.pane.isChecked()

@@ -1,5 +1,5 @@
 """What the app remembers between runs: window size, view mode, hidden files, the split,
-the density, the notifications and whether opened files are remembered."""
+the details pane, the density, the notifications and whether opened files are remembered."""
 
 from PySide6.QtCore import QObject, QSettings, QSize, Signal
 
@@ -11,6 +11,7 @@ DETAILS, ICONS = "details", "icons"
 class _Changes(QObject):
     # A setting that is shown in every window changed
     remember_opened_changed = Signal(bool)
+    details_pane_changed = Signal(bool)
 
 
 changes = _Changes()
@@ -73,6 +74,16 @@ def long_job_seconds():
 
 def set_long_job_seconds(seconds):
     _store().setValue("notifications/long_job_seconds", max(1, int(seconds)))
+
+
+def details_pane():
+    """Whether a wide window shows the pane of details beside the list."""
+    return _store().value("view/details_pane", True, type=bool)
+
+
+def set_details_pane(show):
+    _store().setValue("view/details_pane", bool(show))
+    changes.details_pane_changed.emit(bool(show))
 
 
 def split():
