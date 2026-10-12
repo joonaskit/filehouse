@@ -45,7 +45,7 @@ These shape the operations engine more than anything else:
 | UI toolkit | **PySide6, Qt Widgets** | Mature item views (`QListView`, `QTreeView`) with selection, rubber band, keyboard navigation, drag and drop and good performance on large folders. Qt Quick would need most of that rebuilt by hand |
 | File system | **Gio (PyGObject)** | Copy and move with progress callbacks and a `Gio.Cancellable`, trash, MIME types, default apps and file monitors in one library, all of which the "use existing system libraries" rule in #24 asks for. GVFS locations (`trash://`, `sftp://`, `smb://`, MTP) come for free later |
 | D-Bus | **Gio.DBusConnection** | Exact control over variant types (`a{sv}`, `a(ss)`), which the activities API needs and QtDBus makes awkward from Python. It is already a dependency |
-| Thumbnails | Freedesktop thumbnail cache, plus `QImageReader` for images | Shares the cache with Dolphin. Video and PDF thumbnails come later |
+| Thumbnails | Freedesktop thumbnail cache, `QImageReader` for what Qt reads (images, and PDFs when Qt has its PDF plugin), the desktop's thumbnailers for the rest | Shares the cache with Dolphin, both ways |
 | Tests | pytest (core), pytest-qt (a few UI tests) | The core has no UI and can be tested against temporary folders |
 
 On Fedora: `dnf install python3-pyside6 python3-gobject`. For development, a venv created with `--system-site-packages` sees both.
@@ -288,6 +288,19 @@ For a job that ends while the process has no window to show it (the user chose "
 - **Flushing.** The process ends as soon as the last job has, so `app.py` flushes the notifier's connection on `aboutToQuit`; a notification sent in the same moment still gets to the bus.
 - **Not done:** an action on the notification ("Open folder"), and keeping the process alive after a failure to bring a window back when it is clicked. The process is gone by then, and a failure names the file and the error; running the operation again is the way back.
 - Whether to notify at all, and the 10 seconds, are for the settings panel if there is one (#23).
+
+### Thumbnails for any type (`qt_models/thumbnails.py`, #20)
+
+Asked for every regular file on a local folder that is painted in the icons view, in this order, on a worker thread:
+
+1. **The cache**, whatever the file's type, so what Dolphin made for videos, PDFs and the rest is shown. A cached thumbnail counts when its `Thumb::MTime` is the file's.
+2. **The fail marker** (`thumbnails/fail/filehouse/<md5>.png`, as the spec has it, with the file's `Thumb::MTime`): a file that was tried and could not be made is not tried again until it changes.
+3. **Qt**, for the types `QImageReader` reads. That includes PDFs on a Qt with its PDF image plugin, which draws the first page (the system's PySide6 has it); a file above 64 MB is left alone.
+4. **The desktop's thumbnailers**: the `thumbnailers/*.thumbnailer` files in `$XDG_DATA_HOME` and `$XDG_DATA_DIRS` (the user's first, a file name seen once), for the types in their `MimeType`, when their `TryExec` and program exist. The command's `%i` (path), `%u` (URI), `%o` (output file, in a temporary folder) and `%s` (128) are filled in; it is run without a shell, in its own process group, with no input and no output kept. The result is scaled to 128, written to the shared cache like any other, and the temporary folder removed.
+
+Only two thumbnailers run at once, in a pool of their own (so slow ones never take the threads the image thumbnails need). Each has 15 seconds, then its process group is killed and the file counts as failed. A file above 4 GiB is not handed to one. A failure of the program (a non-zero exit, no output, an output that is not an image) is remembered; a file nothing could be tried on is not.
+
+Not done: `QtMultimedia` for video, and KDE's thumbnail plugins through KIO: without `ffmpegthumbnailer` or another thumbnailer installed, only what Dolphin has put in the cache shows for video. Remote locations and the large (256 px) size are still not thumbnailed.
 
 ### Theme (`integration/theme.py`, `integration/style.py`)
 
@@ -568,7 +581,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Remote locations through GVFS: #17.
 - Search: #18.
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19.
-- Video and PDF thumbnails: #20.
+- Video and PDF thumbnails: #20, built; see below.
 
 Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and tabs (#22). The split view (#12) and tabs are built; see below.
 

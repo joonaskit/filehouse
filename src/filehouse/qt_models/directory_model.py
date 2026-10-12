@@ -384,7 +384,7 @@ class DirectoryModel(QAbstractTableModel):
         if known is not None and known[0] == info.modified:
             return known[1]
         path = self._location.get_path()
-        if path is None or not thumbnails.can_thumbnail(info.content_type):
+        if path is None or info.is_dir:
             return None
         # Marked as "nothing to show" until the answer comes, so it is asked for once
         self._thumbnails[info.name] = (info.modified, None)
@@ -394,6 +394,7 @@ class DirectoryModel(QAbstractTableModel):
             f"{path}/{info.name}",
             info.modified,
             info.size,
+            info.content_type,
         )
         return None
 
