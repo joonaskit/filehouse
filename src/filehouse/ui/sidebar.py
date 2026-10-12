@@ -20,6 +20,8 @@ from filehouse.ui import menus
 _EntryRole = Qt.ItemDataRole.UserRole
 # How full a drive is: a `Usage`, or nothing when that isn't known
 _UsageRole = Qt.ItemDataRole.UserRole + 1
+# Whether an entry is a drive, which has its own colour
+_DeviceRole = Qt.ItemDataRole.UserRole + 2
 # A drive this full shows its bar in the warning colour
 _NEARLY_FULL = 0.9
 
@@ -252,6 +254,7 @@ class Sidebar(QListWidget):
     def _add(self, entry, is_device):
         item = QListWidgetItem(_tile(entry, is_device), "" if self._rail else entry.name)
         item.setData(_EntryRole, entry)
+        item.setData(_DeviceRole, is_device)
         if entry.location is None:
             item.setToolTip(
                 f"{entry.name}: not opened yet. Click to open it."
@@ -263,6 +266,14 @@ class Sidebar(QListWidget):
         # Set here: the stylesheet's padding does not make these rows taller
         item.setSizeHint(QSize(0, style.px(_ROW_HEIGHT)))
         self.addItem(item)
+
+    def retheme(self):
+        """The icons again, in the colours of the theme now in use."""
+        for row in range(self.count()):
+            item = self.item(row)
+            entry = item.data(_EntryRole)
+            if entry is not None:
+                item.setIcon(_tile(entry, item.data(_DeviceRole)))
 
     def _on_clicked(self, item):
         entry = item.data(_EntryRole)

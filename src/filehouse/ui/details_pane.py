@@ -85,6 +85,8 @@ class DetailsPane(QFrame):
         self._reading = None
         self._measurement = None
         self._is_folder = False
+        self._icon_type = None  # the content type of the icon on show
+        self.close_button = None
 
         self._icon = QLabel()
         self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -275,6 +277,7 @@ class DetailsPane(QFrame):
 
     def _show_nothing(self):
         self._icon.clear()
+        self._icon_type = None
         self.name.clear()
         self.name.setToolTip("")
         self.kind.clear()
@@ -315,7 +318,15 @@ class DetailsPane(QFrame):
 
     # The parts
 
+    def retheme(self):
+        """The icons again, in the colours of the theme now in use."""
+        if self.close_button is not None:
+            self.close_button.setIcon(style.icon("window-close-symbolic", "window-close"))
+        if self._icon_type is not None:
+            self._set_icon(self._icon_type)
+
     def _set_icon(self, content_type):
+        self._icon_type = content_type
         side = style.px(_COMPACT_ICON if self._compact else _ICON)
         self._icon.setPixmap(icon_for_content_type(content_type).pixmap(QSize(side, side)))
 

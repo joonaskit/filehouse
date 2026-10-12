@@ -6,7 +6,7 @@ shapes: rounded groups, cards, rows and menus.
 
 from functools import cache
 
-from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtCore import QObject, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -39,6 +39,15 @@ _TILE_ALPHA = 0.20
 _theme = theme_reader.merge(theme_reader.DEFAULTS, {})
 # Goes up each time a theme is applied
 generation = 0
+
+
+class _Themed(QObject):
+    # A theme was applied while the app runs: whatever holds an icon or a colour
+    # made from the old one has to make it again
+    changed = Signal()
+
+
+themed = _Themed()
 
 
 def px(size):
@@ -107,15 +116,27 @@ def _rgba(colour, alpha):
     return f"rgba({colour.red()}, {colour.green()}, {colour.blue()}, {alpha})"
 
 
-def apply(app, theme):
-    """Style the whole application. Call before creating any window."""
+def apply(app, theme, live=False):
+    """Style the whole application. Call before creating any window.
+
+    With `live`, the app is already running with an earlier theme: colours and corner
+    radii change at once, but the scales and the fonts stay as they are, because sizes
+    and fonts are fixed in the widgets when they are made. Returns whether anything
+    changed; `themed.changed` is emitted when it did."""
     global _theme, generation
+    if live:
+        theme = {**theme, "scale": _theme["scale"], "fonts": _theme["fonts"]}
+        if theme == _theme:
+            return False
     _theme = theme
     generation += 1
     app.setPalette(_palette())
     app.setFont(_font())
     app.setStyleSheet(_stylesheet())
     app.styleHints().setShowShortcutsInContextMenus(True)
+    if live:
+        themed.changed.emit()
+    return True
 
 
 # Icons

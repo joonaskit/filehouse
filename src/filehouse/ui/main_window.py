@@ -117,6 +117,7 @@ class MainWindow(QMainWindow):
         # `_pane` its active pane: the toolbar, the title, the details, the status bar
         # and every action are about it
         self._view_mode = settings.view_mode()
+        self._action_icons = []  # (action, icon name, colour) to make them again
         self._unsplit_sizes = None
         self._tab_bar = TabBar()
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
@@ -213,6 +214,7 @@ class MainWindow(QMainWindow):
         self.statusBar().setSizeGripEnabled(False)
 
         QApplication.clipboard().dataChanged.connect(self._update_state)
+        style.themed.changed.connect(self._retheme)
 
         self.set_view_mode(self._view_mode, remember=False)
         self.navigate(location, select=select)
@@ -228,6 +230,7 @@ class MainWindow(QMainWindow):
             item.setShortcuts(shortcuts)
             item.triggered.connect(slot)
             self.addAction(item)
+            self._action_icons.append((item, icon, colour))
             return item
 
         # Backspace goes back, as in Dolphin
@@ -380,6 +383,17 @@ class MainWindow(QMainWindow):
         self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
         self._toolbar_menu.setVisible(False)
         self.addToolBar(toolbar)
+
+    def _retheme(self):
+        """The theme changed while the window is open: icons are drawn in its colours."""
+        for item, icon, colour in self._action_icons:
+            item.setIcon(style.icon(icon + "-symbolic", icon, colour=colour))
+        for index in range(self._tab_bar.count()):
+            button = self._tab_bar.tabButton(index, QTabBar.ButtonPosition.RightSide)
+            button.setIcon(style.icon("window-close-symbolic", "window-close"))
+        self._sidebar.retheme()
+        self._details.retheme()
+        self._sheet_details.retheme()
 
     def _button_for(self, action):
         """The toolbar or action bar button of an action."""

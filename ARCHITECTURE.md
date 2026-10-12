@@ -126,6 +126,7 @@ filehouse/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
+│   │   ├── theme_watcher.py     follows the theme file while the app runs
 │   │   ├── notifications.py     a desktop notification for a job that ends with no window visible
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
@@ -297,7 +298,10 @@ For a job that ends while the process has no window to show it (the user chose "
   - Sizes (row height, icon sizes, paddings) defined in unscaled pixels and multiplied by `scale.ui`.
   - A short stylesheet for corner radii (`radius.small` for buttons and rows, `radius.medium` for panels) and the operations panel. Keep it short: a large stylesheet fights the platform style.
   - `danger` and `success` for failed and finished jobs.
-- Read once at startup in v1. Later: watch the **directory** with `QFileSystemWatcher` (the shell replaces the file atomically) and re-apply live.
+- **Live updates (#13).** `integration/theme_watcher.py` watches the theme's directory with `QFileSystemWatcher` (the shell replaces the file atomically, which a watch on the file alone does not survive), and the file too, for a change in place. Before the shell has ever run it watches the directory above, to see the directory come. A change is read 200 ms after the last event, and `style.apply(app, theme, live=True)` runs again.
+  - **Applies at once:** colours (the scheme, accent, palette, layers) and the corner radii. The palette and the stylesheet are set again; the icons are drawn in colours, so what holds one (the actions, the tab close buttons, the sidebar, the details pane) makes it again when `style.themed.changed` is emitted. The file list asks the model for its icons each time it paints, and the model's icons are cached per `style.generation`.
+  - **Applies at the next start:** `scale.ui`, `scale.font` and the font families. Sizes and fonts are set in the widgets when they are made (`setFixedSize`, margins, row heights, `QFont`), so a live apply keeps the scales and fonts of the running theme; a window with half its parts at the new scale would look worse than the old scale. This is the answer to the issue's open question.
+  - A theme file that is gone or cannot be read leaves the look as it is; the defaults are for starting without one. The two job titles painted in the failure colour (`job_status`, `operations_panel`) are set again with the next update of the job.
 - Window decorations stay server-side (KWin draws them). Matching the frame to the shell is tracked in shell issue #56.
 
 ### Drag and drop and clipboard
@@ -556,7 +560,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 
 Each has an issue, where what it takes and what is still to be decided is written down.
 
-- Live theme updates (file watch on the theme directory): #13.
+- Live theme updates (file watch on the theme directory): #13, built; see the theme section.
 - Custom title bar: a decision of its own, #9 (and #21 comment in the shell repo).
 - Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14.
 - A notification for a job that finished while the window was hidden (shell #24, point 7): #15, built; see below.
