@@ -115,6 +115,7 @@ filehouse/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
 │   │   ├── icons.py             icon tile per kind of file
 │   │   ├── dates.py             "Today, 10:42", "Yesterday", a weekday, a date
+│   │   ├── previews.py          loads a picture for the preview window on a worker thread
 │   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
 │   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
 │   │   ├── measure.py           folder sizes on a worker thread
@@ -132,6 +133,7 @@ filehouse/
 │   └── ui/
 │       ├── main_window.py
 │       ├── pane.py              one folder: model, sort proxy, list, history, selection
+│       ├── preview.py           the window Space opens: a larger look at the selection
 │       ├── tab.py               one or two panes and the active one
 │       ├── tab_bar.py           the row of tabs, a drop target
 │       ├── sidebar.py           places and mounted volumes
@@ -288,6 +290,15 @@ For a job that ends while the process has no window to show it (the user chose "
 - **Flushing.** The process ends as soon as the last job has, so `app.py` flushes the notifier's connection on `aboutToQuit`; a notification sent in the same moment still gets to the bus.
 - **Not done:** an action on the notification ("Open folder"), and keeping the process alive after a failure to bring a window back when it is clicked. The process is gone by then, and a failure names the file and the error; running the operation again is the way back.
 - Whether to notify at all, and the 10 seconds, are for the settings panel if there is one (#23).
+
+### Preview (`ui/preview.py`, `qt_models/previews.py`)
+
+Space opens a window with a larger look at the selection, as Quick Look does on the Mac; Space or Escape close it, and "Preview" is in the menu of a file. It is a tool window of the main window that follows the selection: the arrow keys, Home, End and Page Up/Down pressed in it are passed on to the list, so the selection moves and the preview shows what is selected now. With nothing selected it closes.
+
+- **Pictures** (what `QImageReader` reads, so PDFs too where Qt has its PDF plugin, which draws the first page) are loaded on a worker thread, upright, to at most 4096 pixels on the long side (scaled while decoding) and 256 MB of file. Shown as large as fits and never distorted; a small one is enlarged at most twice. The line under it says the type, the size, when it changed and the picture's size.
+- **Anything else** shows the type's tile with "No preview for this type"; a folder says "Folder"; a selection of several says how many; a file that is not on this computer, or a picture that can't be read, says so.
+- **The same file is not loaded twice** (by path, date and size), because the window is asked again every time the list's state changes.
+- Opens at 80 % of the main window's size. Not done: text and other types, video, zooming, and a full-screen mode.
 
 ### Thumbnails for any type (`qt_models/thumbnails.py`, #20)
 
