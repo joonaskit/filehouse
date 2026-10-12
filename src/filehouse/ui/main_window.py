@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
+    QTabBar,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -42,6 +44,8 @@ from filehouse.ui.pane import Pane
 from filehouse.ui.path_bar import PathBar
 from filehouse.ui.sheet import Sheet
 from filehouse.ui.sidebar import Sidebar
+from filehouse.ui.tab import Tab
+from filehouse.ui.tab_bar import TabBar
 
 _MESSAGE_MS = 8000
 _DETAILS_MS = 200
@@ -109,13 +113,19 @@ class MainWindow(QMainWindow):
         self._jobs = jobs
         self._jobs.idle.connect(self._on_jobs_idle)
 
-        # One folder, or two side by side. `_pane` is the active one: the toolbar, the
-        # title, the details, the status bar and every action are about it
-        self._panes = []
-        self._panes_splitter = QSplitter()
-        self._panes_splitter.setHandleWidth(style.px(8))
+        # Tabs, each with a folder or two side by side. `_tab` is the shown one and
+        # `_pane` its active pane: the toolbar, the title, the details, the status bar
+        # and every action are about it
+        self._view_mode = settings.view_mode()
         self._unsplit_sizes = None
-        self._pane = self._add_pane()
+        self._tab_bar = TabBar()
+        self._tab_bar.currentChanged.connect(self._on_tab_changed)
+        self._tab_bar.tabMoved.connect(self._on_tab_moved)
+        self._tab_bar.dropped.connect(self._on_tab_dropped)
+        self._tab_bar.setVisible(False)
+        self._stack = QStackedWidget()
+        self._tabs = []
+        self._tab = self._add_tab()
 
         self._volumes = Volumes(self)
         self._volumes.removed.connect(self._on_volume_removed)
@@ -144,9 +154,16 @@ class MainWindow(QMainWindow):
         self._create_actions()
         self._sheet_details.close_requested.connect(lambda: self._show_details.setChecked(False))
 
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
+        center_layout.addWidget(self._tab_bar)
+        center_layout.addWidget(self._stack, 1)
+
         splitter = self._splitter = QSplitter()
         splitter.addWidget(self._sidebar)
-        splitter.addWidget(self._panes_splitter)
+        splitter.addWidget(center)
         splitter.addWidget(self._details)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([style.px(200), style.px(620), style.px(250)])
@@ -197,8 +214,10 @@ class MainWindow(QMainWindow):
 
         QApplication.clipboard().dataChanged.connect(self._update_state)
 
-        self.set_view_mode(settings.view_mode(), remember=False)
+        self.set_view_mode(self._view_mode, remember=False)
         self.navigate(location, select=select)
+        if settings.split() and self.width() >= style.px(NARROW_BELOW):
+            self.set_split(True, remember=False)
         if message:
             self.statusBar().showMessage(message, _MESSAGE_MS)
         self._view.setFocus()
@@ -222,7 +241,21 @@ class MainWindow(QMainWindow):
         self._up = action("Up", "go-up", [QKeySequence("Alt+Up")], self.go_up)
         action("Edit location", "edit-entry", [QKeySequence("Ctrl+L")], self._path_bar.edit)
         action("Reload", "view-refresh", [QKeySequence("F5")], self.reload)
-        action("Close", "window-close", [QKeySequence("Ctrl+W")], self.close)
+        # The tab, or the window when it is the last tab
+        action("Close", "window-close", [QKeySequence("Ctrl+W")], self.close_current)
+        self._new_tab = action("New tab", "tab-new", [QKeySequence("Ctrl+T")], self.new_tab)
+        action(
+            "Next tab",
+            "go-next",
+            [QKeySequence("Ctrl+Tab"), QKeySequence("Ctrl+PgDown")],
+            lambda: self._step_tab(1),
+        )
+        action(
+            "Previous tab",
+            "go-previous",
+            [QKeySequence("Ctrl+Shift+Tab"), QKeySequence("Ctrl+PgUp")],
+            lambda: self._step_tab(-1),
+        )
         self._hidden = action(
             "Show hidden files",
             "view-hidden",
@@ -396,10 +429,25 @@ class MainWindow(QMainWindow):
         return self._pane.error
 
     @property
-    def is_split(self):
-        return len(self._panes) > 1
+    def _panes(self):
+        return self._tab.panes
 
-    def _add_pane(self):
+    @property
+    def _pane(self):
+        return self._tab.active
+
+    @_pane.setter
+    def _pane(self, pane):
+        self._tab.active = pane
+
+    @property
+    def is_split(self):
+        return self._tab.is_split
+
+    def _all_panes(self):
+        return [pane for tab in self._tabs for pane in tab.panes]
+
+    def _add_pane(self, tab):
         pane = Pane(settings.show_hidden(), self)
         view = pane.view
 
@@ -419,11 +467,13 @@ class MainWindow(QMainWindow):
         view.item_activated.connect(for_this_pane(self._on_item_activated))
         view.context_menu_requested.connect(for_this_pane(self._on_context_menu))
         view.dropped.connect(for_this_pane(self._on_dropped))
-        if self._panes:
-            view.set_mode(self._view.mode)
+        view.open_in_tab.connect(for_this_pane(self._open_in_new_tab))
+        view.set_mode(self._view_mode)
         view.set_compact(self._narrow)
-        self._panes.append(pane)
-        self._panes_splitter.addWidget(view)
+        if tab.active is None:
+            tab.active = pane
+        tab.panes.append(pane)
+        tab.splitter.addWidget(view)
         return pane
 
     def _other_pane(self):
@@ -436,9 +486,10 @@ class MainWindow(QMainWindow):
         self._mark_active()
         self._on_location_changed()
 
-    def _mark_active(self):
-        for pane in self._panes:
-            pane.view.set_split(self.is_split, pane is self._pane)
+    def _mark_active(self, tab=None):
+        tab = tab or self._tab
+        for pane in tab.panes:
+            pane.view.set_split(tab.is_split, pane is tab.active)
 
     def _on_pane_changed(self, pane):
         if pane is self._pane:
@@ -447,50 +498,156 @@ class MainWindow(QMainWindow):
             pane.sync()
 
     def _on_pane_moved(self, pane):
+        self._update_tab_titles()
         if pane is self._pane:
             self._on_location_changed()
 
-    def set_split(self, on=True):
+    def set_split(self, on=True, remember=True):
         """Show two folders side by side, or one again: the active pane stays."""
         if on == self.is_split or (on and self._narrow):
             self._split_view.setChecked(self.is_split)
             return
+        if remember:
+            settings.set_split(on)
         if on:
-            self._unsplit_sizes = self._splitter.sizes()
-            pane = self._add_pane()
+            pane = self._add_pane(self._tab)
             pane.navigate(self._pane.location)
-            half = self._panes_splitter.width() // 2
-            self._panes_splitter.setSizes([half, half])
+            half = self._tab.splitter.width() // 2
+            self._tab.splitter.setSizes([half, half])
         else:
-            gone = self._other_pane()
-            self._panes.remove(gone)
-            gone.view.setParent(None)
-            gone.view.deleteLater()
-            gone.close()
-            gone.deleteLater()
+            self._remove_other_pane(self._tab)
         self._mark_active()
         self._split_view.setChecked(on)
-        # No room for the details beside two lists
-        self._details.setVisible(self._details_wanted())
-        if not on and self._unsplit_sizes and not self._narrow:
-            self._splitter.setSizes(self._unsplit_sizes)
+        self._sync_details()
         self._update_state()
         self._view.setFocus()
+
+    @staticmethod
+    def _remove_other_pane(tab):
+        gone = next(pane for pane in tab.panes if pane is not tab.active)
+        tab.panes.remove(gone)
+        gone.view.setParent(None)
+        gone.view.deleteLater()
+        gone.close()
+        gone.deleteLater()
 
     def _details_wanted(self):
         return not self._narrow and not self.is_split
 
+    def _sync_details(self):
+        """No room for the details beside two lists: they come and go with the split."""
+        wanted = self._details_wanted()
+        if wanted == (not self._details.isHidden()):
+            return
+        if wanted:
+            self._details.setVisible(True)
+            if self._unsplit_sizes:
+                self._splitter.setSizes(self._unsplit_sizes)
+        else:
+            self._unsplit_sizes = self._splitter.sizes()
+            self._details.setVisible(False)
+
+    # Tabs
+
+    def _add_tab(self):
+        """A tab with one pane, at the end of the bar. The first one is the window's."""
+        tab = Tab()
+        self._tabs.append(tab)
+        self._add_pane(tab)
+        self._stack.addWidget(tab.splitter)
+        self._tab_bar.blockSignals(True)
+        index = self._tab_bar.addTab("")
+        self._tab_bar.blockSignals(False)
+        close = QToolButton()
+        close.setIcon(style.icon("window-close-symbolic", "window-close"))
+        close.setIconSize(QSize(style.px(12), style.px(12)))
+        close.setFixedSize(style.px(20), style.px(20))
+        close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        close.setToolTip("Close tab")
+        close.clicked.connect(lambda: self.close_tab(self._tabs.index(tab)))
+        self._tab_bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, close)
+        if len(self._tabs) == 1:
+            self._stack.setCurrentWidget(tab.splitter)
+        self._tab_bar.setVisible(len(self._tabs) > 1)
+        return tab
+
+    def new_tab(self, location=None, activate=True):
+        """Open a folder in a tab of its own, by default this one's folder."""
+        location = location or self._pane.location
+        tab = self._add_tab()
+        tab.active.navigate(location)
+        self._update_tab_titles()
+        if activate:
+            self._tab_bar.setCurrentIndex(self._tabs.index(tab))
+        return tab
+
+    def _open_in_new_tab(self, info):
+        """A folder of the list, in a tab behind this one."""
+        self.new_tab(locations.child(self._location, info.name), activate=False)
+
+    def close_tab(self, index):
+        if len(self._tabs) < 2 or not 0 <= index < len(self._tabs):
+            return
+        tab = self._tabs.pop(index)
+        self._tab_bar.removeTab(index)
+        self._stack.removeWidget(tab.splitter)
+        for pane in tab.panes:
+            pane.close()
+            pane.deleteLater()
+        tab.splitter.deleteLater()
+        self._tab_bar.setVisible(len(self._tabs) > 1)
+        if tab is self._tab:
+            # The bar has picked the next one: show it
+            self._on_tab_changed(self._tab_bar.currentIndex())
+
+    def close_current(self):
+        if len(self._tabs) > 1:
+            self.close_tab(self._tabs.index(self._tab))
+        else:
+            self.close()
+
+    def _step_tab(self, step):
+        count = len(self._tabs)
+        if count > 1:
+            self._tab_bar.setCurrentIndex((self._tab_bar.currentIndex() + step) % count)
+
+    def _on_tab_changed(self, index):
+        if not 0 <= index < len(self._tabs) or self._tabs[index] is self._tab:
+            return
+        self._tab = self._tabs[index]
+        self._stack.setCurrentWidget(self._tab.splitter)
+        self._mark_active()
+        self._split_view.setChecked(self.is_split)
+        self._sync_details()
+        self._on_location_changed()
+        self._view.setFocus()
+
+    def _on_tab_moved(self, source, target):
+        self._tabs.insert(target, self._tabs.pop(source))
+
+    def _on_tab_dropped(self, index, uris, modifiers, position):
+        """Files were dropped on a tab: into the folder it shows."""
+        self._drop_on(self._tabs[index].active, uris, None, modifiers, position)
+
+    def _update_tab_titles(self):
+        for index, tab in enumerate(self._tabs):
+            location = tab.active.location
+            if location is not None:
+                self._tab_bar.setTabText(index, locations.display_name(location))
+                self._tab_bar.setTabToolTip(index, locations.display_path(location))
+
     # What is remembered
 
     def set_view_mode(self, mode, remember=True):
-        for pane in self._panes:
+        self._view_mode = mode
+        for pane in self._all_panes():
             pane.view.set_mode(mode)
         (self._icons_mode if mode == ICONS else self._details_mode).setChecked(True)
         if remember:
             settings.set_view_mode(mode)
 
     def _set_show_hidden(self, show):
-        for pane in self._panes:
+        for pane in self._all_panes():
             pane.proxy.set_show_hidden(show)
         settings.set_show_hidden(show)
 
@@ -526,7 +683,7 @@ class MainWindow(QMainWindow):
         """A drive went away. A window that was looking at it has nothing left to show."""
         gone = [
             pane
-            for pane in self._panes
+            for pane in self._all_panes()
             if locations.same(pane.location, root) or locations.inside(pane.location, root)
         ]
         for pane in gone:
@@ -626,9 +783,14 @@ class MainWindow(QMainWindow):
     def _set_narrow(self, narrow):
         if narrow == self._narrow:
             return
-        if narrow and self.is_split:
-            # No room for two lists: the active one stays
-            self.set_split(False)
+        if narrow:
+            # No room for two lists: the active one of each tab stays
+            for tab in self._tabs:
+                if tab is self._tab:
+                    self.set_split(False, remember=False)
+                elif tab.is_split:
+                    self._remove_other_pane(tab)
+                    self._mark_active(tab)
         self._narrow = narrow
         if narrow:
             self._wide_sizes = self._splitter.sizes()
@@ -637,7 +799,7 @@ class MainWindow(QMainWindow):
         self._details.setVisible(self._details_wanted())
         self._sidebar.set_rail(narrow)
         self._path_bar.set_short(narrow)
-        for pane in self._panes:
+        for pane in self._all_panes():
             pane.view.set_compact(narrow)
         self._split_view.setEnabled(not narrow)
         self._button_for(self._split_view).setVisible(not narrow)
@@ -740,6 +902,11 @@ class MainWindow(QMainWindow):
         )
         if info.is_dir:
             folder = target
+            menu.addAction(
+                style.icon("tab-new-symbolic", "tab-new"),
+                "Open in new tab",
+                lambda: self._open_in_new_tab(info),
+            )
         else:
             apps = desktop.apps_for_type(info.content_type)
             if apps:
@@ -841,6 +1008,7 @@ class MainWindow(QMainWindow):
         view.addActions([self._details_mode, self._icons_mode])
         view.addSeparator()
         view.addAction(self._split_view)
+        view.addAction(self._new_tab)
         menu.addMenu(view)
 
     # File operations
@@ -1071,7 +1239,10 @@ class MainWindow(QMainWindow):
 
     def _on_dropped(self, uris, folder_info, modifiers, position):
         """Files were dropped on the list, or on a folder in it."""
-        target = self._location
+        return self._drop_on(self._pane, uris, folder_info, modifiers, position)
+
+    def _drop_on(self, pane, uris, folder_info, modifiers, position):
+        target = pane.location
         if folder_info is not None:
             target = locations.child(target, folder_info.name)
         sources = [locations.from_uri(uri) for uri in uris]
@@ -1080,7 +1251,7 @@ class MainWindow(QMainWindow):
             return None
         if locations.in_trash(target):
             # Dropped on the trash: that is where they go. Not into a trashed folder
-            if not self._at_trash() or folder_info is not None:
+            if not pane.at_trash or folder_info is not None:
                 return None
             sources = [source for source in sources if not locations.in_trash(source)]
             return self._start(JobKind.TRASH, sources) if sources else None
@@ -1136,7 +1307,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
             return
-        for pane in self._panes:
+        for pane in self._all_panes():
             pane.close()
         if self.isVisible():
             settings.set_window_size(self.size())
@@ -1153,11 +1324,11 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             # Folders may have been filled or emptied by another app meanwhile
-            for pane in self._panes:
+            for pane in self._all_panes():
                 pane.model.recount()
 
     def _on_jobs_idle(self):
-        for pane in self._panes:
+        for pane in self._all_panes():
             pane.model.recount()
         # What a job copied or deleted shows in how full the drives are
         self._volumes.refresh_usage()

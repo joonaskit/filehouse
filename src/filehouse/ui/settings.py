@@ -1,4 +1,4 @@
-"""What the app remembers between runs: window size, view mode and hidden files."""
+"""What the app remembers between runs: window size, view mode, hidden files and the split."""
 
 from PySide6.QtCore import QSettings, QSize
 
@@ -36,6 +36,14 @@ def show_hidden():
 
 def set_show_hidden(show):
     _store().setValue("view/show_hidden", bool(show))
+
+
+def split():
+    return _store().value("view/split", False, type=bool)
+
+
+def set_split(split):
+    _store().setValue("view/split", bool(split))
 
 
 def clear():

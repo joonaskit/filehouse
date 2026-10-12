@@ -22,7 +22,18 @@ class _TakesDrops:
     """For an item view: takes drops of files. What a drop does is decided by the window.
 
     The view declares `dropped`: URIs, the FileInfo of the folder dropped on (None for
-    the open folder), the keyboard modifiers and a global position, and `focused`."""
+    the open folder), the keyboard modifiers and a global position, `focused`, and
+    `open_in_tab`: the FileInfo of a folder that was middle-clicked."""
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            index = self.indexAt(event.position().toPoint())
+            info = index.data(InfoRole) if index.isValid() else None
+            if info is not None and info.is_dir:
+                self.open_in_tab.emit(info)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def focusInEvent(self, event):
         super().focusInEvent(event)
@@ -72,11 +83,13 @@ class _Rows(QStyledItemDelegate):
 class _Tree(_TakesDrops, QTreeView):
     dropped = Signal(list, object, object, QPoint)
     focused = Signal()
+    open_in_tab = Signal(object)
 
 
 class _Grid(_TakesDrops, QListView):
     dropped = Signal(list, object, object, QPoint)
     focused = Signal()
+    open_in_tab = Signal(object)
 
 
 class FolderView(QWidget):
@@ -86,6 +99,7 @@ class FolderView(QWidget):
     context_menu_requested = Signal(object, QPoint)
     # The list, or the empty folder in its place, was clicked or given the keyboard
     focused = Signal()
+    open_in_tab = Signal(object)  # FileInfo of a folder
 
     def __init__(self, proxy, parent=None):
         super().__init__(parent)
@@ -141,6 +155,7 @@ class FolderView(QWidget):
             view.setDefaultDropAction(Qt.DropAction.MoveAction)
             view.dropped.connect(self.dropped)
             view.focused.connect(self.focused)
+            view.open_in_tab.connect(self.open_in_tab)
             view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             view.customContextMenuRequested.connect(
                 lambda position, view=view: self._on_context_menu(view, position)

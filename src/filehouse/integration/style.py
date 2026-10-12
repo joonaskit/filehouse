@@ -303,6 +303,18 @@ def _stylesheet():
         }}
         #pane[split="true"][active="true"] {{ border-color: {colors["accent"]}; }}
 
+        QTabBar {{ background: transparent; }}
+        QTabBar::tab {{
+            padding: {px(6)}px {px(12)}px; margin: 0 {px(4)}px {px(4)}px 0;
+            border: 1px solid transparent; background: transparent;
+            border-radius: {radius_within("medium", CONTROL_HEIGHT)}px;
+            color: {colors["textSecondary"]};
+        }}
+        QTabBar::tab:hover {{ background: {hover}; }}
+        QTabBar::tab:selected {{
+            background: {card}; border-color: {card_border}; color: {colors["textPrimary"]};
+        }}
+
         #sidebar {{
             padding: {px(8)}px; background: {card}; border: 1px solid {card_border};
             border-radius: {large}px;

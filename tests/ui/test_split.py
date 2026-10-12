@@ -251,3 +251,35 @@ def test_a_drive_that_goes_away_leaves_neither_pane_on_it(qtbot, tree, window):
     window._on_volume_removed(gfile(tree))
 
     qtbot.waitUntil(lambda: path(first) == path(second) != str(tree / "left"), timeout=TIMEOUT)
+
+
+def test_the_split_is_remembered_for_the_next_window(qtbot, tree, jobs):
+    first = MainWindow(gfile(tree / "left"), jobs=jobs)
+    qtbot.addWidget(first)
+    first.resize(WIDE, 600)
+    first.show()
+    first.set_split(True)
+    assert settings.split()
+
+    second = MainWindow(gfile(tree / "right"), jobs=jobs)
+    qtbot.addWidget(second)
+    second.resize(WIDE, 600)
+    second.show()
+
+    assert second.is_split
+    assert second._split_view.isChecked()
+    assert [path(pane) for pane in second._panes] == [str(tree / "right")] * 2
+
+    second.set_split(False)
+    assert not settings.split()
+
+
+def test_a_narrow_window_neither_splits_nor_forgets_the_split(qtbot, window):
+    window.set_split(True)
+
+    window.resize(NARROW, 600)
+    qtbot.waitUntil(lambda: window.is_narrow, timeout=TIMEOUT)
+
+    assert not window.is_split
+    # Not the user's choice: the next wide window is split again
+    assert settings.split()

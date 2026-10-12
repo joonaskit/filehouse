@@ -130,6 +130,8 @@ filehouse/
 │   └── ui/
 │       ├── main_window.py
 │       ├── pane.py              one folder: model, sort proxy, list, history, selection
+│       ├── tab.py               one or two panes and the active one
+│       ├── tab_bar.py           the row of tabs, a drop target
 │       ├── sidebar.py           places and mounted volumes
 │       ├── path_bar.py          breadcrumbs, editable on click or Ctrl+L
 │       ├── folder_view.py       list and grid modes, delegates
@@ -546,7 +548,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19.
 - Video and PDF thumbnails: #20.
 
-Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and tabs (#22). The split view (#12) is built; see below.
+Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and tabs (#22). The split view (#12) and tabs are built; see below.
 
 ### Split view (#12)
 
@@ -560,7 +562,18 @@ Decided, from the issue's open questions:
 - **Tabs:** out of scope, #22. A tab is meant to be a `Pane` too.
 - **Shared between the panes:** view mode and hidden files (both are settings of the window). Sort order and folder are each pane's own. A new second pane opens in the active pane's folder.
 - **Copy and Move to the other pane:** Shift+F5 and Shift+F6 (F5 is Reload), also in the item's context menu while the split is on. Disabled when either pane is in the trash.
-- **Not done:** remembering the split between runs.
+- **Remembered:** whether the split is on (`view/split`), for every new window. The second pane opens in the first pane's folder; its own folder is not remembered. Closing the split because the window got narrow does not forget it.
+
+### Tabs (#22)
+
+Ctrl+T, "New tab" in the View menu, or a middle click on a folder (and "Open in new tab" in its menu) opens a folder in a tab. A `Tab` (`ui/tab.py`) holds one pane or two with its active one, so each tab has its own split; the window holds a list of them and shows one at a time (`_tab`, and `_pane` as its active pane). Everything that follows the active pane follows the shown tab.
+
+- **Keys:** Ctrl+W closes the tab, or the window when it is the last; Ctrl+Tab and Ctrl+PageDown go to the next tab, Ctrl+Shift+Tab and Ctrl+PageUp to the previous. A new tab from Ctrl+T or the menu is shown at once; one from a middle click opens behind.
+- **The bar** is shown only with two or more tabs, also in the narrow layout (it scrolls, and the tabs elide). Tabs can be dragged to reorder. The title is the folder's name, the tooltip its path.
+- **Dropping on a tab** puts the files in that tab's active folder, by the rules of any drop, without switching to it.
+- **Shared by all tabs:** view mode and hidden files. Sort order, folder and history are each pane's own.
+- **Not remembered between runs:** the open tabs. A file manager that brings back the tabs of a window the user closed surprises more than it helps.
+- **Narrowing** the window closes the split of every tab, as for one tab. A drive that goes away takes every pane that was on it to home.
 
 ### What phase 3 added to the plan above
 
