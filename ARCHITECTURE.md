@@ -126,6 +126,7 @@ filehouse/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
+│   │   ├── notifications.py     a desktop notification for a job that ends with no window visible
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
 │       ├── main_window.py
@@ -269,6 +270,23 @@ Rules from the API spec that the client must follow:
 - **Errors from the island** are logged and never stop a job. `NotFound` means the activity is gone (dismissed or timed out): stop updating it. `LimitExceeded` means too many failed activities are still showing: dismiss the oldest failed one this app owns from the island (it stays in the app's own panel) and try once more. `RateLimited` means drop this update; the next one carries newer values anyway. A refused `Show`, and a refused final state, are tried again a few times, because nothing newer will follow them.
 - **All D-Bus calls are asynchronous** and made from the UI thread, so a slow or hung island never blocks the app.
 - **Crashes need no code.** If the app dies, the island turns its running activities into failures because the connection closed. That is why every job must hold its activity under the app's long-lived connection, not a short-lived one.
+
+### Notifications (`integration/notifications.py`, #15)
+
+For a job that ends while the process has no window to show it (the user chose "Keep running" and closed the last one). `Notifier` calls `Notify` on `org.freedesktop.Notifications` asynchronously and is silent when there is no service; `NotificationReporter` observes `JobModel` and decides, holding no job logic. The island already shows jobs, and the shell's own rule is that activities are for work in progress and notifications for finished work that may have been missed, so the two are not both sent for the same thing:
+
+| Island | Job ends | Notification |
+| --- | --- | --- |
+| not running | done | yes, with the job's summary ("Copied 4 items to Pictures") |
+| not running | failed | yes, critical and without a timeout: the summary and the first error and how many more |
+| running | failed | no: the island keeps a failure until it is dismissed |
+| running | done | only if it ran 10 seconds or more (`LONG_JOB_SECONDS`), the island's "done" being gone after 4 |
+| either | cancelled, or never ran | no: the user knows |
+
+- **A window counts as there** when it is visible and not minimized. With one, the app's own status bar and panel say it.
+- **Flushing.** The process ends as soon as the last job has, so `app.py` flushes the notifier's connection on `aboutToQuit`; a notification sent in the same moment still gets to the bus.
+- **Not done:** an action on the notification ("Open folder"), and keeping the process alive after a failure to bring a window back when it is clicked. The process is gone by then, and a failure names the file and the error; running the operation again is the way back.
+- Whether to notify at all, and the 10 seconds, are for the settings panel if there is one (#23).
 
 ### Theme (`integration/theme.py`, `integration/style.py`)
 
@@ -541,7 +559,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Live theme updates (file watch on the theme directory): #13.
 - Custom title bar: a decision of its own, #9 (and #21 comment in the shell repo).
 - Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14.
-- A notification for a job that finished while the window was hidden (shell #24, point 7): #15.
+- A notification for a job that finished while the window was hidden (shell #24, point 7): #15, built; see below.
 - Undo for rename, move and trash: #16.
 - Remote locations through GVFS: #17.
 - Search: #18.

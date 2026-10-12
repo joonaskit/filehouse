@@ -12,6 +12,7 @@ from filehouse import APP_ID, __version__
 from filehouse.core import locations
 from filehouse.integration import style, theme
 from filehouse.integration.island import IslandClient, IslandReporter
+from filehouse.integration.notifications import NotificationReporter, Notifier
 from filehouse.qt_models.job_model import JobModel
 from filehouse.ui import clipboard
 from filehouse.ui.dialogs.prompter import Prompter
@@ -55,6 +56,16 @@ def main(argv=None):
 
     reporter.show_requested.connect(show_window_of)
     client.start()
+
+    # A job that ends with no window to show it: a notification, unless the island does
+    def window_visible():
+        return any(isValid(w) and w.isVisible() and not w.isMinimized() for w in windows)
+
+    notifier = Notifier()
+    NotificationReporter(jobs, notifier, window_visible, lambda: client.available, jobs)
+    notifier.start()
+    # The process may end the moment the last job has: what was sent must be on the bus
+    app.aboutToQuit.connect(notifier.flush)
     for target in targets:
         window = MainWindow(
             target.location, select=target.select, message=target.message, jobs=jobs
