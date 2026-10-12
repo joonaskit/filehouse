@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -42,6 +42,7 @@ from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
 from filehouse.ui.pane import Pane
 from filehouse.ui.path_bar import PathBar
+from filehouse.ui.preview import PreviewWindow
 from filehouse.ui.sheet import Sheet
 from filehouse.ui.sidebar import Sidebar
 from filehouse.ui.tab import Tab
@@ -117,6 +118,7 @@ class MainWindow(QMainWindow):
         # `_pane` its active pane: the toolbar, the title, the details, the status bar
         # and every action are about it
         self._view_mode = settings.view_mode()
+        self._action_icons = []  # (action, icon name, colour) to make them again
         self._unsplit_sizes = None
         self._tab_bar = TabBar()
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
@@ -144,6 +146,8 @@ class MainWindow(QMainWindow):
         # The same details for a narrow window: a sheet that slides up from the bottom
         self._sheet_details = DetailsPane(compact=True)
         self._sheet = Sheet(self._sheet_details)
+        self._preview = PreviewWindow(self)
+        self._preview.navigate.connect(self._on_preview_key)
         # The sheet takes the list's lower part: what is selected stays in view.
         # A moment later, once the list has its new height
         self._sheet.settled.connect(lambda: QTimer.singleShot(0, self._view.show_current))
@@ -213,6 +217,7 @@ class MainWindow(QMainWindow):
         self.statusBar().setSizeGripEnabled(False)
 
         QApplication.clipboard().dataChanged.connect(self._update_state)
+        style.themed.changed.connect(self._retheme)
 
         self.set_view_mode(self._view_mode, remember=False)
         self.navigate(location, select=select)
@@ -228,6 +233,7 @@ class MainWindow(QMainWindow):
             item.setShortcuts(shortcuts)
             item.triggered.connect(slot)
             self.addAction(item)
+            self._action_icons.append((item, icon, colour))
             return item
 
         # Backspace goes back, as in Dolphin
@@ -356,6 +362,10 @@ class MainWindow(QMainWindow):
             lambda: self._show_details.setChecked(False),
         )
         self._close_details.setEnabled(False)
+        # Space opens a larger look at the selection, and Space or Escape close it
+        self._preview_action = action(
+            "Preview", "view-preview", [QKeySequence("Space")], self.toggle_preview
+        )
         self._more = action("More…", "view-more-horizontal", [], self._show_selection_menu)
         self._permissions = action("Permissions", "object-locked", [], self._show_permissions_menu)
         self._folder_menu = action(
@@ -380,6 +390,17 @@ class MainWindow(QMainWindow):
         self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
         self._toolbar_menu.setVisible(False)
         self.addToolBar(toolbar)
+
+    def _retheme(self):
+        """The theme changed while the window is open: icons are drawn in its colours."""
+        for item, icon, colour in self._action_icons:
+            item.setIcon(style.icon(icon + "-symbolic", icon, colour=colour))
+        for index in range(self._tab_bar.count()):
+            button = self._tab_bar.tabButton(index, QTabBar.ButtonPosition.RightSide)
+            button.setIcon(style.icon("window-close-symbolic", "window-close"))
+        self._sidebar.retheme()
+        self._details.retheme()
+        self._sheet_details.retheme()
 
     def _button_for(self, action):
         """The toolbar or action bar button of an action."""
@@ -754,6 +775,35 @@ class MainWindow(QMainWindow):
         self._count_label.setText(text)
         self._update_narrow_parts(selected)
         self._update_details(infos)
+        self._preview_action.setEnabled(selected > 0)
+        self._update_preview(infos)
+
+    def toggle_preview(self):
+        """Open the preview of the selection, or close it."""
+        if self._preview.isVisible():
+            self._preview.hide()
+        elif self._view.selected_infos():
+            self._update_preview(self._view.selected_infos(), force=True)
+            self._preview.open_over(self)
+
+    def _update_preview(self, infos, force=False):
+        """Make an open preview show what is selected now."""
+        if not (self._preview.isVisible() or force):
+            return
+        if not infos:
+            self._preview.hide()
+        elif len(infos) > 1:
+            self._preview.show_message(f"{len(infos)} items selected")
+        else:
+            path = locations.local_path(locations.child(self._location, infos[0].name))
+            self._preview.show_item(infos[0], path)
+
+    def _on_preview_key(self, event):
+        """An arrow key pressed in the preview moves the selection of the list."""
+        target = self._view.focusProxy() or self._view
+        QApplication.sendEvent(
+            target, QKeyEvent(QEvent.Type.KeyPress, event.key(), event.modifiers())
+        )
 
     def _update_details_soon(self, *_args):
         if not self._details_timer.isActive():
@@ -921,6 +971,8 @@ class MainWindow(QMainWindow):
                     )
         self._add_open_in_manager(menu, folder)
         menu.addSeparator()
+        if not info.is_dir:
+            menu.addAction(self._preview_action)
         menu.addActions([self._cut, self._copy, self._paste])
         menu.addSeparator()
         menu.addActions([self._rename, self._move_to])
@@ -1307,6 +1359,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
             return
+        self._preview.hide()
         for pane in self._all_panes():
             pane.close()
         if self.isVisible():

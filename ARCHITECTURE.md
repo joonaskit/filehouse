@@ -45,7 +45,7 @@ These shape the operations engine more than anything else:
 | UI toolkit | **PySide6, Qt Widgets** | Mature item views (`QListView`, `QTreeView`) with selection, rubber band, keyboard navigation, drag and drop and good performance on large folders. Qt Quick would need most of that rebuilt by hand |
 | File system | **Gio (PyGObject)** | Copy and move with progress callbacks and a `Gio.Cancellable`, trash, MIME types, default apps and file monitors in one library, all of which the "use existing system libraries" rule in #24 asks for. GVFS locations (`trash://`, `sftp://`, `smb://`, MTP) come for free later |
 | D-Bus | **Gio.DBusConnection** | Exact control over variant types (`a{sv}`, `a(ss)`), which the activities API needs and QtDBus makes awkward from Python. It is already a dependency |
-| Thumbnails | Freedesktop thumbnail cache, plus `QImageReader` for images | Shares the cache with Dolphin. Video and PDF thumbnails come later |
+| Thumbnails | Freedesktop thumbnail cache, `QImageReader` for what Qt reads (images, and PDFs when Qt has its PDF plugin), the desktop's thumbnailers for the rest | Shares the cache with Dolphin, both ways |
 | Tests | pytest (core), pytest-qt (a few UI tests) | The core has no UI and can be tested against temporary folders |
 
 On Fedora: `dnf install python3-pyside6 python3-gobject`. For development, a venv created with `--system-site-packages` sees both.
@@ -115,6 +115,7 @@ filehouse/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
 │   │   ├── icons.py             icon tile per kind of file
 │   │   ├── dates.py             "Today, 10:42", "Yesterday", a weekday, a date
+│   │   ├── previews.py          loads a picture for the preview window on a worker thread
 │   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
 │   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
 │   │   ├── measure.py           folder sizes on a worker thread
@@ -126,10 +127,13 @@ filehouse/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
+│   │   ├── theme_watcher.py     follows the theme file while the app runs
+│   │   ├── notifications.py     a desktop notification for a job that ends with no window visible
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
 │       ├── main_window.py
 │       ├── pane.py              one folder: model, sort proxy, list, history, selection
+│       ├── preview.py           the window Space opens: a larger look at the selection
 │       ├── tab.py               one or two panes and the active one
 │       ├── tab_bar.py           the row of tabs, a drop target
 │       ├── sidebar.py           places and mounted volumes
@@ -270,6 +274,49 @@ Rules from the API spec that the client must follow:
 - **All D-Bus calls are asynchronous** and made from the UI thread, so a slow or hung island never blocks the app.
 - **Crashes need no code.** If the app dies, the island turns its running activities into failures because the connection closed. That is why every job must hold its activity under the app's long-lived connection, not a short-lived one.
 
+### Notifications (`integration/notifications.py`, #15)
+
+For a job that ends while the process has no window to show it (the user chose "Keep running" and closed the last one). `Notifier` calls `Notify` on `org.freedesktop.Notifications` asynchronously and is silent when there is no service; `NotificationReporter` observes `JobModel` and decides, holding no job logic. The island already shows jobs, and the shell's own rule is that activities are for work in progress and notifications for finished work that may have been missed, so the two are not both sent for the same thing:
+
+| Island | Job ends | Notification |
+| --- | --- | --- |
+| not running | done | yes, with the job's summary ("Copied 4 items to Pictures") |
+| not running | failed | yes, critical and without a timeout: the summary and the first error and how many more |
+| running | failed | no: the island keeps a failure until it is dismissed |
+| running | done | only if it ran 10 seconds or more (`LONG_JOB_SECONDS`), the island's "done" being gone after 4 |
+| either | cancelled, or never ran | no: the user knows |
+
+- **A window counts as there** when it is visible and not minimized. With one, the app's own status bar and panel say it.
+- **Flushing.** The process ends as soon as the last job has, so `app.py` flushes the notifier's connection on `aboutToQuit`; a notification sent in the same moment still gets to the bus.
+- **Not done:** an action on the notification ("Open folder"), and keeping the process alive after a failure to bring a window back when it is clicked. The process is gone by then, and a failure names the file and the error; running the operation again is the way back.
+- Whether to notify at all, and the 10 seconds, are for the settings panel if there is one (#23).
+
+### Preview (`ui/preview.py`, `qt_models/previews.py`)
+
+Space opens a window with a larger look at the selection, as Quick Look does on the Mac; Space closes it, and "Preview" is in the menu of a file. It is a tool window of the main window that follows the selection: the arrow keys, Home, End and Page Up/Down pressed in it are passed on to the list, so the selection moves and the preview shows what is selected now. With nothing selected it closes.
+
+- **Pictures** (what `QImageReader` reads, so PDFs too where Qt has its PDF plugin, which draws the first page) are loaded on a worker thread, upright, to at most 4096 pixels on the long side (scaled while decoding) and 256 MB of file. Shown as large as fits and never distorted; a small one is enlarged at most twice. The line under it says the type, the size, when it changed and the picture's size.
+- **Text** (`text/*`, and the types of the icons' "code" kind: JSON, XML, scripts and the like): the first 64 KB, in the fixed font, read-only, not wrapped. The encoding is told from the bytes: a byte order mark, then UTF-8, and a file that is not valid UTF-8 is read as Western European (cp1252), which any bytes are. A cut inside a character is not an error. A file with NUL bytes is not text whatever its name says, and shows "No preview for this type". A cut file says "the first 64 KiB" in the line under it. No syntax colouring. The text box never takes the keys, so the arrows move the list's selection as for a picture.
+- **Zoom and pan** for a picture: the wheel (around the pointer), + and −, and 0 to fit again; from a quarter to 16 times what fits. Drag to move a picture larger than the window; one that fits stays in the middle. Each new picture starts fitted. Fitted, it is scaled once with the smooth filter; zoomed, the painter scales it.
+- **Full screen:** Return or a double click toggle it. Escape leaves full screen first and closes the window the second time; Space closes it at once. A window closed in full screen opens as a window again.
+- **Anything else** shows the type's tile with "No preview for this type"; a folder says "Folder"; a selection of several says how many; a file that is not on this computer, or a picture that can't be read, says so.
+- **The same file is not loaded twice** (by path, date and size), because the window is asked again every time the list's state changes.
+- Opens at 80 % of the main window's size, and where the compositor puts it: not remembered (a tool window is placed by KWin on Wayland).
+- Not done (#24): video and audio, more than the first page of a PDF, showing several files one after another, a preview as a sheet in the narrow layout, and Space during the list's type-ahead search (it opens the preview).
+
+### Thumbnails for any type (`qt_models/thumbnails.py`, #20)
+
+Asked for every regular file on a local folder that is painted in the icons view, in this order, on a worker thread:
+
+1. **The cache**, whatever the file's type, so what Dolphin made for videos, PDFs and the rest is shown. A cached thumbnail counts when its `Thumb::MTime` is the file's.
+2. **The fail marker** (`thumbnails/fail/filehouse/<md5>.png`, as the spec has it, with the file's `Thumb::MTime`): a file that was tried and could not be made is not tried again until it changes.
+3. **Qt**, for the types `QImageReader` reads. That includes PDFs on a Qt with its PDF image plugin, which draws the first page (the system's PySide6 has it); a file above 64 MB is left alone.
+4. **The desktop's thumbnailers**: the `thumbnailers/*.thumbnailer` files in `$XDG_DATA_HOME` and `$XDG_DATA_DIRS` (the user's first, a file name seen once), for the types in their `MimeType`, when their `TryExec` and program exist. The command's `%i` (path), `%u` (URI), `%o` (output file, in a temporary folder) and `%s` (128) are filled in; it is run without a shell, with `QProcess` used blocking on the worker thread (Python's `subprocess` forking from one of Qt's pool threads crashed the process now and then), in a session of its own, with no input and no output kept. The result is scaled to 128, written to the shared cache like any other, and the temporary folder removed.
+
+Only two thumbnailers run at once, in a pool of their own (so slow ones never take the threads the image thumbnails need). Each has 15 seconds, then its process group is killed and the file counts as failed. A file above 4 GiB is not handed to one. A failure of the program (a non-zero exit, no output, an output that is not an image) is remembered; a file nothing could be tried on is not.
+
+Not done: `QtMultimedia` for video, and KDE's thumbnail plugins through KIO: without `ffmpegthumbnailer` or another thumbnailer installed, only what Dolphin has put in the cache shows for video. Remote locations and the large (256 px) size are still not thumbnailed.
+
 ### Theme (`integration/theme.py`, `integration/style.py`)
 
 - Port the shell's `examples/read_theme.py`: start from complete defaults, overlay `$XDG_CONFIG_HOME/quickshell-island/theme.json`, ignore unknown fields, fall back per field, and use defaults for a missing or newer `version`.
@@ -279,7 +326,10 @@ Rules from the API spec that the client must follow:
   - Sizes (row height, icon sizes, paddings) defined in unscaled pixels and multiplied by `scale.ui`.
   - A short stylesheet for corner radii (`radius.small` for buttons and rows, `radius.medium` for panels) and the operations panel. Keep it short: a large stylesheet fights the platform style.
   - `danger` and `success` for failed and finished jobs.
-- Read once at startup in v1. Later: watch the **directory** with `QFileSystemWatcher` (the shell replaces the file atomically) and re-apply live.
+- **Live updates (#13).** `integration/theme_watcher.py` watches the theme's directory with `QFileSystemWatcher` (the shell replaces the file atomically, which a watch on the file alone does not survive), and the file too, for a change in place. Before the shell has ever run it watches the directory above, to see the directory come. A change is read 200 ms after the last event, and `style.apply(app, theme, live=True)` runs again.
+  - **Applies at once:** colours (the scheme, accent, palette, layers) and the corner radii. The palette and the stylesheet are set again; the icons are drawn in colours, so what holds one (the actions, the tab close buttons, the sidebar, the details pane) makes it again when `style.themed.changed` is emitted. The file list asks the model for its icons each time it paints, and the model's icons are cached per `style.generation`.
+  - **Applies at the next start:** `scale.ui`, `scale.font` and the font families. Sizes and fonts are set in the widgets when they are made (`setFixedSize`, margins, row heights, `QFont`), so a live apply keeps the scales and fonts of the running theme; a window with half its parts at the new scale would look worse than the old scale. This is the answer to the issue's open question.
+  - A theme file that is gone or cannot be read leaves the look as it is; the defaults are for starting without one. The two job titles painted in the failure colour (`job_status`, `operations_panel`) are set again with the next update of the job.
 - Window decorations stay server-side (KWin draws them). Matching the frame to the shell is tracked in shell issue #56.
 
 ### Drag and drop and clipboard
@@ -441,7 +491,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 
 **Done.** How it was built:
 
-- `ui/details_pane.py` is the third part of the window's splitter, a card like the sidebar. It is given the open folder and the selected entries and decides by itself what to show. Asked again for what it already shows, it does nothing; an entry whose size, date or mode changed counts as new, so a selected file that changes is read again (the window looks for that at most five times a second).
+- `ui/details_pane.py` is the third part of the window's splitter, a card like the sidebar. It is given the open folder and the selected entries and decides by itself what to show. Asked again for what it already shows, it does nothing; an entry whose size, date or mode changed counts as new, so a selected file that changes is read again (the window looks for that at most five times a second). A single file's icon is replaced by its thumbnail (up to 128 pixels, rounded, 56 in the sheet) once the same engine as the list's has one, from the cache or made; the icon stays until then, and an answer for a file no longer shown is dropped.
 - **Reading** is `core/properties.read` on a worker thread (`qt_models/details.py`). What is on show stays until the answer is in, and only the answer to the last question is used, so going down a list with the arrow keys neither blinks nor blocks.
 - **One item:** tile, name, type (or "Link to …"), modified, size, owner as "you · group" when it is the user's own, the mode in octal, and the grid. The third column of the grid reads "Open" for a folder. Each dot says in a tooltip what it stands for ("Group may not write it").
 - **A selected folder** is added up in the background as in the Properties dialog: its size, and "Contains 12 files, 3 folders". The count is cancelled when the selection changes.
@@ -538,15 +588,15 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 
 Each has an issue, where what it takes and what is still to be decided is written down.
 
-- Live theme updates (file watch on the theme directory): #13.
+- Live theme updates (file watch on the theme directory): #13, built; see the theme section.
 - Custom title bar: a decision of its own, #9 (and #21 comment in the shell repo).
 - Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14.
-- A notification for a job that finished while the window was hidden (shell #24, point 7): #15.
+- A notification for a job that finished while the window was hidden (shell #24, point 7): #15, built; see below.
 - Undo for rename, move and trash: #16.
 - Remote locations through GVFS: #17.
 - Search: #18.
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19.
-- Video and PDF thumbnails: #20.
+- Video and PDF thumbnails: #20, built; see below.
 
 Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and tabs (#22). The split view (#12) and tabs are built; see below.
 

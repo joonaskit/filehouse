@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from PySide6.QtGui import QImage
 from ui_helpers import TIMEOUT, gfile
 
 from filehouse.core import properties
@@ -180,3 +181,64 @@ def test_open_button_asks_to_open(qtbot, pane, folder):
 
     with qtbot.waitSignal(pane.open_requested, timeout=TIMEOUT):
         pane.open_button.click()
+
+
+# A picture of the file in the place of its icon
+
+
+def picture_at(path, width=640, height=320):
+    from PySide6.QtGui import QColor, QImage
+
+    image = QImage(width, height, QImage.Format.Format_RGB32)
+    image.fill(QColor("#3366cc"))
+    assert image.save(str(path))
+
+
+def shown_size(pane):
+    pixmap = pane._icon.pixmap()
+    return (
+        round(pixmap.deviceIndependentSize().width()),
+        round(pixmap.deviceIndependentSize().height()),
+    )
+
+
+def test_a_picture_shows_itself_in_the_place_of_its_icon(qtbot, pane, folder):
+    picture_at(folder / "photo.png")
+    show(qtbot, pane, folder, "notes.txt")
+    # The icon of a type: 64 pixels square
+    assert shown_size(pane) == (64, 64)
+
+    show(qtbot, pane, folder, "photo.png")
+
+    # The picture, in its proportions, within 128 pixels
+    qtbot.waitUntil(lambda: shown_size(pane) == (128, 64), timeout=TIMEOUT)
+
+
+def test_a_file_without_a_picture_keeps_its_icon(qtbot, pane, folder):
+    show(qtbot, pane, folder, "notes.txt")
+    qtbot.wait(200)
+
+    assert shown_size(pane) == (64, 64)
+
+
+def test_a_thumbnail_that_comes_late_is_not_shown_for_another_file(qtbot, pane, folder):
+    picture_at(folder / "photo.png")
+    show(qtbot, pane, folder, "photo.png")
+    pane._on_thumbnail(pane._thumbnail_token - 1, QImage(10, 10, QImage.Format.Format_RGB32))
+    show(qtbot, pane, folder, "notes.txt")
+    qtbot.wait(200)
+
+    # The picture's answer, whenever it comes, is not for the text file now shown
+    assert shown_size(pane) == (64, 64)
+
+
+def test_a_folder_and_several_items_keep_their_icons(qtbot, pane, folder):
+    picture_at(folder / "photo.png")
+
+    show(qtbot, pane, folder, "src")
+    qtbot.wait(200)
+    assert shown_size(pane) == (64, 64)
+
+    pane.show_items(gfile(folder), infos(folder, "photo.png", "notes.txt"))
+    qtbot.wait(200)
+    assert shown_size(pane) == (64, 64)

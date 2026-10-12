@@ -28,3 +28,13 @@ def home_dir():
     path = Path(tempfile.mkdtemp(prefix="work-", dir=_home))
     yield path
     shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def fresh_thumbnail_cache(monkeypatch):
+    """The shared thumbnail cache lies under XDG_CACHE_HOME: each test gets its own, so
+    what one made (a list, the details pane) is not found by the next."""
+    path = tempfile.mkdtemp(prefix="cache-", dir=_home)
+    monkeypatch.setenv("XDG_CACHE_HOME", path)
+    yield
+    shutil.rmtree(path, ignore_errors=True)

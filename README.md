@@ -4,22 +4,39 @@ A small file browser for KDE Plasma (Wayland), written in Python and Qt Widgets.
 
 It does not try to replace Dolphin. It covers everyday browsing and hands off to the default file manager for the rest.
 
-## Status: 0.1 alpha
+## Status: alpha
 
-Browsing and file operations work, and operations show in the shell's island when it is running.
+Everyday browsing and file operations work, and operations show in the shell's island when it is running. The design and the plan are in [ARCHITECTURE.md](ARCHITECTURE.md); what is left is on the [issue list](https://github.com/joonaskit/filehouse/issues).
 
-- Copy, cut and paste, drag and drop, move to trash, permanent delete, rename and new folder
-- Operations run in the background, with progress, cancel, retry and error details in a panel at the bottom of the window
-- Trash with restore and empty, drives in the sidebar with eject, an icons view with thumbnails, and a properties dialog
-- Details view with sorting: folders first, then natural order by name
+**Browsing**
+
+- Breadcrumb path bar, editable with a click or Ctrl+L; back, forward and up, with history per pane
+- Details view (name, permissions, modified, size) and an icons view with thumbnails; sort by name, modified or size; hidden files on request
 - Folders load in batches on a worker thread and follow changes made elsewhere
-- Breadcrumb path bar, editable with a click or Ctrl+L
-- Back, forward and up, with history per window
-- Sidebar with home and the user's special folders
-- Open with the default app, Open with, and Open folder in the default file manager
-- Colours, fonts, radii and scale from the shell's `theme.json`, with built-in defaults when it is missing
+- A sidebar with home, the special folders, the trash and the drives, with a usage bar per drive and eject
+- **Tabs** (Ctrl+T, or middle-click a folder) and a **split view** (F3) with two folders side by side; each tab has its own split. Drop files on a tab or on the other pane
+- A narrow layout below 800 pixels: the sidebar becomes a rail of icons, the actions a bar under the list, and the details a sheet
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and the plan.
+**Looking at files**
+
+- A details pane with what is selected: type, dates, size, owner, a grid of the permissions, and a thumbnail
+- **Preview** with Space, as Quick Look on the Mac: pictures (and the first page of a PDF), text and code, with zoom, pan and full screen. The arrow keys go on moving the selection, and the preview follows
+- Thumbnails come from the shared freedesktop cache (so what Dolphin made is shown), from Qt, and from the desktop's `.thumbnailer` programs (for videos, for example, when one such as `ffmpegthumbnailer` is installed)
+- Open with the default app, Open with, Open folder in the default file manager, and Open terminal here
+
+**Changing files**
+
+- Copy, cut and paste, drag and drop (a move on the same file system, a copy across), Move to…, rename, new folder and new file
+- Move to trash, with restore and empty; permanent delete asks first and never happens by itself
+- Permission presets (Private, Shared, Make executable, Read-only) and a properties dialog
+- Operations run in the background, with progress, cancel, retry and error details. A cancel reports how far the job got, and a move never removes a file before its copy is complete
+- Closing the last window while jobs run offers to let them finish in the background; a desktop notification tells how it went when no window is left to show it
+
+**With the shell**
+
+- Operations show in the island with progress, Cancel and Retry
+- Colours, fonts, corner radii and scale come from the shell's `theme.json`, with built-in defaults when it is missing. Colours and radii follow changes while the app runs; the scales and fonts apply at the next start
+- It works the same with the shell stopped
 
 ## Install
 
@@ -53,6 +70,7 @@ install -Dm644 data/filehouse.desktop ~/.local/share/applications/filehouse.desk
 | Key | Action |
 | --- | --- |
 | Enter | Open |
+| Space | Preview (Space again closes it) |
 | Backspace, Alt+Left | Back |
 | Alt+Right | Forward |
 | Alt+Up | Up |
@@ -64,9 +82,17 @@ install -Dm644 data/filehouse.desktop ~/.local/share/applications/filehouse.desk
 | Shift+Delete | Delete permanently (asks first) |
 | F2 | Rename |
 | Ctrl+Shift+N | New folder |
+| Ctrl+Alt+C | Copy the path |
+| Shift+F4 | Open terminal here |
 | Ctrl+1, Ctrl+3 | Icons, details |
 | Alt+Enter | Properties |
-| Ctrl+W | Close the window |
+| F3 | Split the view in two |
+| Shift+F5, Shift+F6 | Copy, move to the other pane |
+| Ctrl+T | New tab |
+| Ctrl+Tab, Ctrl+Shift+Tab | Next, previous tab (also Ctrl+PageDown, Ctrl+PageUp) |
+| Ctrl+W | Close the tab, or the window with the last one |
+
+In the preview: the arrow keys, Home, End and Page Up/Down move the selection of the list; the wheel, + and − zoom a picture, 0 fits it again; Return or a double click go full screen; Escape leaves full screen, then closes.
 
 ## Tests
 
