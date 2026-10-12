@@ -117,7 +117,7 @@ class DetailsPane(QFrame):
         self.rows = {}
         self._row_labels = {}
         rows = QGridLayout()
-        rows.setVerticalSpacing(style.px(10))
+        rows.setVerticalSpacing(style.px(style.dense("row_spacing")))
         rows.setColumnStretch(1, 1)
         for index, text in enumerate(_ROWS):
             label = self._row_labels[text] = self._secondary(text)
@@ -133,7 +133,7 @@ class DetailsPane(QFrame):
         self._permissions = QWidget()
         grid = QGridLayout(self._permissions)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setVerticalSpacing(style.px(14))
+        grid.setVerticalSpacing(style.px(style.dense("permissions_spacing")))
         grid.setColumnStretch(0, 1)
         grid.addWidget(self._secondary("Permissions"), 0, 0)
         self.mode = QLabel()
@@ -155,16 +155,16 @@ class DetailsPane(QFrame):
 
         self.open_button = QPushButton("Open")
         # The height its corners are made for: see style.radius_within
-        self.open_button.setFixedHeight(style.px(style.BUTTON_HEIGHT))
+        self.open_button.setFixedHeight(style.px(style.dense("button_height")))
         self.open_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.open_button.clicked.connect(self.open_requested)
 
         self._first_divider = self._divider()
         self._second_divider = self._divider()
         layout = QVBoxLayout(self)
-        margin = style.px(16)
+        margin = style.px(style.dense("card_margin"))
         layout.setContentsMargins(margin, margin, margin, margin)
-        layout.setSpacing(style.px(12))
+        layout.setSpacing(style.px(style.dense("card_spacing")))
         names = QVBoxLayout()
         names.setSpacing(style.px(2))
         names.addWidget(self.name)

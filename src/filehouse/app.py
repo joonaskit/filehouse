@@ -48,6 +48,7 @@ def main(argv=None):
     # Let Ctrl+C in a terminal end the app
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    style.set_density(settings.density())
     style.apply(app, theme.load_theme())
     # The shell's accent colour or corner roundness changed: follow it without a restart
     ThemeWatcher(app, parent=app)
@@ -87,7 +88,15 @@ def main(argv=None):
     favourites = Favourites(parent=app)
 
     notifier = Notifier()
-    NotificationReporter(jobs, notifier, window_visible, lambda: client.available, jobs)
+    NotificationReporter(
+        jobs,
+        notifier,
+        window_visible,
+        lambda: client.available,
+        jobs,
+        long_job_seconds=settings.long_job_seconds,
+        enabled=settings.notify,
+    )
     notifier.start()
     # The process may end the moment the last job has: what was sent must be on the bus
     app.aboutToQuit.connect(notifier.flush)

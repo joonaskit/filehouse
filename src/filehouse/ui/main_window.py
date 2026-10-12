@@ -38,6 +38,7 @@ from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.dialogs.name import NameDialog
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
+from filehouse.ui.dialogs.settings import SettingsDialog
 from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
 from filehouse.ui.pane import Pane
@@ -86,13 +87,16 @@ def ask_about_running_jobs(parent, count):
     return {keep: KEEP_RUNNING, cancel: CANCEL_ALL}.get(box.clickedButton(), STAY_OPEN)
 
 
-def ask_to_clear_recent(parent, count):
-    """Whether to empty the list of recent files. It is shared with other apps, so it asks."""
+def ask_to_clear_recent(parent, count=None):
+    """Whether to empty the list of recent files. It is shared with other apps, so it asks.
+    Without a `count` the question does not say how many."""
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Warning)
     box.setWindowTitle("Clear the recent files?")
     box.setText(
-        "Remove the one file from the list of recent files?"
+        "Remove all files from the list of recent files?"
+        if count is None
+        else "Remove the one file from the list of recent files?"
         if count == 1
         else f"Remove all {count} files from the list of recent files?"
     )
@@ -440,6 +444,9 @@ class MainWindow(QMainWindow):
         )
         self._more = action("More…", "view-more-horizontal", [], self._show_selection_menu)
         self._permissions = action("Permissions", "object-locked", [], self._show_permissions_menu)
+        self._settings = action(
+            "Settings", "preferences-system", [QKeySequence("Ctrl+,")], self.open_settings
+        )
         self._folder_menu = action(
             "Folder menu", "view-more-horizontal", [], self._show_folder_menu
         )
@@ -461,6 +468,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self._group(self._details_mode, self._icons_mode, self._split_view))
         self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
         self._toolbar_menu.setVisible(False)
+        toolbar.addWidget(self._group(self._settings))
         self.addToolBar(toolbar)
         if self._favourites is not None:
             self._favourites.changed.connect(self._update_favourite_action)
@@ -488,7 +496,7 @@ class MainWindow(QMainWindow):
         group = QFrame()
         group.setObjectName("group")
         layout = QHBoxLayout(group)
-        padding = style.px(style.GROUP_PADDING)
+        padding = style.px(style.dense("group_padding"))
         layout.setContentsMargins(padding, padding, padding, padding)
         layout.setSpacing(style.px(2))
         for item in actions:
@@ -496,7 +504,7 @@ class MainWindow(QMainWindow):
             button.setDefaultAction(item)
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             button.setIconSize(QSize(style.px(18), style.px(18)))
-            side = style.px(style.CONTROL_HEIGHT)
+            side = style.px(style.dense("control_height"))
             button.setFixedSize(side, side)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             layout.addWidget(button)
@@ -741,6 +749,10 @@ class MainWindow(QMainWindow):
         (self._icons_mode if mode == ICONS else self._details_mode).setChecked(True)
         if remember:
             settings.set_view_mode(mode)
+
+    def set_show_hidden(self, show):
+        self._hidden.setChecked(show)
+        self._set_show_hidden(show)
 
     def _set_show_hidden(self, show):
         for pane in self._all_panes():
@@ -1015,6 +1027,17 @@ class MainWindow(QMainWindow):
         self._recent.clear(self._pane.reload)
         return True
 
+    def open_settings(self):
+        dialog = SettingsDialog(
+            self, self.set_view_mode, self.set_show_hidden, self._clear_recent_from_settings
+        )
+        dialog.exec()
+
+    def _clear_recent_from_settings(self):
+        if self._recent is None or not ask_to_clear_recent(self):
+            return
+        self._recent.clear(self._pane.reload if self._in_recent() else None)
+
     def show_in_folder(self, info):
         """Go to the folder a file of the recent files is in, with the file selected."""
         target = locations.entry_location(self._location, info)
@@ -1138,6 +1161,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             "Opened files are not remembered" if forget else "Opened files are remembered again",
             _COPIED_MS,
+        )
+
+    def _set_density(self, density):
+        """Sizes are set when the widgets are made, so it applies at the next start."""
+        settings.set_density(density)
+        self.statusBar().showMessage(
+            f"{density.capitalize()} density applies at the next start", _COPIED_MS
         )
 
     def _on_remember_opened_changed(self, remember):
@@ -1351,6 +1381,13 @@ class MainWindow(QMainWindow):
         view.addSeparator()
         view.addAction(self._split_view)
         view.addAction(self._new_tab)
+        density = menus.menu(view, "Density")
+        current = settings.density()
+        for key, text in (("comfortable", "Comfortable"), ("compact", "Compact")):
+            item = density.addAction(text, lambda key=key: self._set_density(key))
+            item.setCheckable(True)
+            item.setChecked(key == current)
+        view.addMenu(density)
         menu.addMenu(view)
 
     # File operations

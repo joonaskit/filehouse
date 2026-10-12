@@ -117,7 +117,9 @@ class FolderView(QWidget):
         self._tree.setUniformRowHeights(True)
         # False: with it the tree frames the whole row the keyboard is on, selected or not
         self._tree.setAllColumnsShowFocus(False)
-        self._tree.setIconSize(QSize(style.px(28), style.px(28)))
+        self._tree.setIconSize(
+            QSize(style.px(style.dense("list_icon")), style.px(style.dense("list_icon")))
+        )
         self._tree.setSortingEnabled(True)
         self._tree.sortByColumn(NAME, Qt.SortOrder.AscendingOrder)
 
@@ -141,8 +143,12 @@ class FolderView(QWidget):
         self._grid.setLayoutMode(QListView.LayoutMode.Batched)
         self._grid.setWordWrap(True)
         self._grid.setTextElideMode(Qt.TextElideMode.ElideMiddle)
-        self._grid.setIconSize(QSize(style.px(64), style.px(64)))
-        self._grid.setGridSize(QSize(style.px(116), style.px(112)))
+        self._grid.setIconSize(
+            QSize(style.px(style.dense("grid_icon")), style.px(style.dense("grid_icon")))
+        )
+        self._grid.setGridSize(
+            QSize(style.px(style.dense("grid_width")), style.px(style.dense("grid_height")))
+        )
         self._grid.setSpacing(style.px(4))
 
         for view in (self._tree, self._grid):

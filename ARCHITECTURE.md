@@ -301,13 +301,13 @@ A file opened from the app (Enter, a double click, Open, Open with, the details 
 
 **Privacy.** Nothing is told when:
 
-- the user chose **"Don't remember opened files"** (the folder menu): a setting of the app, not of a window, remembered between runs, and the same switch in every window (`settings.changes` tells the others), as the browsers' private mode is not per window either. Turning it on or off says so in the status bar, and while it is on a "Private" sign sits in the status bar, which ends it when clicked. Thumbnails written to the shared cache are not covered yet. **To remember:** this belongs in a settings page when there is one (#23);
+- the user chose **"Don't remember opened files"** (the folder menu): a setting of the app, not of a window, remembered between runs, and the same switch in every window (`settings.changes` tells the others), as the browsers' private mode is not per window either. Turning it on or off says so in the status bar, and while it is on a "Private" sign sits in the status bar, which ends it when clicked. Thumbnails written to the shared cache are not covered yet.
 - **Plasma's own setting** says no (System Settings, Recent Files, `kactivitymanagerd-pluginsrc`): "Do not remember" (`what-to-remember=2`), this app on the excluded list, or "only for specific applications" with this app not on the list. The values were read off the KCM's own files, not tested by changing the system's setting;
 - the thing is a folder, a file that does not exist, a place off this computer, or in the trash. Only files.
 
 It is silent, and can't stop a file from opening. A window made without a recorder (`recent=None`, the tests) tells nobody.
 
-Not done: a settings page for the switch (#23 is the place for it), and the thumbnail cache in the private mode.
+The switch is also in the settings dialog (#23). Not done: the thumbnail cache in the private mode.
 
 **The Recent place.** The sidebar has "Recent" (before the trash) when GVFS has `recent:///`, which lists `recently-used.xbel`. It is read like any folder, and an entry is not a file but stands for one, so:
 
@@ -333,7 +333,11 @@ For a job that ends while the process has no window to show it (the user chose "
 - **A window counts as there** when it is visible and not minimized. With one, the app's own status bar and panel say it.
 - **Flushing.** The process ends as soon as the last job has, so `app.py` flushes the notifier's connection on `aboutToQuit`; a notification sent in the same moment still gets to the bus.
 - **Not done:** an action on the notification ("Open folder"), and keeping the process alive after a failure to bring a window back when it is clicked. The process is gone by then, and a failure names the file and the error; running the operation again is the way back.
-- Whether to notify at all, and the 10 seconds, are for the settings panel if there is one (#23).
+- Whether to notify at all and the 10 seconds are in the settings dialog (`settings.notify`, `settings.long_job_seconds`; `app.py` hands them to the reporter as functions, so a change counts at once).
+
+### Settings dialog (#23, `ui/dialogs/settings.py`)
+
+A modal dialog, opened with Ctrl+, or the gear button at the right end of the toolbar. A choice is stored as it is made; there is only Close. Sections: **Appearance** (density, which says it applies at the next start), **New windows** (view mode and hidden files: the same values the app remembers when they are changed in a window, so the dialog also changes the window it was opened from, through `set_view_mode` and `set_show_hidden`), **Privacy** (the "Don't remember opened files" switch, followed live from the folder menu and the status bar, and Clear recent files…, which asks first) and **Notifications** (on or off, and the seconds a job must run before the island's user is told). The dialog holds no logic of its own: it reads and writes `ui/settings.py` and calls the window for what a window has to do. Not in it: the scale and fonts (the shell's), and anything the shell owns.
 
 ### Preview (`ui/preview.py`, `qt_models/previews.py`)
 
@@ -374,6 +378,7 @@ Not done: `QtMultimedia` for video, and KDE's thumbnail plugins through KIO: wit
   - **Applies at once:** colours (the scheme, accent, palette, layers) and the corner radii. The palette and the stylesheet are set again; the icons are drawn in colours, so what holds one (the actions, the tab close buttons, the sidebar, the details pane) makes it again when `style.themed.changed` is emitted. The file list asks the model for its icons each time it paints, and the model's icons are cached per `style.generation`.
   - **The font is the shell's everywhere.** `style.apply` sets the app font and then, after the style sheet, the same font for the kinds of widget a platform theme gives a font of its own (Plasma's theme does, in points: the lists, the toolbar's buttons, the status bar, the tooltips, which were Noto Sans at 12 to 13 pixels beside the shell's Cantarell). After the style sheet because a new style makes Qt read the platform theme's fonts again. The sidebar also sets the app font on itself, so a heading read from `font()` has a size in pixels before and after the window is shown.
   - **Applies at the next start:** `scale.ui`, `scale.font` and the font families. Sizes and fonts are set in the widgets when they are made (`setFixedSize`, margins, row heights, `QFont`), so a live apply keeps the scales and fonts of the running theme; a window with half its parts at the new scale would look worse than the old scale. This is the answer to the issue's open question.
+  - **Density (#28).** Compact or comfortable (the default), one choice for every window, stored as `view/density` and chosen in the folder menu's View > Density. It applies at the next start, like the scale. `style.set_density()` runs before `style.apply()`, and `style.dense(key)` gives the unscaled sizes that depend on it: the file list's row padding and icon, the icons view's icon and cell, the sidebar's row, heading and icon, the toolbar's control height and group padding, the standalone button's height, the tabs' and menu items' vertical padding, the details card's margin and spacings and the operations panel's row padding. Text keeps its size.
   - A theme file that is gone or cannot be read leaves the look as it is; the defaults are for starting without one. The two job titles painted in the failure colour (`job_status`, `operations_panel`) are set again with the next update of the job.
 - Window decorations stay server-side (KWin draws them). Matching the frame to the shell is tracked in shell issue #56.
 

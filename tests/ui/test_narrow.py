@@ -98,7 +98,7 @@ def test_the_window_does_not_get_narrower_than_its_toolbar(qtbot, window):
         for frame in toolbar.findChildren(QFrame)
         if frame.objectName() == "group" and frame.isVisible()
     ]
-    assert len(groups) == 4
+    assert len(groups) == 5
     for group in groups:
         right = group.mapTo(window, group.rect().topRight()).x()
         assert right <= window.width()

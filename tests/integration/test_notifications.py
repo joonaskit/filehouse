@@ -295,3 +295,20 @@ def test_without_a_bus_it_is_silent():
     Notifier().flush()
 
     assert answers == [False]
+
+
+def test_nothing_is_sent_when_the_user_turned_notifications_off(setup):
+    setup.reporter._enabled = lambda: False
+    failed_job(setup)
+
+    assert setup.notifier.sent == []
+
+
+def test_the_threshold_can_be_a_function(setup):
+    setup.island = True
+    setup.reporter._long = lambda: 5
+    job = FakeJob()
+    setup.run(job, seconds=6)
+    setup.end(job, JobState.DONE)
+
+    assert len(setup.notifier.sent) == 1

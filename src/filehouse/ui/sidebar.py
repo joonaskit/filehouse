@@ -52,10 +52,7 @@ _PLACE_COLOURS = {
     "document-open-recent": "cyan",
 }
 _FOLDER_COLOUR = "orange"
-_ROW_HEIGHT = 42
-_HEADING_HEIGHT = 36
 _DEVICE_COLOUR = "cyan"
-_ICON = 28
 _DIVIDER_HEIGHT = 17
 # Around an icon on the rail: the card's padding and the row's, on each side
 _RAIL_PADDING = 2 * (8 + 6) + 2
@@ -83,7 +80,7 @@ class _ListDelegate(QStyledItemDelegate):
         widget = row.widget
         widget.style().drawControl(QStyle.ControlElement.CE_ItemViewItem, row, painter, widget)
 
-        left = option.rect.left() + style.px(6 + _ICON + 8)
+        left = option.rect.left() + style.px(6 + style.dense("sidebar_icon") + 8)
         width = option.rect.right() - style.px(10) - left
         metrics = option.fontMetrics
         gap, bar = style.px(4), style.px(3)
@@ -165,7 +162,9 @@ class Sidebar(QListWidget):
         self._list_delegate = _ListDelegate(self)
         self.setItemDelegate(self._list_delegate)
         self._rail_delegate = _RailDelegate(self)
-        self.setIconSize(QSize(style.px(_ICON), style.px(_ICON)))
+        self.setIconSize(
+            QSize(style.px(style.dense("sidebar_icon")), style.px(style.dense("sidebar_icon")))
+        )
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -225,7 +224,7 @@ class Sidebar(QListWidget):
         self._rail = on
         self.setItemDelegate(self._rail_delegate if on else self._list_delegate)
         if on:
-            self.setFixedWidth(style.px(_ICON + _RAIL_PADDING))
+            self.setFixedWidth(style.px(style.dense("sidebar_icon") + _RAIL_PADDING))
         else:
             self.setMinimumWidth(0)
             self.setMaximumWidth(16777215)
@@ -278,7 +277,7 @@ class Sidebar(QListWidget):
         font = QFont(self.font())
         font.setPixelSize(max(8, round(self._text_px() * 0.92)))
         item.setFont(font)
-        item.setSizeHint(QSize(0, style.px(_HEADING_HEIGHT)))
+        item.setSizeHint(QSize(0, style.px(style.dense("sidebar_heading"))))
         self.addItem(item)
 
     def _show_usage(self):
@@ -329,7 +328,7 @@ class Sidebar(QListWidget):
         font.setWeight(QFont.Weight.DemiBold)
         font.setPixelSize(self._text_px())
         item.setFont(font)
-        item.setSizeHint(QSize(0, style.px(_HEADING_HEIGHT)))
+        item.setSizeHint(QSize(0, style.px(style.dense("sidebar_heading"))))
         self.addItem(item)
 
     def _add(self, entry, is_device, favourite=None):
@@ -350,7 +349,7 @@ class Sidebar(QListWidget):
         elif self._rail:
             item.setToolTip(entry.name)
         # Set here: the stylesheet's padding does not make these rows taller
-        item.setSizeHint(QSize(0, style.px(_ROW_HEIGHT)))
+        item.setSizeHint(QSize(0, style.px(style.dense("sidebar_row"))))
         self.addItem(item)
 
     def retheme(self):

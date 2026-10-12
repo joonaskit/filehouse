@@ -79,10 +79,10 @@ class PathBar(QStackedWidget):
     def sizeHint(self):
         # As tall as the buttons in it, or their hover highlight is cut off.
         # A scroll area alone asks for far more
-        return QSize(super().sizeHint().width(), style.px(style.CONTROL_HEIGHT))
+        return QSize(super().sizeHint().width(), style.px(style.dense("control_height")))
 
     def minimumSizeHint(self):
-        return QSize(style.px(120), style.px(style.CONTROL_HEIGHT))
+        return QSize(style.px(120), style.px(style.dense("control_height")))
 
     def set_location(self, segments, text):
         """Show `segments`, a root-first list of (name, location). `text` is the editable form."""
@@ -130,7 +130,7 @@ class PathBar(QStackedWidget):
         button = QToolButton()
         button.setText(text)
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        button.setFixedHeight(style.px(style.CONTROL_HEIGHT))
+        button.setFixedHeight(style.px(style.dense("control_height")))
         self._layout.addWidget(button)
         return button
 
