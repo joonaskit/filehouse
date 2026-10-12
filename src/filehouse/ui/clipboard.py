@@ -21,6 +21,10 @@ def put(uris, cut):
     QApplication.clipboard().setMimeData(data)
 
 
+def put_text(text):
+    QApplication.clipboard().setText(text)
+
+
 def get():
     """The file URIs on the clipboard and whether they were cut."""
     return read(QApplication.clipboard().mimeData())

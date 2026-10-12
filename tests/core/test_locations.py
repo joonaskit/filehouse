@@ -79,3 +79,14 @@ def test_history_back_and_forward():
 
     assert not history.can_go_forward
     assert history.back() == "b"
+
+
+def test_segments_of_something_in_the_home_folder_start_at_home():
+    home = GLib.get_home_dir()
+    inside = Gio.File.new_for_path(home + "/Projects/island")
+
+    segments = locations.segments(inside)
+
+    assert [name for name, _ in segments] == ["Home", "Projects", "island"]
+    assert path_of(segments[0][1]) == home
+    assert [name for name, _ in locations.segments(locations.home())] == ["Home"]

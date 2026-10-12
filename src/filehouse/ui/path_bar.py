@@ -14,6 +14,10 @@ from PySide6.QtWidgets import (
 )
 
 from filehouse.integration import style
+from filehouse.ui import menus
+
+# How many folders the short form names: the open one and the one it is in
+_SHORT_LENGTH = 2
 
 
 class _Crumbs(QWidget):
@@ -45,6 +49,8 @@ class PathBar(QStackedWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._text = ""
+        self._segments = []
+        self._short = False
 
         self._crumbs = _Crumbs()
         self._crumbs.background_clicked.connect(self.edit)
@@ -71,35 +77,69 @@ class PathBar(QStackedWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def sizeHint(self):
-        # As tall as the text field; a scroll area alone asks for far more
-        return QSize(super().sizeHint().width(), self._edit.sizeHint().height())
+        # As tall as the buttons in it, or their hover highlight is cut off.
+        # A scroll area alone asks for far more
+        return QSize(super().sizeHint().width(), style.px(style.CONTROL_HEIGHT))
 
     def minimumSizeHint(self):
-        return QSize(style.px(120), self._edit.sizeHint().height())
+        return QSize(style.px(120), style.px(style.CONTROL_HEIGHT))
 
     def set_location(self, segments, text):
         """Show `segments`, a root-first list of (name, location). `text` is the editable form."""
         self._text = text
+        self._segments = list(segments)
+        self._fill()
+        self._show_crumbs()
+
+    def set_short(self, on):
+        """For a narrow window: "… › parent › folder". The rest is in a menu on the "…"."""
+        if on != self._short:
+            self._short = on
+            self._fill()
+
+    def crumbs(self):
+        """The texts of the breadcrumbs on show, left to right."""
+        buttons = (self._layout.itemAt(index).widget() for index in range(self._layout.count()))
+        return [button.text() for button in buttons if isinstance(button, QToolButton)]
+
+    def _fill(self):
         while self._layout.count():
             item = self._layout.takeAt(0)
             if item.widget() is not None:
                 item.widget().deleteLater()
-        for position, (name, location) in enumerate(segments):
-            if position:
+        shown, hidden = self._segments, []
+        if self._short and len(shown) > _SHORT_LENGTH:
+            shown, hidden = shown[-_SHORT_LENGTH:], shown[:-_SHORT_LENGTH]
+        if hidden:
+            more = self._crumb("…")
+            more.setToolTip("The folders above")
+            more.clicked.connect(lambda: self._show_hidden(more, hidden))
+        for position, (name, location) in enumerate(shown):
+            if position or hidden:
                 separator = QLabel("›")
                 separator.setEnabled(False)
                 self._layout.addWidget(separator)
-            button = QToolButton()
-            button.setText(name)
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.clicked.connect(
+            self._crumb(name).clicked.connect(
                 lambda _checked=False, loc=location: self.location_chosen.emit(loc)
             )
-            self._layout.addWidget(button)
         self._layout.addStretch(1)
-        self._show_crumbs()
         # The current folder is the right end; keep it in view once laid out
         QTimer.singleShot(0, self, self._scroll_to_end)
+
+    def _crumb(self, text):
+        button = QToolButton()
+        button.setText(text)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.setFixedHeight(style.px(style.CONTROL_HEIGHT))
+        self._layout.addWidget(button)
+        return button
+
+    def _show_hidden(self, button, hidden):
+        menu = menus.menu(self)
+        # Nearest first, as they would read leftwards from the "…"
+        for name, location in reversed(hidden):
+            menu.addAction(name, lambda loc=location: self.location_chosen.emit(loc))
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
 
     def edit(self):
         self._edit.setText(self._text)

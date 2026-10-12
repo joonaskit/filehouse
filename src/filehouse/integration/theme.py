@@ -29,7 +29,17 @@ DEFAULTS = {
         "success": "#30d158",
         "warning": "#ff9f0a",
         "danger": "#ff453a",
-        "palette": {},
+        # For categories and decoration: the icon tiles
+        "palette": {
+            "green": "#30d158",
+            "blue": "#0a84ff",
+            "orange": "#ff9f0a",
+            "yellow": "#ffd60a",
+            "red": "#ff453a",
+            "purple": "#bf5af2",
+            "cyan": "#64d2ff",
+            "indigo": "#5e5ce6",
+        },
     },
     "fonts": {
         "families": ["sans-serif"],
@@ -49,7 +59,7 @@ def theme_path():
 
 def _usable(section, default, value):
     """Whether `value` can stand in for `default`. A wrong type falls back to the default."""
-    if section == "colors":
+    if section in ("colors", "palette"):
         return isinstance(value, str) and _COLOR.fullmatch(value) is not None
     if isinstance(default, bool) or isinstance(value, bool):
         return isinstance(default, bool) and isinstance(value, bool)

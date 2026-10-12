@@ -95,6 +95,25 @@ def rename(step, cancellable):
     return True
 
 
+def restore(step, cancellable):
+    """Move a trashed item back to where it was, making the folder it was in if that is gone."""
+    dest = step.dest
+    try:
+        step.folder.make_directory_with_parents(cancellable)
+    except GLib.Error as error:
+        if not has_code(error, Gio.IOErrorEnum.EXISTS):
+            raise
+    existing = locations.file_type(dest, cancellable)
+    if existing is not None:
+        raise Exists(existing)
+    try:
+        _rename_item(step.source, dest, _RENAME, cancellable)
+    except GLib.Error as error:
+        if has_code(error, Gio.IOErrorEnum.EXISTS):
+            raise _exists(dest, error) from None
+        raise
+
+
 def finish_folder(step, move):
     """After a folder's contents: copy its metadata, and in a move remove the emptied source."""
     made = step.parent

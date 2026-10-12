@@ -62,6 +62,6 @@ These are requirements, not guidelines. Any change in `core/operations/` needs a
 - Gio objects that deliver signals (`FileMonitor`, `VolumeMonitor`, D-Bus subscriptions) are created on the main thread so Qt's GLib dispatcher delivers them. Blocking Gio calls (`enumerate_children`, `copy`) run on worker threads.
 - All D-Bus calls are asynchronous. A slow or absent island must never block the UI or stop a job.
 - Island updates: at most 4 per second per job, final state sent immediately, never `cancelled` before the work has actually stopped.
-- Keep the stylesheet short; colours and fonts go through `QPalette` and `QFont` from the theme.
+- Colours and fonts go through `QPalette` and `QFont` from the theme. The stylesheet is for shapes (rounded groups, cards, rows, menus) and takes every colour, radius and size from `integration/style.py`: no literal colours, and nothing that assumes a dark background. Icons come from `style.icon` and `style.tile`.
 - Sizes are defined in unscaled pixels and multiplied by the theme's `scale.ui`.
 - Tests run against `tmp_path`; never touch the real home directory or the real trash. `tests/conftest.py` points `HOME` and the XDG directories at a temporary folder before `gi` loads; tests that need a working trash use the `home_dir` fixture.

@@ -1,36 +1,67 @@
 """One browser window: toolbar, sidebar, file list, operations panel and status bar."""
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QIcon, QKeySequence
+from types import SimpleNamespace
+
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
-    QMenu,
     QMessageBox,
+    QSizePolicy,
     QSplitter,
+    QStackedWidget,
+    QTabBar,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from filehouse.core import locations
 from filehouse.core.errors import OperationError
-from filehouse.core.history import History
-from filehouse.core.operations import JobKind, quick
+from filehouse.core.listing import mode_text
+from filehouse.core.operations import JobKind, permissions, quick
 from filehouse.core.operations.conflicts import split_extension
 from filehouse.integration import desktop, style
-from filehouse.qt_models.directory_model import DirectoryModel, DirectorySortProxy
+from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE
 from filehouse.qt_models.job_model import JobModel
-from filehouse.ui import clipboard
+from filehouse.qt_models.permissions import PermissionChange
+from filehouse.qt_models.volumes import Volumes
+from filehouse.ui import clipboard, menus, settings
+from filehouse.ui.details_pane import DetailsPane
+from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.dialogs.name import NameDialog
 from filehouse.ui.dialogs.prompter import Prompter
-from filehouse.ui.folder_view import FolderView
+from filehouse.ui.dialogs.properties import PropertiesDialog
+from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
+from filehouse.ui.pane import Pane
 from filehouse.ui.path_bar import PathBar
+from filehouse.ui.sheet import Sheet
 from filehouse.ui.sidebar import Sidebar
+from filehouse.ui.tab import Tab
+from filehouse.ui.tab_bar import TabBar
 
 _MESSAGE_MS = 8000
+_DETAILS_MS = 200
+_COPIED_MS = 2500
+# A window less wide than this, unscaled, gets the narrow layout: the sidebar as a
+# rail of icons, the actions in a bar at the bottom, the details as a sheet
+NARROW_BELOW = 800
+# The least the narrow layout needs, unscaled: its toolbar side by side, a few rows
+_MINIMUM_SIZE = (460, 360)
+# What "Sort by" offers, with the order each starts in: the newest and the largest first
+_SORTS = (
+    ("Name", NAME, Qt.SortOrder.AscendingOrder),
+    ("Modified", MODIFIED, Qt.SortOrder.DescendingOrder),
+    ("Size", SIZE, Qt.SortOrder.DescendingOrder),
+)
+DETAILS, ICONS = settings.DETAILS, settings.ICONS
 
 KEEP_RUNNING, CANCEL_ALL, STAY_OPEN = range(3)
 
@@ -54,6 +85,11 @@ def ask_about_running_jobs(parent, count):
     return {keep: KEEP_RUNNING, cancel: CANCEL_ALL}.get(box.clickedButton(), STAY_OPEN)
 
 
+def pick_folder(parent, title, start):
+    """Ask for a folder with the desktop's own dialog. Returns its path, or "" for none."""
+    return QFileDialog.getExistingDirectory(parent, title, start)
+
+
 def quit_app():
     QApplication.quit()
 
@@ -64,13 +100,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(QIcon.fromTheme("system-file-manager"))
-        self.resize(style.px(960), style.px(620))
+        self.setMinimumSize(style.px(_MINIMUM_SIZE[0]), style.px(_MINIMUM_SIZE[1]))
+        self.resize(settings.window_size(QSize(style.px(1080), style.px(660))))
 
-        self._history = History()
-        self._location = None
-        self._pending_select = None
-        self._error = None
         self._closing_when_idle = False
+        self._narrow = False
+        self._wide_sizes = None
 
         if jobs is None:
             jobs = JobModel(self)
@@ -78,63 +113,118 @@ class MainWindow(QMainWindow):
         self._jobs = jobs
         self._jobs.idle.connect(self._on_jobs_idle)
 
-        self._model = DirectoryModel(self)
-        self._proxy = DirectorySortProxy(self)
-        self._proxy.setSourceModel(self._model)
-        self._model.loaded.connect(self._on_loaded)
-        self._model.load_failed.connect(self._on_load_failed)
+        # Tabs, each with a folder or two side by side. `_tab` is the shown one and
+        # `_pane` its active pane: the toolbar, the title, the details, the status bar
+        # and every action are about it
+        self._view_mode = settings.view_mode()
+        self._unsplit_sizes = None
+        self._tab_bar = TabBar()
+        self._tab_bar.currentChanged.connect(self._on_tab_changed)
+        self._tab_bar.tabMoved.connect(self._on_tab_moved)
+        self._tab_bar.dropped.connect(self._on_tab_dropped)
+        self._tab_bar.setVisible(False)
+        self._stack = QStackedWidget()
+        self._tabs = []
+        self._tab = self._add_tab()
 
-        self._places = locations.places()
-        self._sidebar = Sidebar(self._places)
+        self._volumes = Volumes(self)
+        self._volumes.removed.connect(self._on_volume_removed)
+        self._volumes.failed.connect(self._show_error)
+        self._sidebar = Sidebar(locations.places(), self._volumes)
         self._sidebar.place_activated.connect(self.navigate)
-        self._view = FolderView(self._proxy)
-        self._view.item_activated.connect(self._on_item_activated)
-        self._view.context_menu_requested.connect(self._on_context_menu)
-        self._view.selection_model().selectionChanged.connect(self._update_state)
-        self._view.dropped.connect(self._on_dropped)
         self._panel = OperationsPanel(self._jobs)
-
-        splitter = QSplitter()
-        splitter.addWidget(self._sidebar)
-        splitter.addWidget(self._view)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([style.px(190), style.px(770)])
-        splitter.setHandleWidth(1)
-        central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(splitter, 1)
-        layout.addWidget(self._panel)
-        self.setCentralWidget(central)
-
-        # Item counts sit on the right; the left is for temporary messages
-        self._count_label = QLabel()
-        self.statusBar().addPermanentWidget(self._count_label)
-        self.statusBar().setSizeGripEnabled(False)
+        self._details = DetailsPane()
+        self._details.open_requested.connect(self._open_selected)
+        # Rows change for many reasons (counts, thumbnails), and often: the pane
+        # looks at most a few times a second whether what it shows is one of them
+        self._details_timer = QTimer(self)
+        self._details_timer.setSingleShot(True)
+        self._details_timer.setInterval(_DETAILS_MS)
+        self._details_timer.timeout.connect(self._update_details)
+        # The same details for a narrow window: a sheet that slides up from the bottom
+        self._sheet_details = DetailsPane(compact=True)
+        self._sheet = Sheet(self._sheet_details)
+        # The sheet takes the list's lower part: what is selected stays in view.
+        # A moment later, once the list has its new height
+        self._sheet.settled.connect(lambda: QTimer.singleShot(0, self._view.show_current))
 
         self._path_bar = PathBar()
         self._path_bar.location_chosen.connect(self.navigate)
         self._path_bar.text_entered.connect(self._on_path_entered)
         self._create_actions()
+        self._sheet_details.close_requested.connect(lambda: self._show_details.setChecked(False))
+
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
+        center_layout.addWidget(self._tab_bar)
+        center_layout.addWidget(self._stack, 1)
+
+        splitter = self._splitter = QSplitter()
+        splitter.addWidget(self._sidebar)
+        splitter.addWidget(center)
+        splitter.addWidget(self._details)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([style.px(200), style.px(620), style.px(250)])
+        splitter.setHandleWidth(style.px(8))
+        splitter.setContentsMargins(style.px(8), 0, style.px(8), style.px(4))
+        # Only in a narrow window, and only with something selected to act on
+        self._action_bar = self._group(
+            self._copy,
+            self._move_to,
+            self._rename,
+            self._trash,
+            self._show_details,
+            self._more,
+            self._permissions,
+        )
+        # The lock stands apart from the rest, behind a line
+        line = QFrame()
+        line.setObjectName("divider")
+        line.setFixedSize(1, style.px(20))
+        bar = self._action_bar.layout()
+        bar.insertSpacing(bar.count() - 1, style.px(6))
+        bar.insertWidget(bar.count() - 1, line)
+        bar.insertSpacing(bar.count() - 1, style.px(6))
+        bar_row = QHBoxLayout()
+        bar_row.setContentsMargins(0, 0, 0, style.px(4))
+        bar_row.addStretch(1)
+        bar_row.addWidget(self._action_bar)
+        bar_row.addStretch(1)
+        self._action_bar.hide()
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(splitter, 1)
+        layout.addLayout(bar_row)
+        layout.addWidget(self._sheet)
+        layout.addWidget(self._panel)
+        self.setCentralWidget(central)
+
+        # Item counts on the left, where temporary messages take their place for a
+        # while; the running operations on the right, which open the panel
+        self._count_label = QLabel()
+        self.statusBar().addWidget(self._count_label, 1)
+        self._job_status = JobStatus(self._jobs)
+        self._job_status.clicked.connect(self._panel.toggle)
+        self.statusBar().addPermanentWidget(self._job_status)
+        self.statusBar().setSizeGripEnabled(False)
+
         QApplication.clipboard().dataChanged.connect(self._update_state)
 
-        for signal in (
-            self._proxy.rowsInserted,
-            self._proxy.rowsRemoved,
-            self._proxy.modelReset,
-            self._proxy.layoutChanged,
-        ):
-            signal.connect(self._update_state)
-
+        self.set_view_mode(self._view_mode, remember=False)
         self.navigate(location, select=select)
+        if settings.split() and self.width() >= style.px(NARROW_BELOW):
+            self.set_split(True, remember=False)
         if message:
             self.statusBar().showMessage(message, _MESSAGE_MS)
         self._view.setFocus()
 
     def _create_actions(self):
-        def action(text, icon, shortcuts, slot):
-            item = QAction(QIcon.fromTheme(icon), text, self)
+        def action(text, icon, shortcuts, slot, colour="textPrimary"):
+            item = QAction(style.icon(icon + "-symbolic", icon, colour=colour), text, self)
             item.setShortcuts(shortcuts)
             item.triggered.connect(slot)
             self.addAction(item)
@@ -151,14 +241,49 @@ class MainWindow(QMainWindow):
         self._up = action("Up", "go-up", [QKeySequence("Alt+Up")], self.go_up)
         action("Edit location", "edit-entry", [QKeySequence("Ctrl+L")], self._path_bar.edit)
         action("Reload", "view-refresh", [QKeySequence("F5")], self.reload)
-        action("Close", "window-close", [QKeySequence("Ctrl+W")], self.close)
+        # The tab, or the window when it is the last tab
+        action("Close", "window-close", [QKeySequence("Ctrl+W")], self.close_current)
+        self._new_tab = action("New tab", "tab-new", [QKeySequence("Ctrl+T")], self.new_tab)
+        action(
+            "Next tab",
+            "go-next",
+            [QKeySequence("Ctrl+Tab"), QKeySequence("Ctrl+PgDown")],
+            lambda: self._step_tab(1),
+        )
+        action(
+            "Previous tab",
+            "go-previous",
+            [QKeySequence("Ctrl+Shift+Tab"), QKeySequence("Ctrl+PgUp")],
+            lambda: self._step_tab(-1),
+        )
         self._hidden = action(
             "Show hidden files",
             "view-hidden",
             [QKeySequence("Ctrl+H")],
-            self._proxy.set_show_hidden,
+            self._set_show_hidden,
         )
         self._hidden.setCheckable(True)
+        self._hidden.setChecked(self._proxy.show_hidden)
+
+        # The same keys as Dolphin
+        self._icons_mode = action(
+            "Icons", "view-list-icons", [QKeySequence("Ctrl+1")], lambda: self.set_view_mode(ICONS)
+        )
+        self._details_mode = action(
+            "Details",
+            "view-list-details",
+            [QKeySequence("Ctrl+3")],
+            lambda: self.set_view_mode(DETAILS),
+        )
+        self._split_view = action(
+            "Split view", "view-split-left-right", [QKeySequence("F3")], self.set_split
+        )
+        self._split_view.setCheckable(True)
+        modes = QActionGroup(self)
+        for item in (self._icons_mode, self._details_mode):
+            item.setCheckable(True)
+            modes.addAction(item)
+        self._details_mode.setChecked(True)
 
         keys = QKeySequence.StandardKey
         self._copy = action("Copy", "edit-copy", QKeySequence.keyBindings(keys.Copy), self.copy)
@@ -169,82 +294,402 @@ class MainWindow(QMainWindow):
         )
         self._rename = action("Rename…", "edit-rename", [QKeySequence("F2")], self.rename)
         self._trash = action(
-            "Move to trash", "user-trash", [QKeySequence("Delete")], self.trash_selected
+            "Move to trash",
+            "user-trash",
+            [QKeySequence("Delete")],
+            self.trash_selected,
+            colour="danger",
         )
         self._delete = action(
             "Delete permanently…",
             "edit-delete",
             [QKeySequence("Shift+Delete")],
             self.delete_selected,
+            colour="danger",
         )
         self._new_folder = action(
             "New folder…", "folder-new", [QKeySequence("Ctrl+Shift+N")], self.new_folder
         )
+        self._new_file = action("New file…", "document-new", [], self.new_file)
+        self._move_to = action("Move to…", "document-export", [], self.move_selected)
+        # Beside the other list, for the keyboard. Shift: F5 is Reload
+        self._copy_other = action(
+            "Copy to other pane", "edit-copy", [QKeySequence("Shift+F5")], self.copy_to_other_pane
+        )
+        self._move_other = action(
+            "Move to other pane",
+            "document-export",
+            [QKeySequence("Shift+F6")],
+            self.move_to_other_pane,
+        )
+        # The keys Dolphin has for these two
+        self._copy_path = action(
+            "Copy path", "edit-copy-path", [QKeySequence("Ctrl+Alt+C")], self.copy_path
+        )
+        self._terminal = action(
+            "Open terminal here",
+            "utilities-terminal",
+            [QKeySequence("Shift+F4")],
+            lambda: self.open_terminal(),
+        )
+        self._select_all = action(
+            "Select all",
+            "edit-select-all",
+            QKeySequence.keyBindings(keys.SelectAll),
+            lambda: self._view.select_all(),
+        )
+        self._restore = action("Restore", "edit-undo", [], self.restore_selected)
+        self._empty_trash = action("Empty trash…", "trash-empty", [], self.empty_trash)
+        self._properties = action(
+            "Properties", "document-properties", [QKeySequence("Alt+Return")], self.properties
+        )
 
+        # For the narrow window. Neither has a key of its own
+        self._show_details = action("Details", "documentinfo", [], lambda: None)
+        self._show_details.setCheckable(True)
+        # Not `triggered`: the sheet's own button and Escape uncheck it too
+        self._show_details.toggled.connect(self._set_sheet_open)
+        self._close_details = action(
+            "Close details",
+            "window-close",
+            [QKeySequence("Escape")],
+            lambda: self._show_details.setChecked(False),
+        )
+        self._close_details.setEnabled(False)
+        self._more = action("More…", "view-more-horizontal", [], self._show_selection_menu)
+        self._permissions = action("Permissions", "object-locked", [], self._show_permissions_menu)
+        self._folder_menu = action(
+            "Folder menu", "view-more-horizontal", [], self._show_folder_menu
+        )
+
+        # One row of rounded groups: where you are, what you can do, how it is shown
         toolbar = QToolBar()
         toolbar.setMovable(False)
         toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
-        toolbar.addActions([self._back, self._forward, self._up])
-        toolbar.addWidget(self._path_bar)
-        toolbar.addAction(self._hidden)
+        toolbar.addWidget(self._group(self._back, self._forward, self._up))
+        location = self._group()
+        location.layout().addWidget(self._path_bar)
+        location.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(location)
+        # In a narrow window the actions are in a bar at the bottom, and the folder
+        # menu has a button
+        self._toolbar_actions = toolbar.addWidget(
+            self._group(self._copy, self._move_to, self._rename, self._trash)
+        )
+        toolbar.addWidget(self._group(self._details_mode, self._icons_mode, self._split_view))
+        self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
+        self._toolbar_menu.setVisible(False)
         self.addToolBar(toolbar)
+
+    def _button_for(self, action):
+        """The toolbar or action bar button of an action."""
+        return next(
+            button for button in self.findChildren(QToolButton) if button.defaultAction() is action
+        )
+
+    def _group(self, *actions):
+        """A rounded group for the toolbar, holding an icon button per action."""
+        group = QFrame()
+        group.setObjectName("group")
+        layout = QHBoxLayout(group)
+        padding = style.px(style.GROUP_PADDING)
+        layout.setContentsMargins(padding, padding, padding, padding)
+        layout.setSpacing(style.px(2))
+        for item in actions:
+            button = QToolButton()
+            button.setDefaultAction(item)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setIconSize(QSize(style.px(18), style.px(18)))
+            side = style.px(style.CONTROL_HEIGHT)
+            button.setFixedSize(side, side)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            layout.addWidget(button)
+        return group
+
+    # The active pane
+
+    @property
+    def _view(self):
+        return self._pane.view
+
+    @property
+    def _model(self):
+        return self._pane.model
+
+    @property
+    def _proxy(self):
+        return self._pane.proxy
+
+    @property
+    def _location(self):
+        return self._pane.location
+
+    @property
+    def _error(self):
+        return self._pane.error
+
+    @property
+    def _panes(self):
+        return self._tab.panes
+
+    @property
+    def _pane(self):
+        return self._tab.active
+
+    @_pane.setter
+    def _pane(self, pane):
+        self._tab.active = pane
+
+    @property
+    def is_split(self):
+        return self._tab.is_split
+
+    def _all_panes(self):
+        return [pane for tab in self._tabs for pane in tab.panes]
+
+    def _add_pane(self, tab):
+        pane = Pane(settings.show_hidden(), self)
+        view = pane.view
+
+        def for_this_pane(handler):
+            """A click, a drop or a menu in a list makes it the active one first."""
+
+            def call(*args):
+                self._activate(pane)
+                return handler(*args)
+
+            return call
+
+        pane.changed.connect(lambda: self._on_pane_changed(pane))
+        pane.location_changed.connect(lambda _location: self._on_pane_moved(pane))
+        pane.proxy.dataChanged.connect(self._update_details_soon)
+        view.focused.connect(lambda: self._activate(pane))
+        view.item_activated.connect(for_this_pane(self._on_item_activated))
+        view.context_menu_requested.connect(for_this_pane(self._on_context_menu))
+        view.dropped.connect(for_this_pane(self._on_dropped))
+        view.open_in_tab.connect(for_this_pane(self._open_in_new_tab))
+        view.set_mode(self._view_mode)
+        view.set_compact(self._narrow)
+        if tab.active is None:
+            tab.active = pane
+        tab.panes.append(pane)
+        tab.splitter.addWidget(view)
+        return pane
+
+    def _other_pane(self):
+        return next((pane for pane in self._panes if pane is not self._pane), None)
+
+    def _activate(self, pane):
+        if pane is self._pane:
+            return
+        self._pane = pane
+        self._mark_active()
+        self._on_location_changed()
+
+    def _mark_active(self, tab=None):
+        tab = tab or self._tab
+        for pane in tab.panes:
+            pane.view.set_split(tab.is_split, pane is tab.active)
+
+    def _on_pane_changed(self, pane):
+        if pane is self._pane:
+            self._update_state()
+        else:
+            pane.sync()
+
+    def _on_pane_moved(self, pane):
+        self._update_tab_titles()
+        if pane is self._pane:
+            self._on_location_changed()
+
+    def set_split(self, on=True, remember=True):
+        """Show two folders side by side, or one again: the active pane stays."""
+        if on == self.is_split or (on and self._narrow):
+            self._split_view.setChecked(self.is_split)
+            return
+        if remember:
+            settings.set_split(on)
+        if on:
+            pane = self._add_pane(self._tab)
+            pane.navigate(self._pane.location)
+            half = self._tab.splitter.width() // 2
+            self._tab.splitter.setSizes([half, half])
+        else:
+            self._remove_other_pane(self._tab)
+        self._mark_active()
+        self._split_view.setChecked(on)
+        self._sync_details()
+        self._update_state()
+        self._view.setFocus()
+
+    @staticmethod
+    def _remove_other_pane(tab):
+        gone = next(pane for pane in tab.panes if pane is not tab.active)
+        tab.panes.remove(gone)
+        gone.view.setParent(None)
+        gone.view.deleteLater()
+        gone.close()
+        gone.deleteLater()
+
+    def _details_wanted(self):
+        return not self._narrow and not self.is_split
+
+    def _sync_details(self):
+        """No room for the details beside two lists: they come and go with the split."""
+        wanted = self._details_wanted()
+        if wanted == (not self._details.isHidden()):
+            return
+        if wanted:
+            self._details.setVisible(True)
+            if self._unsplit_sizes:
+                self._splitter.setSizes(self._unsplit_sizes)
+        else:
+            self._unsplit_sizes = self._splitter.sizes()
+            self._details.setVisible(False)
+
+    # Tabs
+
+    def _add_tab(self):
+        """A tab with one pane, at the end of the bar. The first one is the window's."""
+        tab = Tab()
+        self._tabs.append(tab)
+        self._add_pane(tab)
+        self._stack.addWidget(tab.splitter)
+        self._tab_bar.blockSignals(True)
+        index = self._tab_bar.addTab("")
+        self._tab_bar.blockSignals(False)
+        close = QToolButton()
+        close.setIcon(style.icon("window-close-symbolic", "window-close"))
+        close.setIconSize(QSize(style.px(12), style.px(12)))
+        close.setFixedSize(style.px(20), style.px(20))
+        close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        close.setToolTip("Close tab")
+        close.clicked.connect(lambda: self.close_tab(self._tabs.index(tab)))
+        self._tab_bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, close)
+        if len(self._tabs) == 1:
+            self._stack.setCurrentWidget(tab.splitter)
+        self._tab_bar.setVisible(len(self._tabs) > 1)
+        return tab
+
+    def new_tab(self, location=None, activate=True):
+        """Open a folder in a tab of its own, by default this one's folder."""
+        location = location or self._pane.location
+        tab = self._add_tab()
+        tab.active.navigate(location)
+        self._update_tab_titles()
+        if activate:
+            self._tab_bar.setCurrentIndex(self._tabs.index(tab))
+        return tab
+
+    def _open_in_new_tab(self, info):
+        """A folder of the list, in a tab behind this one."""
+        self.new_tab(locations.child(self._location, info.name), activate=False)
+
+    def close_tab(self, index):
+        if len(self._tabs) < 2 or not 0 <= index < len(self._tabs):
+            return
+        tab = self._tabs.pop(index)
+        self._tab_bar.removeTab(index)
+        self._stack.removeWidget(tab.splitter)
+        for pane in tab.panes:
+            pane.close()
+            pane.deleteLater()
+        tab.splitter.deleteLater()
+        self._tab_bar.setVisible(len(self._tabs) > 1)
+        if tab is self._tab:
+            # The bar has picked the next one: show it
+            self._on_tab_changed(self._tab_bar.currentIndex())
+
+    def close_current(self):
+        if len(self._tabs) > 1:
+            self.close_tab(self._tabs.index(self._tab))
+        else:
+            self.close()
+
+    def _step_tab(self, step):
+        count = len(self._tabs)
+        if count > 1:
+            self._tab_bar.setCurrentIndex((self._tab_bar.currentIndex() + step) % count)
+
+    def _on_tab_changed(self, index):
+        if not 0 <= index < len(self._tabs) or self._tabs[index] is self._tab:
+            return
+        self._tab = self._tabs[index]
+        self._stack.setCurrentWidget(self._tab.splitter)
+        self._mark_active()
+        self._split_view.setChecked(self.is_split)
+        self._sync_details()
+        self._on_location_changed()
+        self._view.setFocus()
+
+    def _on_tab_moved(self, source, target):
+        self._tabs.insert(target, self._tabs.pop(source))
+
+    def _on_tab_dropped(self, index, uris, modifiers, position):
+        """Files were dropped on a tab: into the folder it shows."""
+        self._drop_on(self._tabs[index].active, uris, None, modifiers, position)
+
+    def _update_tab_titles(self):
+        for index, tab in enumerate(self._tabs):
+            location = tab.active.location
+            if location is not None:
+                self._tab_bar.setTabText(index, locations.display_name(location))
+                self._tab_bar.setTabToolTip(index, locations.display_path(location))
+
+    # What is remembered
+
+    def set_view_mode(self, mode, remember=True):
+        self._view_mode = mode
+        for pane in self._all_panes():
+            pane.view.set_mode(mode)
+        (self._icons_mode if mode == ICONS else self._details_mode).setChecked(True)
+        if remember:
+            settings.set_view_mode(mode)
+
+    def _set_show_hidden(self, show):
+        for pane in self._all_panes():
+            pane.proxy.set_show_hidden(show)
+        settings.set_show_hidden(show)
 
     # Navigation
 
     def navigate(self, location, select=None):
         """Go to a folder and record it in the history."""
-        if locations.same(location, self._location):
-            return
-        self._history.visit(location)
-        self._show(location, select)
+        self._pane.navigate(location, select)
 
     def go_back(self):
-        if self._history.can_go_back:
-            previous = self._location
-            self._show(self._history.back(), self._name_within(previous, self._history.current))
+        self._pane.go_back()
 
     def go_forward(self):
-        if self._history.can_go_forward:
-            self._show(self._history.forward())
+        self._pane.go_forward()
 
     def go_up(self):
-        parent = locations.parent(self._location)
-        if parent is not None:
-            # Arrive with the folder we came from selected
-            self.navigate(parent, select=locations.basename(self._location))
+        self._pane.go_up()
 
     def reload(self):
-        self._show(self._location)
+        self._pane.reload()
 
-    def _show(self, location, select=None):
-        self._location = location
-        self._pending_select = select
-        self._error = None
-        self._model.set_location(location)
-
+    def _on_location_changed(self):
+        location = self._pane.location
         self.setWindowTitle(f"{locations.display_name(location)} — Files")
         self._path_bar.set_location(locations.segments(location), locations.display_path(location))
-        self._sidebar.select(
-            next(
-                (
-                    index
-                    for index, place in enumerate(self._places)
-                    if locations.same(place.location, location)
-                ),
-                -1,
-            )
-        )
-        self._back.setEnabled(self._history.can_go_back)
-        self._forward.setEnabled(self._history.can_go_forward)
+        self._sidebar.select(location)
+        self._back.setEnabled(self._pane.history.can_go_back)
+        self._forward.setEnabled(self._pane.history.can_go_forward)
         self._up.setEnabled(locations.parent(location) is not None)
         self._update_state()
 
-    @staticmethod
-    def _name_within(location, folder):
-        """The name of `location` if it sits directly in `folder`, to select it there."""
-        if locations.same(locations.parent(location), folder):
-            return locations.basename(location)
-        return None
+    def _on_volume_removed(self, root):
+        """A drive went away. A window that was looking at it has nothing left to show."""
+        gone = [
+            pane
+            for pane in self._all_panes()
+            if locations.same(pane.location, root) or locations.inside(pane.location, root)
+        ]
+        for pane in gone:
+            pane.navigate(locations.home())
+        if gone:
+            self._show_error("The drive this window was showing is gone.")
 
     def _on_path_entered(self, text):
         target = locations.resolve_start(text)
@@ -260,103 +705,316 @@ class MainWindow(QMainWindow):
 
     # Model state
 
-    def _on_loaded(self):
-        self._select_pending()
-        self._update_state()
-
-    def _select_pending(self):
-        name = self._pending_select
-        if name and self._model.row_for_name(name) >= 0:
-            self._view.select_name(name)
-            self._pending_select = None
-
-    def _on_load_failed(self, message):
-        self._error = message
-        self._update_state()
-
     def _update_state(self, *_args):
-        # Something this window made (a new folder, a renamed file) is selected once it is listed
-        if not self._model.loading:
-            self._select_pending()
-        selected = self._view.selected_count()
-        for item in (self._copy, self._cut, self._trash, self._delete):
-            item.setEnabled(selected > 0)
-        self._rename.setEnabled(selected == 1)
-        self._paste.setEnabled(bool(clipboard.get()[0]))
+        self._pane.sync()
+        infos = self._view.selected_infos()
+        selected = len(infos)
+        in_trash = self._in_trash()
+        at_trash = self._at_trash()
+        self._copy.setEnabled(selected > 0)
+        self._properties.setEnabled(True)
+        # What is in the trash can be restored or deleted, and nothing else
+        self._cut.setEnabled(selected > 0 and not in_trash)
+        # In the trash the Delete key deletes for good (and asks first, as always)
+        for item in (self._trash, self._delete):
+            item.setEnabled(selected > 0 and (at_trash or not in_trash))
+        self._rename.setEnabled(selected == 1 and not in_trash)
+        self._move_to.setEnabled(selected > 0 and not in_trash)
+        self._permissions.setEnabled(selected > 0 and not in_trash)
+        self._paste.setEnabled(bool(clipboard.get()[0]) and not in_trash)
+        other = self._other_pane()
+        for item in (self._copy_other, self._move_other):
+            item.setEnabled(
+                selected > 0 and not in_trash and other is not None and not other.in_trash
+            )
+        for item in (self._new_folder, self._new_file):
+            item.setEnabled(not in_trash)
+        # A terminal starts in a folder of this computer: not in the trash or a remote place
+        self._terminal.setVisible(self._terminal_folder() is not None)
+        self._restore.setEnabled(
+            selected > 0 and all(info.original_path is not None for info in infos)
+        )
+        self._empty_trash.setEnabled(at_trash and self._model.rowCount() > 0)
 
         count = self._proxy.rowCount()
-        if self._error:
-            self._view.show_message(self._error)
-        elif count or self._model.loading:
-            self._view.show_items()
-        elif self._model.rowCount():
-            self._view.show_message("Only hidden files here. Press Ctrl+H to show them.")
-        else:
-            self._view.show_message("This folder is empty")
-
+        self._select_all.setEnabled(count > 0)
         if self._error:
             text = ""
         elif self._model.loading:
             text = "Loading…"
         else:
             text = "1 item" if count == 1 else f"{count} items"
-            if selected:
-                text += f", {selected} selected"
+            if selected == 1:
+                text += f" · {infos[0].display_name} selected"
+            elif selected:
+                text += f" · {selected} selected"
+            if self._narrow and selected == 1 and infos[0].mode is not None:
+                # Short, and with what the narrow list has no column to spare for
+                text = f"{infos[0].display_name} · {mode_text(infos[0].mode)}"
         self._count_label.setText(text)
+        self._update_narrow_parts(selected)
+        self._update_details(infos)
+
+    def _update_details_soon(self, *_args):
+        if not self._details_timer.isActive():
+            self._details_timer.start()
+
+    def _update_details(self, infos=None):
+        if self._location is None:
+            return
+        if infos is None:
+            infos = self._view.selected_infos()
+        count = None if self._model.loading or self._error else self._proxy.rowCount()
+        if self._details_wanted():
+            self._details.show_items(self._location, infos, count)
+        elif self._sheet.is_open:
+            self._sheet_details.show_items(self._location, infos, count)
+
+    # The narrow layout
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._set_narrow(self.width() < style.px(NARROW_BELOW))
+
+    @property
+    def is_narrow(self):
+        return self._narrow
+
+    def _set_narrow(self, narrow):
+        if narrow == self._narrow:
+            return
+        if narrow:
+            # No room for two lists: the active one of each tab stays
+            for tab in self._tabs:
+                if tab is self._tab:
+                    self.set_split(False, remember=False)
+                elif tab.is_split:
+                    self._remove_other_pane(tab)
+                    self._mark_active(tab)
+        self._narrow = narrow
+        if narrow:
+            self._wide_sizes = self._splitter.sizes()
+        else:
+            self._show_details.setChecked(False)
+        self._details.setVisible(self._details_wanted())
+        self._sidebar.set_rail(narrow)
+        self._path_bar.set_short(narrow)
+        for pane in self._all_panes():
+            pane.view.set_compact(narrow)
+        self._split_view.setEnabled(not narrow)
+        self._button_for(self._split_view).setVisible(not narrow)
+        self._job_status.set_compact(narrow)
+        self._button_for(self._forward).setVisible(not narrow)
+        self._toolbar_actions.setVisible(not narrow)
+        self._toolbar_menu.setVisible(narrow)
+        if narrow:
+            # All the width the rail leaves is the list's
+            rail = self._sidebar.maximumWidth()
+            self._splitter.setSizes([rail, max(1, self._splitter.width() - rail), 0])
+        elif self._wide_sizes:
+            self._splitter.setSizes(self._wide_sizes)
+        self._update_state()
+
+    def _update_narrow_parts(self, selected):
+        # The bar acts on the selection, and makes way for the sheet
+        self._action_bar.setVisible(self._narrow and selected > 0 and not self._sheet.is_open)
+
+    def _set_sheet_open(self, open_):
+        self._sheet.set_open(open_ and self._narrow, animate=self.isVisible())
+        self._close_details.setEnabled(self._sheet.is_open)
+        self._update_state()
+
+    def _show_folder_menu(self):
+        button = self._button_for(self._folder_menu)
+        self._on_context_menu(None, button.mapToGlobal(button.rect().bottomLeft()))
+
+    def _show_selection_menu(self):
+        infos = self._view.selected_infos()
+        if infos:
+            button = self._button_for(self._more)
+            # The bar is at the bottom of the window: the menu opens upwards
+            self._on_context_menu(infos[0], button.mapToGlobal(button.rect().topLeft()), True)
 
     # Items
+
+    def _in_trash(self):
+        return self._pane.in_trash
+
+    def _at_trash(self):
+        return self._pane.at_trash
 
     def _on_item_activated(self, info):
         target = locations.child(self._location, info.name)
         if info.is_dir:
             self.navigate(target)
+        elif self._in_trash():
+            self._show_error(f"Restore “{info.display_name}” to open it.")
         else:
             desktop.open_default(target, self._show_error)
+
+    def _open_selected(self):
+        infos = self._view.selected_infos()
+        if len(infos) == 1:
+            self._on_item_activated(infos[0])
 
     def _show_error(self, message):
         self.statusBar().showMessage(message, _MESSAGE_MS)
 
-    def _on_context_menu(self, info, position):
-        menu = QMenu(self)
-        folder = self._location
-        if info is not None:
-            target = locations.child(self._location, info.name)
-            menu.addAction("Open", lambda: self._on_item_activated(info))
-            if info.is_dir:
-                folder = target
+    def _on_context_menu(self, info, position, above=False):
+        """The menu of an entry, or of the folder for None. `above` puts the menu's
+        bottom at `position` instead of its top."""
+        menu = self._menu_for(info)
+        if above:
+            position = QPoint(position.x(), position.y() - menu.sizeHint().height())
+        menu.exec(position)
+
+    def _menu_for(self, info):
+        menu = menus.menu(self)
+        if self._in_trash():
+            if info is not None:
+                menu.addActions([self._restore, self._delete])
+                menu.addSeparator()
+                menu.addAction(self._properties)
             else:
-                apps = desktop.apps_for_type(info.content_type)
-                if apps:
-                    open_with = menu.addMenu("Open with")
-                    for app in apps:
-                        open_with.addAction(
-                            QIcon.fromTheme(app.icon) if app.icon else QIcon(),
-                            app.name,
-                            lambda app=app: desktop.open_with(app, target, self._show_error),
-                        )
+                menu.addActions([self._empty_trash, self._select_all])
+                menu.addSeparator()
+                self._add_sort_and_view(menu)
+            return menu
+        if info is None:
+            # The folder's own menu
+            menu.addActions([self._new_folder, self._new_file])
+            menu.addSeparator()
+            menu.addActions([self._paste, self._select_all])
+            menu.addSeparator()
+            self._add_sort_and_view(menu)
+            menu.addAction(self._hidden)
+            menu.addSeparator()
+            menu.addActions([self._copy_path, self._terminal])
+            self._add_open_in_manager(menu, self._location)
+            menu.addAction(self._properties)
+            return menu
+        target = locations.child(self._location, info.name)
+        folder = self._location
+        menu.addAction(
+            style.icon("document-open-symbolic", "document-open"),
+            "Open",
+            lambda: self._on_item_activated(info),
+        )
+        if info.is_dir:
+            folder = target
+            menu.addAction(
+                style.icon("tab-new-symbolic", "tab-new"),
+                "Open in new tab",
+                lambda: self._open_in_new_tab(info),
+            )
+        else:
+            apps = desktop.apps_for_type(info.content_type)
+            if apps:
+                open_with = menus.menu(menu, "Open with")
+                open_with.setIcon(style.icon("view-grid-symbolic", "view-grid"))
+                menu.addMenu(open_with)
+                for app in apps:
+                    open_with.addAction(
+                        QIcon.fromTheme(app.icon) if app.icon else QIcon(),
+                        app.name,
+                        lambda app=app: desktop.open_with(app, target, self._show_error),
+                    )
+        self._add_open_in_manager(menu, folder)
+        menu.addSeparator()
+        menu.addActions([self._cut, self._copy, self._paste])
+        menu.addSeparator()
+        menu.addActions([self._rename, self._move_to])
+        if self.is_split:
+            menu.addActions([self._copy_other, self._move_other])
+        menu.addActions([self._trash, self._delete])
+        menu.addSeparator()
+        menu.addAction(self._copy_path)
+        if info.is_dir and self._terminal_folder(folder) is not None:
+            # In the folder the menu is for, not the one it is listed in
+            menu.addAction(
+                self._terminal.icon(), "Open terminal here", lambda: self.open_terminal(folder)
+            )
+        menu.addSeparator()
+        menu.addMenu(self._permissions_menu(menu))
+        menu.addAction(self._properties)
+        return menu
+
+    def _permissions_menu(self, parent):
+        """The presets, for the selection: each with the mode it gives, and a tick
+        on the one the selection has already."""
+        menu = menus.menu(parent, "Permissions")
+        menu.setIcon(self._permissions.icon())
+        infos = self._view.selected_infos()
+        kinds = {info.is_dir for info in infos}
+        for preset in permissions.PRESETS:
+            modes = {preset.mode_for(is_dir) for is_dir in kinds}
+            text = preset.label
+            if len(modes) == 1 and None not in modes:
+                # Files and folders together get different modes: then the name says enough
+                text += f"\t{next(iter(modes)):o}"
+            item = menu.addAction(text, lambda preset=preset: self.set_permissions(preset))
+            # Nothing to do for a preset that leaves every selected item alone
+            item.setEnabled(modes != {None})
+            item.setCheckable(True)
+            item.setChecked(
+                bool(infos)
+                and all(
+                    info.mode is not None and (info.mode & 0o777) == preset.mode_for(info.is_dir)
+                    for info in infos
+                )
+            )
+        return menu
+
+    def _show_permissions_menu(self):
+        if not self._view.selected_infos() or self._in_trash():
+            return
+        menu = self._permissions_menu(self)
+        button = self._button_for(self._permissions)
+        position = button.mapToGlobal(button.rect().topLeft())
+        # From the bar at the bottom of the window: upwards
+        menu.exec(QPoint(position.x(), position.y() - menu.sizeHint().height()))
+
+    def _add_open_in_manager(self, menu, folder):
         manager = desktop.file_manager()
         if manager is not None:
             menu.addAction(
+                style.icon("folder-open-symbolic", "folder-open"),
                 f"Open folder in {manager.name}",
                 lambda: desktop.open_with(manager, folder, self._show_error),
             )
-        menu.addSeparator()
-        if info is not None:
-            menu.addActions([self._cut, self._copy])
-        menu.addAction(self._paste)
-        if info is not None:
-            menu.addSeparator()
-            menu.addActions([self._rename, self._trash, self._delete])
-        else:
-            menu.addAction(self._new_folder)
-            menu.addSeparator()
-            menu.addAction(self._hidden)
-        menu.exec(position)
+
+    def _add_sort_and_view(self, menu):
+        """The folder menu's entries for how the list is shown."""
+        column, order = self._view.sort_column(), self._view.sort_order()
+        sort = menus.menu(menu, "Sort by")
+        sort.setIcon(style.icon("view-sort-symbolic", "view-sort"))
+        for text, sorts_by, first_order in _SORTS:
+            item = sort.addAction(
+                text, lambda by=sorts_by, first=first_order: self._view.sort(by, first)
+            )
+            item.setCheckable(True)
+            item.setChecked(sorts_by == column)
+        sort.addSeparator()
+        for text, way in (
+            ("Ascending", Qt.SortOrder.AscendingOrder),
+            ("Descending", Qt.SortOrder.DescendingOrder),
+        ):
+            item = sort.addAction(text, lambda way=way: self._view.sort(column, way))
+            item.setCheckable(True)
+            item.setChecked(way == order)
+        menu.addMenu(sort)
+        view = menus.menu(menu, "View")
+        view.setIcon(style.icon("view-grid-symbolic", "view-grid"))
+        view.addActions([self._details_mode, self._icons_mode])
+        view.addSeparator()
+        view.addAction(self._split_view)
+        view.addAction(self._new_tab)
+        menu.addMenu(view)
 
     # File operations
 
     def _selected_locations(self):
-        return [locations.child(self._location, info.name) for info in self._view.selected_infos()]
+        return self._pane.selected_locations()
 
     def _start(self, kind, sources, destination=None):
         return self._jobs.start(kind, sources, destination, origin=self)
@@ -375,7 +1033,7 @@ class MainWindow(QMainWindow):
     def paste(self):
         """Copy what is on the clipboard into this folder, or move it if it was cut."""
         uris, cut = clipboard.get()
-        if not uris:
+        if not uris or self._in_trash():
             return None
         sources = [locations.from_uri(uri) for uri in uris]
         if cut:
@@ -386,15 +1044,152 @@ class MainWindow(QMainWindow):
         return self._start(JobKind.MOVE if cut else JobKind.COPY, sources, self._location)
 
     def trash_selected(self):
+        if self._in_trash():
+            # Already there: the Delete key means delete for good, which asks first
+            return self.delete_selected()
         selected = self._selected_locations()
         return self._start(JobKind.TRASH, selected) if selected else None
 
     def delete_selected(self):
         """Delete for good. The job asks for confirmation before it touches anything."""
+        if self._in_trash() and not self._at_trash():
+            # The trash only deletes whole items, not what is inside a trashed folder
+            return None
         selected = self._selected_locations()
         return self._start(JobKind.DELETE, selected) if selected else None
 
+    def restore_selected(self):
+        """Put the selected trashed items back where they were."""
+        infos = [info for info in self._view.selected_infos() if info.original_path is not None]
+        if not infos:
+            return None
+        return self._jobs.start(
+            JobKind.RESTORE,
+            [locations.child(self._location, info.name) for info in infos],
+            origin=self,
+            targets=[locations.from_path(info.original_path) for info in infos],
+        )
+
+    def empty_trash(self):
+        """Delete everything in the trash for good. The job asks first, with the count."""
+        if not self._at_trash() or not self._model.rowCount():
+            return None
+        everything = [
+            locations.child(self._location, self._model.info(row).name)
+            for row in range(self._model.rowCount())
+        ]
+        return self._start(JobKind.DELETE, everything)
+
+    def properties(self):
+        """Show the properties of the selection, or of this folder when nothing is selected."""
+        selected = self._selected_locations() or [self._location]
+        dialog = PropertiesDialog(selected, self)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
+        return dialog
+
+    def set_permissions(self, preset):
+        """Give the selection the permissions of `preset`. Only the items themselves:
+        nothing inside a selected folder is changed."""
+        selected = self._selected_locations()
+        if not selected or self._in_trash():
+            return None
+        name = self._view.selected_infos()[0].display_name
+        change = PermissionChange(preset, selected, self)
+        change.done.connect(lambda outcome: self._on_permissions_set(outcome, len(selected), name))
+        change.done.connect(change.deleteLater)
+        return change
+
+    def _on_permissions_set(self, outcome, count, name):
+        what = f"“{name}”" if count == 1 else f"{count} items"
+        failed = len(outcome.errors)
+        if not failed:
+            text = f"Permissions of {what} changed"
+            if outcome.skipped:
+                # "Make executable" on a selection with folders in it
+                changed = "1 file" if outcome.changed == 1 else f"{outcome.changed} files"
+                text = f"Permissions of {changed} changed, folders left as they were"
+            self.statusBar().showMessage(text, _COPIED_MS)
+        elif failed == 1:
+            self._show_error(f"Could not change the permissions of {outcome.errors[0]}.")
+        else:
+            # Every one of them, by name
+            summary = f"Could not change the permissions of {failed} of {count} items."
+            self._show_error(summary)
+            ErrorDetails(SimpleNamespace(errors=outcome.errors, summary=summary), self).open()
+
+    def copy_path(self):
+        """Put the paths of the selection on the clipboard as text, one per line.
+        With nothing selected, the path of this folder."""
+        selected = self._selected_locations() or [self._location]
+        clipboard.put_text("\n".join(locations.display_path(item) for item in selected))
+        what = "Path" if len(selected) == 1 else f"{len(selected)} paths"
+        self.statusBar().showMessage(f"{what} copied", _COPIED_MS)
+
+    def _terminal_folder(self, folder=None):
+        """The path a terminal would start in, or None when it can't: no terminal
+        installed, or a folder that is not on this computer's file systems."""
+        folder = folder or self._location
+        if folder is None or desktop.default_terminal() is None:
+            return None
+        return locations.local_path(folder)
+
+    def open_terminal(self, folder=None):
+        path = self._terminal_folder(folder)
+        if path is not None:
+            desktop.open_terminal(path, self._show_error)
+
+    def move_selected(self):
+        """Move the selection to a folder that is picked in a dialog."""
+        selected = self._selected_locations()
+        if not selected or self._in_trash():
+            return None
+        start = locations.local_path(self._location) or locations.local_path(locations.home())
+        path = pick_folder(self, "Move to", start)
+        if not path:
+            return None
+        target = locations.from_path(path)
+        if self._all_in(selected, target):
+            # Already there
+            return None
+        return self._start(JobKind.MOVE, selected, target)
+
+    def copy_to_other_pane(self):
+        return self._transfer(JobKind.COPY)
+
+    def move_to_other_pane(self):
+        return self._transfer(JobKind.MOVE)
+
+    def _transfer(self, kind):
+        """Copy or move the selection into the folder of the other pane."""
+        other = self._other_pane()
+        selected = self._selected_locations()
+        if other is None or not selected or self._in_trash() or other.in_trash:
+            return None
+        if kind is JobKind.MOVE and self._all_in(selected, other.location):
+            # Already there
+            return None
+        return self._start(kind, selected, other.location)
+
+    def new_file(self):
+        if self._in_trash():
+            return None
+        folder = self._location
+        name = quick.suggest_file_name(folder)
+
+        def create(text):
+            try:
+                made = quick.create_file(folder, text)
+            except OperationError as error:
+                return f"Could not create the file: {error.message}."
+            self._select_when_listed(folder, locations.basename(made))
+            return None
+
+        return self._ask_name("New file", "Name of the new file:", name, create)
+
     def new_folder(self):
+        if self._in_trash():
+            return None
         folder = self._location
         name = quick.suggest_folder_name(folder)
 
@@ -410,7 +1205,7 @@ class MainWindow(QMainWindow):
 
     def rename(self):
         infos = self._view.selected_infos()
-        if len(infos) != 1:
+        if len(infos) != 1 or self._in_trash():
             return None
         info = infos[0]
         folder = self._location
@@ -436,9 +1231,7 @@ class MainWindow(QMainWindow):
         return dialog
 
     def _select_when_listed(self, folder, name):
-        if locations.same(folder, self._location):
-            self._pending_select = name
-            self._update_state()
+        self._pane.select_when_listed(folder, name)
 
     @staticmethod
     def _all_in(sources, folder):
@@ -446,13 +1239,22 @@ class MainWindow(QMainWindow):
 
     def _on_dropped(self, uris, folder_info, modifiers, position):
         """Files were dropped on the list, or on a folder in it."""
-        target = self._location
+        return self._drop_on(self._pane, uris, folder_info, modifiers, position)
+
+    def _drop_on(self, pane, uris, folder_info, modifiers, position):
+        target = pane.location
         if folder_info is not None:
             target = locations.child(target, folder_info.name)
         sources = [locations.from_uri(uri) for uri in uris]
         if any(locations.same(source, target) for source in sources):
             # A folder dropped on itself
             return None
+        if locations.in_trash(target):
+            # Dropped on the trash: that is where they go. Not into a trashed folder
+            if not pane.at_trash or folder_info is not None:
+                return None
+            sources = [source for source in sources if not locations.in_trash(source)]
+            return self._start(JobKind.TRASH, sources) if sources else None
 
         keys = Qt.KeyboardModifier
         if modifiers & keys.AltModifier:
@@ -474,9 +1276,9 @@ class MainWindow(QMainWindow):
         return self._start(kind, sources, target)
 
     def _ask_drop_action(self, position):
-        menu = QMenu(self)
-        move = menu.addAction(QIcon.fromTheme("transform-move"), "Move here")
-        copy = menu.addAction(QIcon.fromTheme("edit-copy"), "Copy here")
+        menu = menus.menu(self)
+        move = menu.addAction(style.icon("go-jump-symbolic", "transform-move"), "Move here")
+        copy = menu.addAction(style.icon("edit-copy-symbolic", "edit-copy"), "Copy here")
         menu.addSeparator()
         menu.addAction("Cancel")
         return {move: JobKind.MOVE, copy: JobKind.COPY}.get(menu.exec(position))
@@ -505,7 +1307,10 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
             return
-        self._model.close()
+        for pane in self._all_panes():
+            pane.close()
+        if self.isVisible():
+            settings.set_window_size(self.size())
         super().closeEvent(event)
 
     def come_forward(self):
@@ -515,7 +1320,18 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            # Folders may have been filled or emptied by another app meanwhile
+            for pane in self._all_panes():
+                pane.model.recount()
+
     def _on_jobs_idle(self):
+        for pane in self._all_panes():
+            pane.model.recount()
+        # What a job copied or deleted shows in how full the drives are
+        self._volumes.refresh_usage()
         if self._closing_when_idle:
             self._closing_when_idle = False
             self.close()

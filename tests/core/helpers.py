@@ -65,13 +65,14 @@ class Recorder:
             self._hook(job)
 
 
-def run_job(kind, sources, destination=None, prompt=None, hook=None):
+def run_job(kind, sources, destination=None, prompt=None, hook=None, targets=None):
     """Run a job to its end on this thread. Returns it with `.seen`, a Recorder."""
     seen = Recorder(hook)
     job = Job(
         kind,
         [gfile(source) for source in sources],
         gfile(destination) if destination is not None else None,
+        targets=[gfile(target) for target in targets] if targets is not None else None,
         prompt=prompt,
         on_change=seen,
     )

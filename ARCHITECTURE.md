@@ -99,6 +99,7 @@ filehouse/
 │   │   ├── locations.py         path/URI handling, places (home, Downloads, …), display names
 │   │   ├── listing.py           batched directory enumeration, file info records
 │   │   ├── history.py           back and forward history for one window
+│   │   ├── properties.py        details of a file, size of a folder all the way down
 │   │   ├── errors.py            OperationError: which file, which step, readable message
 │   │   └── operations/
 │   │       ├── job.py           Job, JobState, JobProgress
@@ -107,27 +108,42 @@ filehouse/
 │   │       ├── trash.py         trash (restore is added in phase 5)
 │   │       ├── delete.py        permanent delete
 │   │       ├── conflicts.py     the questions a job asks, answers, names for "Keep both"
-│   │       ├── quick.py         new folder and rename: immediate, no job
+│   │       ├── quick.py         new folder, new file and rename: immediate, no job
+│   │       ├── permissions.py   the permission presets: immediate, no job
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
-│   │   ├── icons.py             icon and description per content type
+│   │   ├── icons.py             icon tile per kind of file
+│   │   ├── dates.py             "Today, 10:42", "Yesterday", a weekday, a date
+│   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
+│   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
+│   │   ├── measure.py           folder sizes on a worker thread
+│   │   ├── permissions.py       a permissions preset applied on a worker thread
+│   │   ├── details.py           one file's details on a worker thread
 │   │   ├── job_model.py         all jobs of the process, fed by worker threads; titles and texts
 │   │   └── workers.py           the thread pool jobs run on
 │   ├── integration/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
-│   │   └── desktop.py           open, open with, default file manager hand-off
+│   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
 │       ├── main_window.py
+│       ├── pane.py              one folder: model, sort proxy, list, history, selection
+│       ├── tab.py               one or two panes and the active one
+│       ├── tab_bar.py           the row of tabs, a drop target
 │       ├── sidebar.py           places and mounted volumes
 │       ├── path_bar.py          breadcrumbs, editable on click or Ctrl+L
 │       ├── folder_view.py       list and grid modes, delegates
 │       ├── operations_panel.py  in-app list of jobs, with cancel, retry and details
+│       ├── job_status.py        the running jobs as one line in the status bar
+│       ├── sheet.py             a panel that slides up from the bottom, for the narrow window
+│       ├── details_pane.py      what is selected, beside the list
 │       ├── clipboard.py         cut, copy and paste of files as `text/uri-list`
+│       ├── settings.py          what is remembered between runs
 │       └── dialogs/             questions (conflict, error, no trash, confirm delete) and the
-│                                prompter that shows them, name (rename, new folder), details
+│                                prompter that shows them, name (rename, new folder), details,
+│                                properties
 └── tests/
     ├── core/                    copy, move, trash, cancel, failure, conflicts against tmp dirs
     └── integration/             island reporter against a fake bus, theme reader
@@ -153,7 +169,7 @@ Every launch is a new process. There is no single-instance logic and no D-Bus na
 - **`core/listing.py`** enumerates a folder with `Gio.File.enumerate_children` on a worker thread, in batches of about 200, asking only for the attributes the view needs (`standard::*`, `time::modified`, `unix::mode`, `thumbnail::*`). Large folders appear progressively.
 - **`DirectoryModel`** holds one folder. It appends batches, then follows changes with a `Gio.FileMonitor` (created, deleted, renamed, changed). Sorting and the hidden-files filter are a `QSortFilterProxyModel` on top: folders first, then natural order by name, case-insensitive.
 - Navigation keeps a back/forward history per window. Up goes to the parent.
-- **`FolderView`** has a details mode (`QTreeView`: name, size, modified, type) and an icons mode (`QListView` in icon mode, with thumbnails). The mode is remembered per window, not per folder, in v1.
+- **`FolderView`** has a details mode (`QTreeView`: name, permissions, modified, size) and an icons mode (`QListView` in icon mode, with thumbnails). The mode is remembered per window, not per folder, in v1.
 - Thumbnails: look up `~/.cache/thumbnails/{normal,large}/<md5 of URI>.png` and check its `Thumb::MTime`. On a miss, generate image thumbnails with `QImageReader` on a thread pool and write them back to the cache following the freedesktop spec, so Dolphin can reuse them. Other types show their MIME icon.
 - **Sidebar:** Home, Desktop, Documents, Downloads, Pictures, Music, Videos, Trash, then mounted volumes from `Gio.VolumeMonitor`, with eject. Without GVFS installed the volume monitor only sees mounts, not unmounted drives; that is acceptable for v1.
 
@@ -210,7 +226,7 @@ This is the part that has to be right. Every user action that changes files beco
 
 `JobModel` holds all jobs from this process: one instance, made in `app.py` and given to every window. It is a `QObject` with signals (`job_added`, `job_changed`, `job_removed`, `question_asked`, `idle`), not an item model, because its observers are a panel of widgets and the island reporter. Worker threads report through queued signals; the model passes on every state change and otherwise at most about 10 updates per second per job. It also decides how long an ended job stays listed: finished and cancelled jobs for a few seconds, failed jobs until dismissed. Retry replaces the failed job with a new one for the failed items.
 
-The **operations panel** is a collapsible strip at the bottom of the window. It shows every job with its title, text, progress and Cancel, and for a failed job Retry, Details (every error) and Dismiss. Each window has a panel and they all show the same jobs. This panel is the primary progress display. The island mirrors it.
+The **status bar** shows the running jobs as one line (since step 6d), and the **operations panel** is a strip at the bottom of the window that opens from that line, or by itself when a job fails or asks something. The panel shows every job with its title, text, progress and Cancel, and for a failed job Retry, Details (every error) and Dismiss. Each window has both and they all show the same jobs. Together they are the primary progress display. The island mirrors it.
 
 **Questions.** One `Prompter` listens to `JobModel.question_asked` and shows one question at a time as a window-modal message box on the window that started the job, or on the active window when that one is gone. If the job is cancelled meanwhile the box closes; if the box's window is closed the question is asked again on another window. Closing a box without choosing cancels the job.
 
@@ -258,7 +274,7 @@ Rules from the API spec that the client must follow:
 
 - Port the shell's `examples/read_theme.py`: start from complete defaults, overlay `$XDG_CONFIG_HOME/quickshell-island/theme.json`, ignore unknown fields, fall back per field, and use defaults for a missing or newer `version`.
 - `style.py` maps it to Qt:
-  - `QPalette`: `background` → Window, `surface` → Base, `surfaceRaised` → AlternateBase and Button, `textPrimary` → WindowText and Text, `textSecondary` → PlaceholderText, `accent` → Highlight, `onAccent` → HighlightedText.
+  - `QPalette`: the window's layers (see "Window colours" under phase 6) → Window, Base, AlternateBase and Button, `textPrimary` → WindowText and Text, `textSecondary` → PlaceholderText, `accent` → Highlight, `onAccent` → HighlightedText.
   - Font: the first installed family from `fonts.families`, at `max(8, round(px * scale.font * scale.ui))`.
   - Sizes (row height, icon sizes, paddings) defined in unscaled pixels and multiplied by `scale.ui`.
   - A short stylesheet for corner radii (`radius.small` for buttons and rows, `radius.medium` for panels) and the operations panel. Keep it short: a large stylesheet fights the platform style.
@@ -276,7 +292,7 @@ Rules from the API spec that the client must follow:
 
 Each phase ends with something usable and checked by hand. The core gets tests from phase 2 on.
 
-**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is next.
+**Status:** phases 0 and 1 are implemented as v0.1 alpha. Phases 2, 3 and 4 are implemented and tested, and phase 4 was checked by hand with the shell running. Phase 5 is implemented and tested; mounting and ejecting were only tested against stand-ins for drives. Phase 6, the new design, is implemented and tested, steps 6a to 6g; the custom title bar was never part of it (issue #9).
 
 ### Phase 0: skeleton and integration basics
 
@@ -343,15 +359,221 @@ The tests use `/dev/shm` as the second file system when it is one, and also alwa
 - Properties dialog (size, counts, dates, permissions read-only).
 - Remember window size, view mode and hidden-files setting.
 
+**How phase 5 was built**
+
+- **Trash.** The trash is the GVFS location `trash:///`, which shows the trash of every drive in one place and tells where each item was (`trash::orig-path`). Restore is its own job kind: one step per item, moved back whole with `Gio.File.move`, the folder it was in made again if it is gone. A restore never replaces what is there now (Skip and Keep both only). Deleting from the trash is the ordinary delete job with its confirmation, planned as one step per item because the trash removes an item with everything in it; "Empty trash" is that job for every item. In the trash nothing can be pasted, renamed or created, the Delete key deletes for good, and a drop on it trashes. Nothing inside a trashed folder can be restored or deleted by itself. Without GVFS there is no Trash place.
+- **Trash in tests.** The real `trash:///` belongs to the user, so tests never open it. The engine is tested with a plain folder standing in for the trash, and the window with the `locations` functions pointed at such a folder. Trash, restore and delete were checked against a real GVFS trash once, by hand, in a session with its own bus and home.
+- **Volumes** (`qt_models/volumes.py`) follow `Gio.VolumeMonitor`: mounted volumes, then drives that could be mounted. Clicking an unmounted one mounts it and goes there. The context menu ejects, or unmounts what can't be ejected. A window showing a drive that goes away returns to home. Encrypted drives that need a passphrase are not handled: the error is shown.
+- **Icons view.** A second view on the same model and selection (Ctrl+1 icons, Ctrl+3 details, as in Dolphin). Thumbnails are only loaded in this mode, for images Qt can read on local files, and only for items that are painted. `qt_models/thumbnails.py` follows the freedesktop thumbnail spec (`normal`, 128 px, `Thumb::URI` and `Thumb::MTime`, written under a temporary name and moved into place), so the cache is shared with Dolphin both ways.
+- **Properties** (Alt+Return) reads one file with `core/properties.py` and adds up folders on a worker thread, links not followed. For several items it shows the totals. It is read only.
+- **Remembered** in `$XDG_CONFIG_HOME/filehouse/filehouse.conf`: window size (saved when a window closes), view mode and whether hidden files are shown.
+
+### Phase 6: the new design
+
+The design is six pictures in `desing/` (not in git): a wide window with three panes, and a narrow window with its menus and sheets. This phase brings the app to that design. It is split into steps that each leave the app usable, ordered so that restyling what exists comes first and new behaviour after.
+
+The custom title bar in the pictures is **not** part of this phase. It is a decision of its own, in issue #9; every step below works under KWin's normal title bar.
+
+**Theme in this phase.** Everything the design needs is already in the shell's `theme.json` (`docs/THEME.md` in the shell repo), so nothing has to be added to the theme:
+
+- **Icon tiles** take their colours from `colors.palette` (green, blue, orange, yellow, red, purple, cyan, indigo), which the theme provides "for categories and decoration". The app decides which place and which kind of file gets which palette colour; the colour values are the shell's. A tile is the palette colour at low opacity with the icon in the full colour.
+- **Selection, focus and the progress bar** use `colors.accent`, which the user picks in the shell's settings, with `colors.onAccent` on top of it. Status colours come from `success`, `warning` and `danger`, never from the palette.
+- **Corners** use `radius.small`, `medium` and `large`. These follow the user's corner roundness setting, so the window only looks as round as the pictures when the shell is set to "Round". The app does not hard-code the pictures' radii.
+- **Light scheme.** The shell has an experimental light mode and exports `scheme` with matching colours. Nothing in the app may assume a dark background: translucent overlays (hover, dividers) are derived from the text colour, not from white.
+- **Reader.** `integration/theme.py` currently defaults `palette` to empty and keeps whatever entries the file has without checking them. It gets the full default palette and the same colour check as the other colours, so the tiles work with no theme file.
+
+**Window colours.** Changed after 6c: the first design put the cards on the theme's `background`, which is pitch black in the dark scheme and harsh behind a whole window. The window now uses the colours of the shell's own windows (its clipboard history is the model), all derived in `style.layer` from two theme colours:
+
+- **window** and the list: the theme's `surface`.
+- **card** (sidebar, details, toolbar groups, menus): `surface` with 4 % of the text colour mixed in, and a hairline border of the text colour at 6 %. The border is what sets a card apart.
+- **raised** (the Open button, a checked toolbar button, text fields, the progress bar's track): `surface` with 10 % of the text colour.
+- The selected row is the accent at 22 %.
+
+The theme's `background` and `surfaceRaised` are no longer used. Because every layer is `surface` plus some text colour, a light scheme gets darker cards on a light window without anything said about it.
+
+**6a. Restyle what exists.** No new behaviour.
+
+- Toolbar as rounded groups: back/forward/up, the breadcrumb, the action icons (copy, move, rename, trash), the list/grid switch.
+- Sidebar as a rounded card: a coloured icon tile per place, and a "Devices" heading above the drives.
+- List rows: taller, with an icon tile per file and a rounded highlight for the selection.
+- Menus: an icon per entry, shortcuts on the right, "Move to trash" in the danger colour.
+- Status bar text: "11 items · Dock.qml selected".
+
+**Done when:** the wide window matches the picture apart from the title bar, the details pane and the columns.
+
+**Done.** How it was built:
+
+- `integration/style.py` has the helpers the rest of the phase uses: `palette_color`, `radius`, `overlay` (the text colour at an opacity), `icon` (a theme icon in one colour) and `tile` (an icon on a rounded tile in a palette colour). Icons are drawn once as ordinary pixmaps; a custom icon engine was tried and dropped, because Qt can outlive Python at exit and then calls into an engine that is gone. `style.generation` goes up with each applied theme, so caches of icons know when to start over.
+- `qt_models/icons.py` sorts content types into eight kinds (folder, image, video, audio, archive, document, code, other), each with a palette colour. The sidebar maps places to colours the same way.
+- The breadcrumb starts at Home for anything in the home folder.
+- The toolbar has no "show hidden files" button any more; it is in the folder menu and on Ctrl+H.
+- Menus are made with `ui/menus.py`, which makes the popup's rounded corners show.
+- Not done: "Move to trash" has a red icon, but its text is not red. Qt's menus have no per-entry text colour, and a custom entry widget was not worth it yet.
+
+**Fixed after 6a:** the breadcrumb's hover highlight was cut off, because the path bar was only as tall as its text field while the breadcrumb buttons were taller. Icon buttons and breadcrumbs now share one height, `style.CONTROL_HEIGHT`, and the path bar is that tall.
+
+**6b. Columns and list menus.**
+
+- Columns Name, Permissions (`rwxr-xr-x`), Modified, Size. Type moves to the details pane.
+- Modified as "Today, 10:42", "Yesterday", a weekday within the last week, then a date.
+- Size of a folder as "24 items", counted in the background after the folder is listed, so listing stays fast.
+- Folder menu: Select all, Sort by, View.
+
+**Done when:** a folder of 10 000 files still lists as fast as before, and the counts fill in afterwards.
+
+**Done.** How it was built:
+
+- **Permissions** come with the listing (`unix::mode`, which the listing's `stat` already has: 10 000 files list in the same time with and without it) and are written as `ls` does, in the system's fixed-width font. The columns beside the name are in the secondary text colour.
+- **Modified** (`qt_models/dates.py`): "Today" with the time, "Yesterday", the weekday for two to six days ago, a date for anything older or in the future. A week ago is a date, because its weekday is today's. Times and dates are written in the user's locale; the words and weekday names are English like the rest of the app.
+- **Folder counts.** `core/listing.py` has `count_children`: what is directly in a folder, shown and hidden entries apart. `DirectoryModel` starts one count task when the listing has finished, for all folders in name order; it reports a few times a second, and each report is one `dataChanged`. A folder that can't be read shows nothing. The count includes hidden entries when the list shows them. Measured on 10 000 folders: listed in 0.9 s as before, all counts in 0.9 s more, with no longer stall of the UI than the listing itself causes.
+- **Keeping counts current.** The folder's monitor says when a subfolder appears or changes its attributes, and that subfolder is counted again (changes are gathered for 300 ms, and only one count runs at a time). It does **not** say when something is put into or taken out of a subfolder. So all folders are counted again when the last job ends and when the window becomes active. In between, a count can be out of date until a reload.
+- **Sorting.** The Size column sorts files by size and folders by their count, folders still on top. Sorting by size while the counts come in moves the folders as they arrive.
+- **Folder menu**, in the order of the picture: New folder, Paste, Select all; Sort by, View, Show hidden files; Open folder in Dolphin, Properties. "Sort by" offers Name, Modified and Size (Modified and Size start with the newest and the largest) and Ascending or Descending; clicking a column header still works, also for Permissions. Select all is on Ctrl+A. The trash's menu gets Select all, Sort by and View as well.
+- Not done: the sort order is not remembered between runs; a new window sorts by name.
+
+**6c. Details pane.**
+
+- A pane on the right for the selection: icon, name, type, modified, size, owner, the permissions grid (read, write, run for owner, group, others) and an Open button.
+- With nothing selected it shows the open folder; with several items, their count and total size.
+- It reuses `core/properties.py` and the folder measuring from phase 5. The Properties dialog stays for now and is removed once the pane covers everything it shows.
+
+**Done when:** selecting a file shows its details without opening a dialog.
+
+**Done.** How it was built:
+
+- `ui/details_pane.py` is the third part of the window's splitter, a card like the sidebar. It is given the open folder and the selected entries and decides by itself what to show. Asked again for what it already shows, it does nothing; an entry whose size, date or mode changed counts as new, so a selected file that changes is read again (the window looks for that at most five times a second).
+- **Reading** is `core/properties.read` on a worker thread (`qt_models/details.py`). What is on show stays until the answer is in, and only the answer to the last question is used, so going down a list with the arrow keys neither blinks nor blocks.
+- **One item:** tile, name, type (or "Link to …"), modified, size, owner as "you · group" when it is the user's own, the mode in octal, and the grid. The third column of the grid reads "Open" for a folder. Each dot says in a tooltip what it stands for ("Group may not write it").
+- **A selected folder** is added up in the background as in the Properties dialog: its size, and "Contains 12 files, 3 folders". The count is cancelled when the selection changes.
+- **Several items:** "3 items", their total size and "In all 5 files, 2 folders", added up the same way. No dates, owner or permissions.
+- **Nothing selected:** the open folder, with how many items the list shows in place of a size. It is **not** added up: that would walk the whole drive for "/" on every visit. Its full size is in Properties.
+- **Open** does what Enter does on the item. It is hidden for the open folder and for several items.
+- The grid is a display. Its dots become switches, or not, with step 6g (open question 3).
+- The Properties dialog stays (open question 5). It still has what the pane leaves out: accessed and created dates, the location, where a trashed item was, and the byte count.
+- A new window is 1080 by 660, as in the picture, to make room for the pane.
+- **Corners that fit.** A Qt stylesheet draws square corners when a radius is more than half the height of what it rounds. With the shell set to "Round" (`radius.large` 21 at scale 1.1) that made the Open button a plain box. `style.radius_within(name, height)` gives the theme's radius, but never more than half the height; the Open button and the toolbar's groups and buttons use it, and have a fixed height to go with it. Anything low that gets a theme radius must use it too.
+- Not done: below about 800 pixels of width the list's columns no longer fit beside the pane and scroll sideways. The pane can be dragged shut with the splitter; the real answer is the narrow layout of step 6e.
+
+**6d. Jobs in the status bar.**
+
+- The status bar shows the running job as one line: title, progress bar, percentage; with several jobs, the count.
+- Clicking it opens the existing operations panel, which stays the place for cancel, retry, details and for failures. A failed job or a waiting question opens the panel by itself.
+
+**Done when:** a copy shows in the status bar as in the picture, and nothing the panel does today is lost.
+
+**Done.** How it was built:
+
+- `ui/job_status.py` is a button at the right end of the status bar, hidden without jobs. The item count moved to the left end, where temporary messages take its place while they show.
+- **What the line says.** One job running: what it does without where to ("Copying 4 items"), a bar and the percentage. Several: "3 operations" and how far they are together, by bytes when all of them count bytes, otherwise the mean, with a job that is still being planned counted as not started. None running: "1 operation failed" in the danger colour if any did, otherwise how the last one ended ("Copied 4 items"), for as long as `JobModel` keeps it.
+- **Never 100 %.** While a job runs the line shows at most 99 %: all bytes written is not done, only the job's state says that (safety rule 1).
+- **The panel is closed until it is wanted.** Before this step it showed whenever there was a job. Now a click on the line opens and closes it, and its header closes it. It opens by itself when a job goes into `failed` or `waiting`, once per time it does: closed again by the user, it stays closed until something new needs them. When the last job is gone the panel is closed again for the next one.
+- Nothing the panel did is gone: cancel, retry, details and dismiss are where they were, one click further away for a job that runs without trouble.
+
+**6e. Narrow window.**
+
+- Below a width to be chosen, the window changes layout: the sidebar becomes an icon rail, the breadcrumb shortens to "… › parent › folder", the action icons move to a floating bar at the bottom, and the details pane becomes a sheet that slides up.
+- A "⋯" button opens the folder menu.
+
+**Done when:** resizing the window across the width switches between the two layouts without losing the selection or the place in the list.
+
+**Done.** How it was built:
+
+- **The width** is 800 pixels, unscaled (`NARROW_BELOW` in `ui/main_window.py`), and the layout follows the window's width with no setting to force one (open question 4, decided). A window can't be made narrower than 460 by 360, which is what the narrow toolbar needs.
+- **One window, two arrangements.** Nothing is rebuilt on the switch: the same list, model and selection stay, and each part is told to change its form. That is why the selection and the scroll position survive it.
+  - `Sidebar.set_rail`: icons only, at a fixed width, names as tooltips, a line where the "Devices" heading was.
+  - `PathBar.set_short`: "… › parent › folder". The "…" opens a menu of the folders above.
+  - The toolbar loses Forward (Alt+Right still works) and its action group, and gains a "⋯" button for the folder menu.
+  - The list loses its Modified column. The status bar says what the list no longer has room for: "Dock.qml · rw-r--r--", and the job line is one word, "Copying".
+- **The action bar** is a rounded group centred under the list, with Copy, Rename, Move to trash, Details and "⋯" (the selection's menu, which opens upwards). It is there only while something is selected. It is part of the layout, not laid over the list: floating as in the picture, it would hide the last rows, and whatever is selected there.
+- **The details sheet** (`ui/sheet.py`) is a second `DetailsPane` in a compact form: icon beside the name, a close button, the mode spelled out ("rw-r--r-- · 644") and no Open button. The Details button in the action bar opens it, and its close button, the same button again or Escape closes it. It slides by animating its height, pushes the list up, and the list then scrolls just enough to keep the selected entry in view. While it is open the action bar is hidden and the sheet follows the selection.
+- Going back to a wide window closes the sheet and puts the splitter back as it was.
+- Not in this step, because they are steps of their own: Move and the lock button in the action bar (6f, 6g), and the search button in the toolbar (later).
+
+**6f. Small additions from the menus.**
+
+- Copy path.
+- Open terminal here (the default terminal; hidden when none is found).
+- New file.
+- A usage bar per drive in the sidebar.
+- "Move" in the toolbar: move the selection to a folder that is picked.
+
+**Done.** How it was built:
+
+- **Copy path** (Ctrl+Alt+C, as in Dolphin) puts the paths of the selection on the clipboard as plain text, one per line; with nothing selected, the open folder's. It is text, not files, so it can't be pasted back as a copy.
+- **Open terminal here** (Shift+F4, as in Dolphin). `integration/desktop.py` picks the terminal: the one set in Plasma's settings (`TerminalApplication` in `kdeglobals`), then `$TERMINAL`, then `xdg-terminal-exec` and a list of known ones. It is started with the folder as its working directory, which every terminal opens its shell in, so no terminal needs its own command line option. The entry is hidden when no terminal is found and where there is no local folder to start in (the trash, remote places). In the menu of a folder in the list it opens that folder.
+- **New file** makes an empty file with a typed name, the way New folder does, and never replaces anything (`quick.create_file`). Templates, which the submenu arrow in the picture suggests, are left for later (open question 6, decided).
+- **Usage bars.** `qt_models/volumes.py` asks each mounted volume how full it is (`filesystem::size` and `free`, asynchronously) when the drives change, when the last job ends and when the app starts. The sidebar draws a bar under the drive's name, in the accent colour and in the warning colour from 90 % full, with "12 GiB free of 500 GiB" as the tooltip. The rail has no room for the bar and keeps the tooltip.
+- **The system's drive** is now the first device, named after the system ("Fedora Linux") and leading to "/", as in the picture. Without it most machines would list no device and show no bar.
+- **Move to…** is in the toolbar, the action bar and the file menu. It asks for a folder with the desktop's own dialog and starts an ordinary move job, so conflicts, cancel and errors behave as for any move.
+- **Menus** now follow the pictures' order. Folder: New folder, New file; Paste, Select all; Sort by, View, Show hidden files; Copy path, Open terminal here, Open folder in Dolphin, Properties. File: Open, Open with, Open folder in Dolphin; Cut, Copy, Paste; Rename, Move to, Move to trash, Delete permanently; Copy path, Open terminal here (folders); Properties.
+
+**6g. Changing permissions.**
+
+- The four presets from the pictures, from the Permissions submenu and the lock button: Private 600, Shared 664, Make executable 755, Read-only 444.
+- It changes files, so it goes through the core with the same error type and tests as every other operation.
+
+**Done.** How it was built:
+
+- `core/operations/permissions.py` has the presets and `apply(preset, locations)`, which returns how many items were changed, how many were left alone by design, and an `OperationError` for each one that could not be changed. It carries on after a failure. It is not a job: it finishes at once, like rename. `qt_models/permissions.py` runs it on a worker thread, because a selection can be thousands of files.
+- **Folders** (open question 2, decided) get the preset with the "open" bit wherever there is a "read" bit: Private 700, Shared 775, Read-only 555. "Make executable" says nothing about folders and leaves them alone; it is greyed out when only folders are selected.
+- **Only the items themselves.** Nothing inside a selected folder is changed. Applying a preset to everything in a folder would be a job of its own, with progress, cancel and partial failure, and is not built.
+- **Links are never followed**, as in every other operation: a link has no permissions of its own, so it is reported as an error and what it points to is not touched.
+- **Special bits.** A folder keeps set-group-id and sticky, which say who new files in it belong to and who may delete from it. A file loses set-user-id and set-group-id: such a file made writable by its group would be a hole.
+- **In the window.** A Permissions submenu in the file menu, and the lock button behind a line in the narrow window's action bar, which opens the same menu upwards. Each entry shows the mode it gives (the folder's mode when folders are selected, none when files and folders are selected together) and the one the selection already has is ticked.
+- **Afterwards** the status bar says what was changed. One failure is named in the status bar; several open the "What went wrong" list with every one of them by name. The list and the details pane update by themselves, through the folder's monitor.
+- **The grid stays a display** (open question 3, decided). Permissions are changed through the presets only.
+
+**Left for later:** search (the field in the toolbar) and Compress. Both are on the "Later" list already, and both are features of their own.
+
+**Open questions for this phase**
+
+1. ~~Colours of the icon tiles~~ Decided: from the theme's `colors.palette`, see "Theme in this phase". Which colour goes with which place and file type is fixed in the app.
+2. ~~Folder presets~~ Decided: folders get 700, 775 and 555, "Make executable" leaves them alone, and nothing inside a folder is changed. See 6g.
+3. ~~The permissions grid~~ Decided: a display. Permissions change through the presets. See 6g.
+4. ~~The width at which the layout changes~~ Decided: 800 pixels, and no setting to force a layout. See 6e.
+5. **Properties dialog.** Remove it when the details pane is done, or keep it for several items?
+6. ~~New file~~ Decided: an empty file with a typed name. Templates later. See 6f.
+
 ### Later
 
-- Live theme updates (file watch on the theme directory).
-- Optional custom titlebar when the shell is detected (#21 comment).
-- Recent files written to the freedesktop recent-files list, for the shell's launcher (#24, point 4).
-- A notification for a job that finished while the window was hidden (#24, point 7).
-- Undo for rename, move and trash.
-- Remote locations through GVFS, search, archive extraction (each extraction a job, so it reuses the activity mapping).
-- Video and PDF thumbnails.
+Each has an issue, where what it takes and what is still to be decided is written down.
+
+- Live theme updates (file watch on the theme directory): #13.
+- Custom title bar: a decision of its own, #9 (and #21 comment in the shell repo).
+- Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14.
+- A notification for a job that finished while the window was hidden (shell #24, point 7): #15.
+- Undo for rename, move and trash: #16.
+- Remote locations through GVFS: #17.
+- Search: #18.
+- Archives, extracting and compressing, each a job so it reuses the activity mapping: #19.
+- Video and PDF thumbnails: #20.
+
+Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and tabs (#22). The split view (#12) and tabs are built; see below.
+
+### Split view (#12)
+
+F3, the toolbar button or View → Split view shows two folders side by side. Each is a `Pane` (`ui/pane.py`: model, sort proxy, list, history, selection, error state); the window has one or two and an active one, `_pane`. The active pane is the one whose list was last clicked or given the keyboard, and it is framed in the accent colour while the split is on. The path bar, back/forward/up, the title, the actions, the status bar and the sidebar's highlight all follow it. A drop, a click or a menu in a list makes it active first, so a drop lands in the folder of the list it was dropped on, with the rules for drops as before (move on the same file system, copy across).
+
+Decided, from the issue's open questions:
+
+- **Narrow layout:** no split below 800 pixels. Narrowing the window closes the split (the active pane stays) and it is not brought back by widening; the toggle is disabled there.
+- **Details pane:** hidden while the split is on; the sizes of the window's parts are put back when it closes.
+- **Path bar:** one, following the active pane.
+- **Tabs:** out of scope, #22. A tab is meant to be a `Pane` too.
+- **Shared between the panes:** view mode and hidden files (both are settings of the window). Sort order and folder are each pane's own. A new second pane opens in the active pane's folder.
+- **Copy and Move to the other pane:** Shift+F5 and Shift+F6 (F5 is Reload), also in the item's context menu while the split is on. Disabled when either pane is in the trash.
+- **Remembered:** whether the split is on (`view/split`), for every new window. The second pane opens in the first pane's folder; its own folder is not remembered. Closing the split because the window got narrow does not forget it.
+
+### Tabs (#22)
+
+Ctrl+T, "New tab" in the View menu, or a middle click on a folder (and "Open in new tab" in its menu) opens a folder in a tab. A `Tab` (`ui/tab.py`) holds one pane or two with its active one, so each tab has its own split; the window holds a list of them and shows one at a time (`_tab`, and `_pane` as its active pane). Everything that follows the active pane follows the shown tab.
+
+- **Keys:** Ctrl+W closes the tab, or the window when it is the last; Ctrl+Tab and Ctrl+PageDown go to the next tab, Ctrl+Shift+Tab and Ctrl+PageUp to the previous. A new tab from Ctrl+T or the menu is shown at once; one from a middle click opens behind.
+- **The bar** is shown only with two or more tabs, also in the narrow layout (it scrolls, and the tabs elide). Tabs can be dragged to reorder. The title is the folder's name, the tooltip its path.
+- **Dropping on a tab** puts the files in that tab's active folder, by the rules of any drop, without switching to it.
+- **Shared by all tabs:** view mode and hidden files. Sort order, folder and history are each pane's own.
+- **Not remembered between runs:** the open tabs. A file manager that brings back the tabs of a window the user closed surprises more than it helps.
+- **Narrowing** the window closes the split of every tab, as for one tab. A drive that goes away takes every pane that was on it to home.
 
 ### What phase 3 added to the plan above
 
@@ -367,3 +589,5 @@ The tests use `/dev/shm` as the second file system when it is one, and also alwa
 2. ~~A job with skipped items~~ Decided: `failed` when items were skipped after an error; conflict skips still end as `done`.
 3. ~~Closing with running jobs~~ Decided: closing the last window offers "Keep running", "Cancel N operations" and "Don't close"; the process exits when the jobs have ended.
 4. ~~The app's real name and app id~~ Decided: `filehouse`.
+5. **Custom title bar:** issue #9.
+6. The open questions listed under phase 6.

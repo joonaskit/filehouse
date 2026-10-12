@@ -27,6 +27,7 @@ class JobKind(Enum):
     COPY = "copy"
     MOVE = "move"
     TRASH = "trash"
+    RESTORE = "restore"
     DELETE = "delete"
 
 
@@ -74,6 +75,7 @@ _VERBS = {
     JobKind.COPY: "Copied",
     JobKind.MOVE: "Moved",
     JobKind.TRASH: "Moved",
+    JobKind.RESTORE: "Restored",
     JobKind.DELETE: "Deleted",
 }
 
@@ -81,12 +83,17 @@ _VERBS = {
 class Job:
     """Copy or move `sources` into the folder `destination`, or trash or delete them.
 
+    A restore takes trashed items as `sources` and, in `targets`, where each one
+    goes back to.
+
     `prompt(question)` answers the questions in `conflicts`. Without one, nothing
     is ever replaced, a failed item is skipped and reported, and a permanent
     delete is refused.
     """
 
-    def __init__(self, kind, sources, destination=None, *, prompt=None, on_change=None):
+    def __init__(
+        self, kind, sources, destination=None, *, targets=None, prompt=None, on_change=None
+    ):
         self.id = next(_ids)
         self.kind = kind
         self.sources = list(sources)
@@ -102,6 +109,11 @@ class Job:
         self._started = False
         self._lock = threading.Lock()
         self._items = [(source, destination, source.get_basename()) for source in self.sources]
+        if targets is not None:
+            self._items = [
+                (source, target.get_parent(), target.get_basename())
+                for source, target in zip(self.sources, targets, strict=True)
+            ]
         self._steps = []
         self._bytes_finished = 0
         self._conflict_default = None
@@ -227,6 +239,8 @@ class Job:
     def _plan_item(self, source, folder, name, parent=None, rename=True):
         if self.kind is JobKind.TRASH:
             return plan.plan_trash(source)
+        if self.kind is JobKind.RESTORE:
+            return plan.plan_restore(source, folder, name, self.cancellable)
         return self._plan_tree(source, folder, name, parent, rename)
 
     def _plan_tree(self, source, folder, name, parent=None, rename=True):
@@ -290,7 +304,10 @@ class Job:
         """Run one step. Returns the steps to run in its place when it has to be expanded."""
         kind = step.kind
         if kind is StepKind.UNPLANNED:
-            steps = self._plan_tree(step.source, step.folder, step.name, step.parent)
+            if self.kind is JobKind.RESTORE:
+                steps = plan.plan_restore(step.source, step.folder, step.name, self.cancellable)
+            else:
+                steps = self._plan_tree(step.source, step.folder, step.name, step.parent)
             if len(steps) == 1 and steps[0].kind is StepKind.UNPLANNED:
                 raise steps[0].error
             return steps
@@ -312,8 +329,11 @@ class Job:
                 trash.trash(step, self.cancellable)
             except trash.NoTrash:
                 return self._no_trash(step)
+        elif kind is StepKind.RESTORE:
+            copy.restore(step, self.cancellable)
         elif kind is StepKind.DELETE:
-            delete.delete(step, self.cancellable)
+            if not delete.delete(step, self.cancellable):
+                return plan.plan_delete(step.source, self.cancellable, walk=True)
         return None
 
     def _label(self, step):
@@ -337,7 +357,9 @@ class Job:
 
         label = self._label(step)
         same_file = step.source.equal(dest)
-        can_replace = step.is_dir == dest_is_dir and not same_file
+        # A restore never replaces: what is there now may be newer than what was trashed
+        restoring = step.kind is StepKind.RESTORE
+        can_replace = step.is_dir == dest_is_dir and not same_file and not restoring
         reply = self._conflict_default
         if reply is None or (reply.answer is Answer.REPLACE and not can_replace):
             reply = self._ask(
@@ -351,6 +373,8 @@ class Job:
         if reply.answer is Answer.REPLACE:
             if same_file:
                 raise OperationError.at(step.source, label, "cannot replace a file with itself")
+            if restoring:
+                raise OperationError.at(step.source, label, "already exists where it was")
             if not can_replace:
                 kinds = ("a folder", "a file") if step.is_dir else ("a file", "a folder")
                 raise OperationError.at(
@@ -468,7 +492,8 @@ class Job:
         counted = self._counted()
         done, total = sum(step.done for step in counted), len(counted)
         noun = "file"
-        if self.kind is JobKind.TRASH or any(step.is_dir for step in counted):
+        whole_items = self.kind in (JobKind.TRASH, JobKind.RESTORE)
+        if whole_items or any(step.is_dir or step.whole for step in counted):
             noun = "item"
         if not planned:
             total, noun = len(self._items), "item"

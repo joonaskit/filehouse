@@ -1,6 +1,7 @@
 """Directory enumeration and the file records the views show."""
 
 import re
+import stat
 from dataclasses import dataclass
 
 from gi.repository import Gio, GLib
@@ -20,10 +21,16 @@ ATTRIBUTES = ",".join(
         "standard::size",
         "standard::fast-content-type",
         "time::modified",
+        "unix::mode",
+        # Only set for what is in the trash
+        "trash::orig-path",
     ]
 )
 
 BATCH_SIZE = 200
+
+# All that counting a folder's entries needs
+_COUNT_ATTRIBUTES = "standard::name,standard::is-hidden,standard::is-backup"
 
 _DIGITS = re.compile(r"(\d+)")
 
@@ -43,6 +50,16 @@ class FileInfo:
     modified: int  # seconds since the epoch, 0 when unknown
     content_type: str
     sort_key: tuple
+    original_path: str | None = None  # where a trashed item was, for restoring it
+    mode: int | None = None  # permission bits, None where there are none
+
+
+@dataclass(frozen=True, slots=True)
+class Count:
+    """How many entries a folder has directly in it."""
+
+    shown: int
+    hidden: int
 
 
 def natural_key(name):
@@ -67,7 +84,18 @@ def info_from_gio(info):
         content_type=info.get_attribute_string("standard::fast-content-type")
         or "application/octet-stream",
         sort_key=natural_key(display_name),
+        original_path=info.get_attribute_byte_string("trash::orig-path"),
+        mode=(
+            info.get_attribute_uint32("unix::mode") & 0o7777
+            if info.has_attribute("unix::mode")
+            else None
+        ),
     )
+
+
+def mode_text(mode):
+    """Permission bits as `ls` writes them: "rwxr-xr-x". Empty when there are none."""
+    return "" if mode is None else stat.filemode(mode)[1:]
 
 
 def list_directory(location, on_batch, cancellable=None, batch_size=BATCH_SIZE):
@@ -106,6 +134,34 @@ def list_directory(location, on_batch, cancellable=None, batch_size=BATCH_SIZE):
             pass
     if batch:
         on_batch(batch)
+
+
+def count_children(location, cancellable=None):
+    """Count what is directly in a folder. Blocks, so call it from a worker thread.
+
+    Returns a Count, or None when the folder can't be read or the count was cancelled.
+    """
+    shown = hidden = 0
+    try:
+        enumerator = location.enumerate_children(
+            _COUNT_ATTRIBUTES, Gio.FileQueryInfoFlags.NONE, cancellable
+        )
+    except GLib.Error:
+        return None
+    try:
+        while (info := enumerator.next_file(cancellable)) is not None:
+            if info.get_is_hidden() or info.get_is_backup():
+                hidden += 1
+            else:
+                shown += 1
+    except GLib.Error:
+        return None
+    finally:
+        try:
+            enumerator.close(None)
+        except GLib.Error:
+            pass
+    return Count(shown, hidden)
 
 
 def _is_cancelled(error):

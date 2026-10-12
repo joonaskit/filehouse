@@ -24,6 +24,7 @@ class StepKind(Enum):
     RENAME = "move"  # a whole folder moved in one go on the same file system
     FINISH_DIR = "finish folder"  # after a folder's contents: metadata, and in a move the source
     TRASH = "trash"
+    RESTORE = "restore"  # a trashed item back to where it was, in one go
     DELETE = "delete"
     UNPLANNED = "read"  # planning failed here with `error`; running it plans again
 
@@ -40,6 +41,7 @@ class Step:
     size: int = 0
     is_dir: bool = False
     counted: bool = False  # one of the "N of M" items
+    whole: bool = False  # a delete of the item and all that is in it: what is in the trash
     existing: Gio.FileType | None = None  # found at the destination while planning
     error: GLib.Error | None = None
 
@@ -101,8 +103,14 @@ def plan_transfer(source, folder, name, move, cancellable, parent=None, rename=T
     return steps
 
 
-def plan_delete(source, cancellable, parent=None):
-    """The steps that delete `source`: contents first, each folder after what is in it."""
+def plan_delete(source, cancellable, parent=None, walk=False):
+    """The steps that delete `source`: contents first, each folder after what is in it.
+
+    Something in the trash is one step: the trash deletes an item with all that is in
+    it, and nothing inside a trashed folder can be deleted by itself. `walk` plans it
+    file by file all the same."""
+    if parent is None and not walk and locations.in_trash(source):
+        return [Step(StepKind.DELETE, source, counted=True, whole=True)]
     steps = []
     _walk_delete(steps, source, None, parent, cancellable)
     return steps
@@ -110,6 +118,28 @@ def plan_delete(source, cancellable, parent=None):
 
 def plan_trash(source):
     return [Step(StepKind.TRASH, source, counted=True)]
+
+
+def plan_restore(source, folder, name, cancellable):
+    """One step that moves a trashed item to `name` in `folder`. The trash moves a folder whole."""
+    try:
+        info = source.query_info(_ATTRIBUTES, _NOFOLLOW, cancellable)
+        existing = locations.file_type(folder.get_child(name), cancellable)
+    except GLib.Error as error:
+        if is_cancelled(error):
+            raise
+        return [Step(StepKind.UNPLANNED, source, folder=folder, name=name, error=error)]
+    return [
+        Step(
+            StepKind.RESTORE,
+            source,
+            folder=folder,
+            name=name,
+            is_dir=info.get_file_type() == _DIRECTORY,
+            counted=True,
+            existing=existing,
+        )
+    ]
 
 
 def _walk(steps, source, info, parent, folder, name, move, cancellable, look, rename):
