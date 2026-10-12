@@ -10,6 +10,7 @@ from filehouse.core.operations import JobKind
 from filehouse.integration import places
 from filehouse.qt_models.favourites import Favourites
 from filehouse.ui import main_window as main_window_module
+from filehouse.ui import sidebar as sidebar_module
 from filehouse.ui.main_window import MainWindow
 
 SAMPLE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -114,66 +115,124 @@ def test_without_a_places_file_there_are_none_and_none_can_be_made(qtbot, tmp_pa
     assert not favourites.add(gfile(tree))
 
 
-# The bar
+# The group in the sidebar
 
 
-def test_the_bar_shows_only_when_there_is_a_favourite(qtbot, window, favourites, tree):
-    assert not window._favourites_bar.isVisible()
+def sidebar_names(window):
+    sidebar = window._sidebar
+    return [sidebar.item(row).text() for row in range(sidebar.count())]
 
+
+def favourite_row(window, name):
+    sidebar = window._sidebar
+    return next(
+        row
+        for row in range(sidebar.count())
+        if sidebar.item(row).text() == name
+        and sidebar.item(row).data(sidebar_module._FavouriteRole)
+    )
+
+
+def click_row(qtbot, window, row, button=Qt.MouseButton.LeftButton):
+    sidebar = window._sidebar
+    rect = sidebar.visualItemRect(sidebar.item(row))
+    qtbot.mouseClick(sidebar.viewport(), button, pos=rect.center())
+
+
+def test_the_group_says_what_it_is_for_while_it_is_empty(qtbot, window):
+    names = sidebar_names(window)
+
+    assert "▾ Favourites" in names
+    # Between the places and the devices
+    assert names.index("▾ Favourites") > names.index("▾ Places")
+    assert "Drag a folder here" in names
+
+
+def test_without_a_places_file_the_hint_says_where_it_comes_from(qtbot, tmp_path, tree, jobs):
+    favourites = Favourites(str(tmp_path / "nowhere" / "user-places.xbel"))
+    window = MainWindow(gfile(tree), jobs=jobs, favourites=favourites)
+    qtbot.addWidget(window)
+
+    assert "Not available yet" in sidebar_names(window)
+    row = sidebar_names(window).index("Not available yet")
+    assert "Open Dolphin once" in window._sidebar.item(row).toolTip()
+
+
+def test_a_favourite_is_listed_under_its_heading(qtbot, window, favourites, tree):
     favourites.add(gfile(tree / "alpha"))
+    favourites.add(gfile(tree / "beta"))
 
-    assert window._favourites_bar.isVisible()
-    assert [a.text() for a in window._favourites_bar._favourites] == ["alpha"]
+    names = sidebar_names(window)
 
-    favourites.remove(favourites.items[0])
+    head = names.index("▾ Favourites")
+    assert names[head + 1 : head + 3] == ["alpha", "beta"]
+    assert "Drag a folder here" not in names
+    item = window._sidebar.item(favourite_row(window, "alpha"))
+    assert item.toolTip() == str(tree / "alpha")
 
-    assert not window._favourites_bar.isVisible()
 
-
-def test_a_window_without_favourites_has_no_bar(qtbot, tree, jobs):
+def test_a_window_without_favourites_has_no_group(qtbot, tree, jobs):
     window = MainWindow(gfile(tree), jobs=jobs)
     qtbot.addWidget(window)
-    window.show()
 
-    assert not window._favourites_bar.isVisible()
+    assert "▾ Favourites" not in sidebar_names(window)
     assert not window._favourite.isEnabled()
     assert window.toggle_favourite() is None
 
 
 def test_a_click_goes_there(qtbot, window, favourites, tree):
     favourites.add(gfile(tree / "beta"))
-    action = next(iter(window._favourites_bar._favourites))
 
-    action.trigger()
+    click_row(qtbot, window, favourite_row(window, "beta"))
 
     assert window._location.get_path() == str(tree / "beta")
 
 
 def test_a_middle_click_opens_a_tab_behind(qtbot, window, favourites, tree):
     favourites.add(gfile(tree / "beta"))
-    action = next(iter(window._favourites_bar._favourites))
-    button = window._favourites_bar.widgetForAction(action)
 
-    qtbot.mouseClick(button, Qt.MouseButton.MiddleButton)
+    click_row(qtbot, window, favourite_row(window, "beta"), Qt.MouseButton.MiddleButton)
 
     assert len(window._tabs) == 2
     assert window._tab is window._tabs[0]
     assert window._tabs[1].active.location.get_path() == str(tree / "beta")
 
 
-def test_the_bar_hides_in_a_narrow_window(qtbot, window, favourites, tree):
+def test_the_group_folds_shut_and_stays_so(qtbot, window, favourites, tree):
     favourites.add(gfile(tree / "alpha"))
-    assert window._favourites_bar.isVisible()
+
+    click_row(qtbot, window, sidebar_names(window).index("▾ Favourites"))
+
+    names = sidebar_names(window)
+    assert "▸ Favourites" in names and "alpha" not in names
+    other = MainWindow(gfile(tree), jobs=window._jobs, favourites=favourites)
+    qtbot.addWidget(other)
+    assert "▸ Favourites" in [other._sidebar.item(r).text() for r in range(other._sidebar.count())]
+
+    click_row(qtbot, window, sidebar_names(window).index("▸ Favourites"))
+
+    assert "alpha" in sidebar_names(window)
+
+
+def test_in_a_narrow_window_the_favourites_are_icons_on_the_rail(qtbot, window, favourites, tree):
+    favourites.add(gfile(tree / "alpha"))
 
     window.resize(500, 600)
     qtbot.waitUntil(lambda: window.is_narrow, timeout=TIMEOUT)
 
-    assert not window._favourites_bar.isVisible()
+    sidebar = window._sidebar
+    row = sidebar.row_of("alpha")
+    assert row >= 0
+    assert sidebar.item(row).text() == ""
+    assert sidebar.item(row).toolTip() == "alpha"
 
-    window.resize(1000, 600)
-    qtbot.waitUntil(lambda: not window.is_narrow, timeout=TIMEOUT)
 
-    assert window._favourites_bar.isVisible()
+def test_the_favourite_of_the_open_folder_is_highlighted(qtbot, window, favourites, tree):
+    favourites.add(gfile(tree / "alpha"))
+
+    window.navigate(gfile(tree / "alpha"))
+
+    assert window._sidebar.currentRow() == favourite_row(window, "alpha")
 
 
 # Adding and taking out
@@ -240,17 +299,35 @@ def test_without_a_places_file_it_says_where_it_lives(qtbot, tmp_path, tree, job
 # Dropping
 
 
+def drop(window, row, uris):
+    """Drop URIs on a row of the sidebar, as a drag from another window would."""
+    from PySide6.QtCore import QMimeData, QPointF, QUrl
+    from PySide6.QtGui import QDropEvent
+
+    sidebar = window._sidebar
+    mime = QMimeData()
+    mime.setUrls([QUrl(uri) for uri in uris])
+    point = QPointF(sidebar.visualItemRect(sidebar.item(row)).center())
+    event = QDropEvent(
+        point,
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    sidebar.dropEvent(event)
+    return event
+
+
 def test_files_dropped_on_a_favourite_go_into_it(qtbot, window, favourites, tree, jobs, wait_final):
     favourites.add(gfile(tree / "beta"))
-    favourite = favourites.items[0]
     uris = [gfile(tree / "note.txt").get_uri()]
 
-    window._favourites_bar.dropped.emit(
-        favourite, uris, Qt.KeyboardModifier.NoModifier, QPoint(0, 0)
-    )
+    event = drop(window, favourite_row(window, "beta"), uris)
     job = jobs.jobs[0]
     wait_final(jobs, job)
 
+    assert event.isAccepted()
     # On one file system: a move, as for any drop
     assert job.kind is JobKind.MOVE
     assert os.listdir(tree / "beta") == ["note.txt"]
@@ -258,18 +335,42 @@ def test_files_dropped_on_a_favourite_go_into_it(qtbot, window, favourites, tree
     assert window._location.get_path() == str(tree)
 
 
+def test_files_can_be_dropped_on_a_place_too(qtbot, window, tree, jobs, wait_final, tmp_path):
+    from filehouse.core import locations
+
+    folder = tmp_path / "dropped-on"
+    folder.mkdir()
+    window._sidebar._places.append(locations.Place("Target", "folder", gfile(folder)))
+    window._sidebar._fill()
+    uris = [gfile(tree / "note.txt").get_uri()]
+
+    drop(window, window._sidebar.row_of("Target"), uris)
+    wait_final(jobs, jobs.jobs[0])
+
+    assert os.listdir(folder) == ["note.txt"]
+
+
 def test_a_folder_dropped_on_itself_does_nothing(qtbot, window, favourites, tree, jobs):
     favourites.add(gfile(tree / "beta"))
     uris = [gfile(tree / "beta").get_uri()]
 
-    window._favourites_bar.dropped.emit(
-        favourites.items[0], uris, Qt.KeyboardModifier.NoModifier, QPoint(0, 0)
-    )
+    drop(window, favourite_row(window, "beta"), uris)
 
     assert jobs.jobs == []
 
 
-def test_folders_dropped_on_the_empty_part_are_added_and_files_are_not(
+def test_nothing_is_dropped_into_the_recent_files(qtbot, window, tree, jobs):
+    from filehouse.core import locations
+
+    if not locations.has_recent():
+        pytest.skip("no recent files here")
+    drop(window, window._sidebar.row_of("Recent"), [gfile(tree / "note.txt").get_uri()])
+
+    assert jobs.jobs == []
+    assert (tree / "note.txt").exists()
+
+
+def test_folders_dropped_on_the_heading_are_added_and_files_are_not(
     qtbot, window, favourites, tree
 ):
     favourites.add(gfile(tree / "alpha"))
@@ -279,9 +380,17 @@ def test_folders_dropped_on_the_empty_part_are_added_and_files_are_not(
         gfile(tree / "alpha").get_uri(),
     ]
 
-    window._favourites_bar.folders_dropped.emit(uris)
+    drop(window, sidebar_names(window).index("▾ Favourites"), uris)
 
     assert titles(favourites) == ["alpha", "beta"]
+
+
+def test_a_folder_dropped_on_the_hint_is_added(qtbot, window, favourites, tree):
+    row = sidebar_names(window).index("Drag a folder here")
+
+    drop(window, row, [gfile(tree / "gamma").get_uri()])
+
+    assert titles(favourites) == ["gamma"]
 
 
 # The menu of a favourite
@@ -317,15 +426,15 @@ def test_its_menu_moves_it_and_knows_the_ends(qtbot, window, favourites, tree, m
     favourites.add(gfile(tree / "beta"))
     first = favourites.items[0]
 
-    menu, left = pick(window, first, "Move left", monkeypatch)
+    menu, left = pick(window, first, "Move up", monkeypatch)
     assert not left.isEnabled()
-    menu, right = pick(window, first, "Move right", monkeypatch)
+    menu, right = pick(window, first, "Move down", monkeypatch)
     assert right.isEnabled()
     right.trigger()
 
     assert titles(favourites) == ["beta", "alpha"]
     # Alpha is last now
-    menu, right = pick(window, first, "Move right", monkeypatch)
+    menu, right = pick(window, first, "Move down", monkeypatch)
     assert not right.isEnabled()
 
 

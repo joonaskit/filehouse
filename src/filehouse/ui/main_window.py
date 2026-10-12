@@ -38,7 +38,6 @@ from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.dialogs.name import NameDialog
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
-from filehouse.ui.favourites_bar import FavouritesBar
 from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
 from filehouse.ui.pane import Pane
@@ -125,7 +124,7 @@ class MainWindow(QMainWindow):
         """`jobs` is the process's JobModel. A window made without one gets its own.
         `recent` records the files opened from the window for the desktop's lists of
         recent files; without one nothing is recorded. `favourites` is the process's list
-        of favourite folders, shown in a bar under the toolbar; without one there is no bar."""
+        of favourite folders, shown in the sidebar; without one there is no such group."""
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(QIcon.fromTheme("system-file-manager"))
@@ -162,8 +161,12 @@ class MainWindow(QMainWindow):
         self._volumes = Volumes(self)
         self._volumes.removed.connect(self._on_volume_removed)
         self._volumes.failed.connect(self._show_error)
-        self._sidebar = Sidebar(locations.places(), self._volumes)
+        self._sidebar = Sidebar(locations.places(), self._volumes, self._favourites)
         self._sidebar.place_activated.connect(self.navigate)
+        self._sidebar.new_tab_requested.connect(lambda place: self.new_tab(place, activate=False))
+        self._sidebar.favourite_menu_requested.connect(self._show_favourite_menu)
+        self._sidebar.files_dropped.connect(self._on_dropped_on_place)
+        self._sidebar.folders_dropped.connect(self._add_dropped_folders)
         self._panel = OperationsPanel(self._jobs)
         self._details = DetailsPane()
         self._details.open_requested.connect(self._open_selected)
@@ -459,31 +462,14 @@ class MainWindow(QMainWindow):
         self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
         self._toolbar_menu.setVisible(False)
         self.addToolBar(toolbar)
-        self._favourites_bar = FavouritesBar()
         if self._favourites is not None:
-            self.addToolBarBreak()
-            self.addToolBar(self._favourites_bar)
-            bar = self._favourites_bar
-            bar.open_requested.connect(lambda favourite: self.navigate(favourite.location))
-            bar.new_tab_requested.connect(
-                lambda favourite: self.new_tab(favourite.location, activate=False)
-            )
-            bar.context_requested.connect(self._show_favourite_menu)
-            bar.dropped.connect(
-                lambda favourite, uris, modifiers, position: self._drop_into(
-                    favourite.location, uris, modifiers, position
-                )
-            )
-            bar.folders_dropped.connect(self._add_dropped_folders)
-            self._favourites.changed.connect(self._sync_favourites)
-        self._sync_favourites()
+            self._favourites.changed.connect(self._update_favourite_action)
 
     def _retheme(self):
         """The theme changed while the window is open: icons are drawn in its colours."""
         for item, icon, colour in self._action_icons:
             item.setIcon(style.icon(icon + "-symbolic", icon, colour=colour))
         self._private_button.setIcon(self._private.icon())
-        self._favourites_bar.retheme()
         for index in range(self._tab_bar.count()):
             button = self._tab_bar.tabButton(index, QTabBar.ButtonPosition.RightSide)
             button.setIcon(style.icon("window-close-symbolic", "window-close"))
@@ -950,7 +936,6 @@ class MainWindow(QMainWindow):
         self._path_bar.set_short(narrow)
         for pane in self._all_panes():
             pane.view.set_compact(narrow)
-        self._sync_favourites()
         self._split_view.setEnabled(not narrow)
         self._button_for(self._split_view).setVisible(not narrow)
         self._job_status.set_compact(narrow)
@@ -1039,13 +1024,10 @@ class MainWindow(QMainWindow):
 
     # Favourites
 
-    def _sync_favourites(self):
-        if self._favourites is None:
-            self._favourite.setEnabled(False)
-            return
-        self._favourites_bar.set_items(self._favourites.items)
-        self._favourites_bar.setVisible(self._favourites_bar.count > 0 and not self._narrow)
-        self._update_favourite_action()
+    def _on_dropped_on_place(self, location, uris, modifiers, position):
+        """Files were dropped on a place or favourite of the sidebar: into it. The trash
+        takes them as it does anywhere."""
+        self._drop_into(location, uris, modifiers, position, trash_ok=locations.is_trash(location))
 
     def _update_favourite_action(self):
         location = self._location
@@ -1092,7 +1074,7 @@ class MainWindow(QMainWindow):
         return found is None
 
     def _add_dropped_folders(self, uris):
-        """Folders dropped on the empty part of the bar become favourites. Files do not."""
+        """Folders dropped among the favourites become favourites. Files do not."""
         for uri in uris:
             location = locations.from_uri(uri)
             if locations.is_folder(location) and self._favourites.find(location) is None:
@@ -1114,10 +1096,10 @@ class MainWindow(QMainWindow):
         menu.addAction("Rename…", lambda: self.rename_favourite(favourite))
         items = self._favourites.items
         index = items.index(favourite) if favourite in items else -1
-        left = menu.addAction("Move left", lambda: self._favourites.move(favourite, -1))
-        left.setEnabled(index > 0)
-        right = menu.addAction("Move right", lambda: self._favourites.move(favourite, 1))
-        right.setEnabled(0 <= index < len(items) - 1)
+        up = menu.addAction("Move up", lambda: self._favourites.move(favourite, -1))
+        up.setEnabled(index > 0)
+        down = menu.addAction("Move down", lambda: self._favourites.move(favourite, 1))
+        down.setEnabled(0 <= index < len(items) - 1)
         menu.addSeparator()
         menu.addAction(
             style.icon("edit-delete-symbolic", "edit-delete", colour="danger"),

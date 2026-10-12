@@ -65,5 +65,20 @@ def set_remember_opened(remember):
     changes.remember_opened_changed.emit(bool(remember))
 
 
+def collapsed_groups():
+    """The groups of the sidebar that are folded shut, by key."""
+    value = _store().value("sidebar/collapsed", [])
+    if isinstance(value, str):
+        value = [value]
+    return [str(key) for key in value or []]
+
+
+def set_group_collapsed(key, collapsed):
+    groups = [group for group in collapsed_groups() if group != key]
+    if collapsed:
+        groups.append(key)
+    _store().setValue("sidebar/collapsed", groups)
+
+
 def clear():
     _store().clear()

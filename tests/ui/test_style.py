@@ -166,3 +166,36 @@ def test_the_window_is_the_surface_colour_and_cards_are_a_shade_off_it(qtbot, qa
     finally:
         style.apply(qapp, theme.merge(theme.DEFAULTS, {}))
         qapp.setStyleSheet("")
+
+
+def test_every_kind_of_widget_gets_the_shells_font_even_under_plasmas_platform_theme():
+    """Plasma's platform theme gives lists, tool buttons and the status bar a font of their
+    own, in points. Run apart, with that theme where it is installed: where it is not, the
+    fonts are the app's all the same."""
+    import os
+    import subprocess
+    import sys
+
+    code = """
+import sys
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QStatusBar, QToolButton, QTreeView, QHeaderView
+app = QApplication([])
+from filehouse.integration import style, theme
+loaded = theme.merge(theme.DEFAULTS, {"fonts": {"families": ["Noto Sans", "sans-serif"]}})
+style.apply(app, loaded)
+for widget in (QTreeView(), QHeaderView(Qt.Orientation.Horizontal), QToolButton(), QStatusBar()):
+    widget.ensurePolished()
+    print(type(widget).__name__, widget.font().pixelSize())
+print("app", app.font().pixelSize())
+"""
+    environment = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "QT_QPA_PLATFORMTHEME": "kde"}
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=environment, capture_output=True, text=True, timeout=60
+    )
+
+    sizes = dict(line.split() for line in result.stdout.split("\n") if line.strip())
+    assert result.returncode == 0, result.stderr
+    assert sizes and int(sizes["app"]) > 0
+    # In pixels, and the app's: the platform's would be a size in points, and say -1
+    assert all(int(size) == int(sizes["app"]) for size in sizes.values()), sizes

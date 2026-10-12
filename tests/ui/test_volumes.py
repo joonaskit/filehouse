@@ -9,6 +9,7 @@ from ui_helpers import gfile
 
 from filehouse.core.locations import Place
 from filehouse.qt_models.volumes import Volumes
+from filehouse.ui import settings
 from filehouse.ui.sidebar import Sidebar
 
 
@@ -184,7 +185,7 @@ def names(sidebar):
 
 
 def test_sidebar_shows_places_then_devices_under_headings(sidebar):
-    assert names(sidebar) == ["Places", "Home", "Docs", "Devices", "USB stick", "Backup disk"]
+    assert names(sidebar) == ["▾ Places", "Home", "Docs", "▾ Devices", "USB stick", "Backup disk"]
     assert [entry.name for entry in sidebar.entries()] == [
         "Home",
         "Docs",
@@ -193,8 +194,9 @@ def test_sidebar_shows_places_then_devices_under_headings(sidebar):
     ]
     assert sidebar.item(sidebar.row_of("Backup disk")).toolTip()
     assert not sidebar.item(sidebar.row_of("USB stick")).toolTip()
-    # A heading is not a place: it can't be selected or found by name
+    # A heading is not a place: it can't be selected or found by name, but it takes a click
     assert not sidebar.item(0).flags() & Qt.ItemFlag.ItemIsSelectable
+    assert sidebar.item(0).flags() & Qt.ItemFlag.ItemIsEnabled
     assert sidebar.row_of("Places") == -1
 
 
@@ -202,7 +204,7 @@ def test_no_devices_heading_without_devices(qtbot, tmp_path):
     sidebar = Sidebar([Place("Home", "user-home", gfile(tmp_path))], Volumes(monitor=FakeMonitor()))
     qtbot.addWidget(sidebar)
 
-    assert names(sidebar) == ["Places", "Home"]
+    assert names(sidebar) == ["▾ Places", "Home"]
 
 
 def test_sidebar_follows_drives_coming_and_going_and_keeps_its_highlight(sidebar, tmp_path):
@@ -231,12 +233,41 @@ def test_clicking_goes_there_and_an_unmounted_drive_is_mounted_first(qtbot, side
     went = []
     sidebar.place_activated.connect(lambda location: went.append(location.get_path()))
 
-    for name in ("Places", "Docs", "USB stick", "Backup disk"):
-        row = 0 if name == "Places" else sidebar.row_of(name)
-        rect = sidebar.visualItemRect(sidebar.item(row))
+    for name in ("Docs", "USB stick", "Backup disk"):
+        rect = sidebar.visualItemRect(sidebar.item(sidebar.row_of(name)))
         qtbot.mouseClick(sidebar.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
 
     assert went == ["/docs", str(tmp_path / "stick"), str(tmp_path / "backup")]
+
+
+def click_heading(qtbot, sidebar, row=0):
+    rect = sidebar.visualItemRect(sidebar.item(row))
+    qtbot.mouseClick(sidebar.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+
+
+def test_a_heading_folds_its_group_and_opens_it_again(qtbot, sidebar):
+    went = []
+    sidebar.place_activated.connect(went.append)
+
+    click_heading(qtbot, sidebar)
+
+    assert names(sidebar) == ["▸ Places", "▾ Devices", "USB stick", "Backup disk"]
+    assert went == []
+    assert settings.collapsed_groups() == ["places"]
+
+    click_heading(qtbot, sidebar)
+
+    assert names(sidebar) == ["▾ Places", "Home", "Docs", "▾ Devices", "USB stick", "Backup disk"]
+    assert settings.collapsed_groups() == []
+
+
+def test_a_folded_group_stays_folded_in_the_next_window(qtbot, sidebar, tmp_path):
+    click_heading(qtbot, sidebar, row=3)
+
+    other = Sidebar([Place("Home", "user-home", gfile(tmp_path))], sidebar._volumes)
+    qtbot.addWidget(other)
+
+    assert names(other) == ["▾ Places", "Home", "▸ Devices"]
 
 
 def test_the_system_drive_is_listed_first_and_not_twice(qtbot, tmp_path):
@@ -310,3 +341,36 @@ def test_sidebar_shows_how_full_a_drive_is(qtbot, tmp_path):
     assert sidebar.usage_shown("USB stick") is not None
     assert sidebar.item(sidebar.row_of("USB stick")).toolTip().startswith("USB stick: ")
     assert not sidebar.grab().isNull()
+
+
+def test_headings_keep_the_size_of_the_text_when_the_font_is_in_points(qtbot, tmp_path):
+    from PySide6.QtGui import QFont, QFontInfo
+
+    sidebar = Sidebar([Place("Home", "user-home", gfile(tmp_path))], Volumes(monitor=FakeMonitor()))
+    qtbot.addWidget(sidebar)
+    # What the desktop's own font for lists can be: a size in points, and no size in pixels
+    font = QFont()
+    font.setPointSizeF(11)
+    sidebar.setFont(font)
+    assert sidebar.font().pixelSize() == -1
+
+    sidebar._fill()
+
+    heading = sidebar.item(0).font().pixelSize()
+    assert heading == QFontInfo(sidebar.font()).pixelSize() > 10
+
+
+def test_the_sidebar_has_the_apps_font_that_the_desktop_does_not_replace(qtbot, tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    sidebar = Sidebar([Place("Home", "user-home", gfile(tmp_path))], Volumes(monitor=FakeMonitor()))
+    qtbot.addWidget(sidebar)
+    before = sidebar.item(0).font().pixelSize()
+
+    sidebar.show()
+    sidebar.ensurePolished()
+    sidebar._fill()
+
+    # An explicit size in pixels, the same before and after the window is shown
+    assert sidebar.font().pixelSize() == QApplication.font().pixelSize() > 0
+    assert sidebar.item(0).font().pixelSize() == before == sidebar.font().pixelSize()

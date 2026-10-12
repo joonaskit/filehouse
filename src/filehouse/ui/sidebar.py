@@ -1,8 +1,11 @@
-"""Places, and below them the drives and other volumes that are plugged in."""
+"""Places, the favourites, and below them the drives and other volumes that are plugged in.
 
-from PySide6.QtCore import QLocale, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QFont, QIcon, QPainter
+Each of the three is a group that folds shut when its heading is clicked."""
+
+from PySide6.QtCore import QLocale, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QBrush, QFont, QFontInfo, QIcon, QPainter, QPalette
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QListWidget,
     QListWidgetItem,
@@ -15,13 +18,20 @@ from PySide6.QtWidgets import (
 
 from filehouse.core import locations
 from filehouse.integration import style
-from filehouse.ui import menus
+from filehouse.qt_models.favourites import Favourite
+from filehouse.ui import clipboard, menus, settings
 
 _EntryRole = Qt.ItemDataRole.UserRole
 # How full a drive is: a `Usage`, or nothing when that isn't known
 _UsageRole = Qt.ItemDataRole.UserRole + 1
 # Whether an entry is a drive, which has its own colour
 _DeviceRole = Qt.ItemDataRole.UserRole + 2
+# On a heading: which group it opens and closes. On a favourite: the Favourite
+_GroupRole = Qt.ItemDataRole.UserRole + 3
+_FavouriteRole = Qt.ItemDataRole.UserRole + 4
+# On the line that says what an empty group is for
+_HintRole = Qt.ItemDataRole.UserRole + 5
+_PLACES, _FAVOURITES, _DEVICES = "places", "favourites", "devices"
 # A drive this full shows its bar in the warning colour
 _NEARLY_FULL = 0.9
 
@@ -39,7 +49,7 @@ _PLACE_COLOURS = {
 }
 _FOLDER_COLOUR = "orange"
 _ROW_HEIGHT = 42
-_HEADING_HEIGHT = 30
+_HEADING_HEIGHT = 36
 _DEVICE_COLOUR = "cyan"
 _ICON = 28
 _DIVIDER_HEIGHT = 17
@@ -125,13 +135,27 @@ class _RailDelegate(QStyledItemDelegate):
 
 class Sidebar(QListWidget):
     place_activated = Signal(object)  # a location
+    new_tab_requested = Signal(object)  # a location
+    # The menu of a favourite: the Favourite, and a global position
+    favourite_menu_requested = Signal(object, QPoint)
+    # Files were dropped on an entry: its location, the URIs, the keyboard modifiers and a
+    # global position
+    files_dropped = Signal(object, list, object, QPoint)
+    # URIs were dropped on the favourites, on none of them: the folders become favourites
+    folders_dropped = Signal(list)
 
-    def __init__(self, places, volumes, parent=None):
-        """`places` is a list of Place, `volumes` the Volumes to show and follow."""
+    def __init__(self, places, volumes, favourites=None, parent=None):
+        """`places` is a list of Place, `volumes` the Volumes to show and follow, and
+        `favourites` the Favourites to show in a group of their own, if any."""
         super().__init__(parent)
         self.setObjectName("sidebar")
+        # The app's own font, and set here: left alone, the desktop gives a list a font of
+        # its own (a size in points) when the window is first shown, and what is read from
+        # it before and after, such as the size of a heading, is not the same
+        self.setFont(QApplication.font())
         self._places = places
         self._volumes = volumes
+        self._favourites = favourites
         self._selected = None
         self._rail = False
         self._list_delegate = _ListDelegate(self)
@@ -143,8 +167,11 @@ class Sidebar(QListWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context_menu)
         self.itemClicked.connect(self._on_clicked)
+        self.setAcceptDrops(True)
         volumes.changed.connect(self._fill)
         volumes.usage_changed.connect(self._show_usage)
+        if favourites is not None:
+            favourites.changed.connect(self._fill)
         self._fill()
 
     def entries(self):
@@ -197,18 +224,53 @@ class Sidebar(QListWidget):
 
     def _fill(self):
         self.clear()
-        if not self._rail:
-            self._add_heading("Places")
-        for place in self._places:
-            self._add(place, is_device=False)
+        collapsed = set(settings.collapsed_groups())
+        favourites = self._favourites.items if self._favourites is not None else []
         devices = self._volumes.entries()
+        groups = [(_PLACES, "Places", self._places, False)]
+        if self._favourites is not None:
+            groups.append((_FAVOURITES, "Favourites", favourites, False))
         if devices:
-            # On the rail a line stands in for the heading
-            self._add_divider() if self._rail else self._add_heading("Devices")
-        for device in devices:
-            self._add(device, is_device=True)
+            groups.append((_DEVICES, "Devices", devices, True))
+        for index, (key, title, entries, is_device) in enumerate(groups):
+            if self._rail:
+                # A line stands in for a heading, and nothing is folded: there is no heading
+                # to unfold it by. Not for the first group, nor one with nothing in it
+                if entries and index:
+                    self._add_divider()
+                shown = entries
+            else:
+                self._add_heading(key, title, key in collapsed)
+                shown = [] if key in collapsed else entries
+            for entry in shown:
+                self._add_entry(entry, is_device)
+            if key == _FAVOURITES and not entries and not self._rail and key not in collapsed:
+                self._add_hint()
         self.select(self._selected)
         self._show_usage()
+
+    def _add_entry(self, entry, is_device):
+        if isinstance(entry, Favourite):
+            # A favourite: shown as a place, and kept to be changed
+            self._add(locations.Place(entry.title, entry.icon, entry.location), False, entry)
+        else:
+            self._add(entry, is_device)
+
+    def _add_hint(self):
+        available = self._favourites.available
+        item = QListWidgetItem("Drag a folder here" if available else "Not available yet")
+        item.setToolTip(
+            "Or press Ctrl+D in a folder"
+            if available
+            else "Open Dolphin once: the favourites are kept in its list of places"
+        )
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
+        item.setData(_HintRole, True)
+        font = QFont(self.font())
+        font.setPixelSize(max(8, round(self._text_px() * 0.92)))
+        item.setFont(font)
+        item.setSizeHint(QSize(0, style.px(_HEADING_HEIGHT)))
+        self.addItem(item)
 
     def _show_usage(self):
         """How full each drive is: a bar under its name, and the numbers as a tooltip."""
@@ -242,20 +304,32 @@ class Sidebar(QListWidget):
         layout.addWidget(line, 0, Qt.AlignmentFlag.AlignVCenter)
         self.setItemWidget(item, holder)
 
-    def _add_heading(self, text):
-        item = QListWidgetItem(text)
-        # Not selectable, and styled as a heading through its disabled state
-        item.setFlags(Qt.ItemFlag.NoItemFlags)
+    def _text_px(self):
+        """The size of the text of the entries, in pixels. A font that the desktop gave in
+        points has no pixel size of its own (it says -1), so it is asked of what is drawn."""
+        return QFontInfo(self.font()).pixelSize()
+
+    def _add_heading(self, key, text, collapsed):
+        item = QListWidgetItem(("▸ " if collapsed else "▾ ") + text)
+        # Not selectable, but it takes a click: it folds the group
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        item.setData(_GroupRole, key)
+        item.setForeground(QBrush(self.palette().color(QPalette.ColorRole.PlaceholderText)))
+        item.setToolTip("Click to show or hide")
         font = QFont(self.font())
-        font.setPixelSize(max(8, round(font.pixelSize() * 0.85)))
+        font.setWeight(QFont.Weight.DemiBold)
+        font.setPixelSize(self._text_px())
         item.setFont(font)
         item.setSizeHint(QSize(0, style.px(_HEADING_HEIGHT)))
         self.addItem(item)
 
-    def _add(self, entry, is_device):
+    def _add(self, entry, is_device, favourite=None):
         item = QListWidgetItem(_tile(entry, is_device), "" if self._rail else entry.name)
         item.setData(_EntryRole, entry)
         item.setData(_DeviceRole, is_device)
+        if favourite is not None:
+            item.setData(_FavouriteRole, favourite)
+            item.setToolTip(favourite.location.get_parse_name())
         if entry.location is None:
             item.setToolTip(
                 f"{entry.name}: not opened yet. Click to open it."
@@ -269,14 +343,15 @@ class Sidebar(QListWidget):
         self.addItem(item)
 
     def retheme(self):
-        """The icons again, in the colours of the theme now in use."""
-        for row in range(self.count()):
-            item = self.item(row)
-            entry = item.data(_EntryRole)
-            if entry is not None:
-                item.setIcon(_tile(entry, item.data(_DeviceRole)))
+        """The icons and headings again, in the colours of the theme now in use."""
+        self._fill()
 
     def _on_clicked(self, item):
+        group = item.data(_GroupRole)
+        if group is not None:
+            settings.set_group_collapsed(group, group not in settings.collapsed_groups())
+            self._fill()
+            return
         entry = item.data(_EntryRole)
         if entry is None:
             return
@@ -286,8 +361,63 @@ class Sidebar(QListWidget):
             # A drive that is plugged in but not mounted: mount it, then go there
             self._volumes.mount(entry, self.place_activated.emit)
 
+    def mouseReleaseEvent(self, event):
+        # A middle click opens a place in a tab
+        if event.button() == Qt.MouseButton.MiddleButton:
+            item = self.itemAt(event.position().toPoint())
+            entry = item.data(_EntryRole) if item is not None else None
+            if entry is not None and entry.location is not None:
+                self.new_tab_requested.emit(entry.location)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    # Files dropped on an entry go into it, and a folder dropped among the favourites is added
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        uris, _cut = clipboard.read(event.mimeData())
+        if not uris:
+            event.ignore()
+            return
+        position = event.position().toPoint()
+        item = self.itemAt(position)
+        entry = item.data(_EntryRole) if item is not None else None
+        on_favourites = item is not None and (
+            item.data(_GroupRole) == _FAVOURITES or item.data(_HintRole)
+        )
+        if entry is not None and entry.location is not None:
+            # As for the lists: a job does the work, and the app the files came from must
+            # not remove anything itself
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+            self.files_dropped.emit(
+                entry.location, uris, event.modifiers(), self.viewport().mapToGlobal(position)
+            )
+        elif on_favourites and self._favourites is not None:
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+            self.folders_dropped.emit(uris)
+        else:
+            event.ignore()
+
     def _on_context_menu(self, position):
         item = self.itemAt(position)
+        favourite = item.data(_FavouriteRole) if item is not None else None
+        if favourite is not None:
+            self.favourite_menu_requested.emit(favourite, self.viewport().mapToGlobal(position))
+            return
         entry = item.data(_EntryRole) if item is not None else None
         if entry is None or not getattr(entry, "can_eject", False):
             return

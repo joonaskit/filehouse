@@ -35,6 +35,28 @@ TAB_CLOSE_INSET = 8
 _GLYPH_SHARE = 0.56
 _TILE_ALPHA = 0.20
 
+# The kinds of widget a platform theme may give a font of its own
+_CLASS_FONTS = (
+    "QAbstractItemView",
+    "QHeaderView",
+    "QListView",
+    "QTreeView",
+    "QToolButton",
+    "QPushButton",
+    "QCheckBox",
+    "QRadioButton",
+    "QComboBox",
+    "QStatusBar",
+    "QLabel",
+    "QLineEdit",
+    "QMenu",
+    "QMenuBar",
+    "QMessageBox",
+    "QTipLabel",
+    "QDockWidget",
+    "QGroupBox",
+)
+
 # The theme in use. Complete defaults until apply() runs, so sizes work in tests.
 _theme = theme_reader.merge(theme_reader.DEFAULTS, {})
 # Goes up each time a theme is applied
@@ -131,8 +153,15 @@ def apply(app, theme, live=False):
     _theme = theme
     generation += 1
     app.setPalette(_palette())
-    app.setFont(_font())
+    font = _font()
+    app.setFont(font)
     app.setStyleSheet(_stylesheet())
+    # The desktop's platform theme gives some kinds of widget a font of its own (Plasma's
+    # system font, in points), which would win over the app's font for exactly the lists,
+    # the toolbar and the status bar: they are told to use the shell's too. After the
+    # style sheet, which is a new style, and a new style makes Qt read the platform's again
+    for name in _CLASS_FONTS:
+        app.setFont(font, name)
     app.styleHints().setShowShortcutsInContextMenus(True)
     if live:
         themed.changed.emit()
@@ -284,10 +313,6 @@ def _stylesheet():
             border: none; spacing: {px(8)}px; padding: {px(8)}px;
             background: {window};
         }}
-
-        /* The favourites under it: flat buttons on the window, as a bookmarks bar */
-        QToolBar#favourites {{ padding: 0 {px(8)}px {px(4)}px {px(8)}px; spacing: {px(2)}px; }}
-        QToolBar#favourites QToolButton {{ padding: {px(4)}px {px(10)}px {px(4)}px {px(6)}px; }}
 
         /* The rounded groups in the toolbar, the sidebar and the details card */
         #group, #card {{
