@@ -31,7 +31,7 @@ Do not `pip install PySide6` into the venv: mixing a PyPI Qt with the system PyG
 
 ## Naming
 
-The app, package, command and app id are all `filehouse` (`APP_ID` in `src/filehouse/__init__.py`). The `.desktop` file name, `StartupWMClass`, and `QGuiApplication.setDesktopFileName()` must be that same string.
+The app, package, command and app id are all `filehouse` (`APP_ID` in `src/filehouse/__init__.py`). The `.desktop` file name, `StartupWMClass`, and `QGuiApplication.setDesktopFileName()` must be that same string. The one name that is not is the D-Bus name the process owns, `io.github.joonaskit.filehouse` (`integration/instance.py`): a bus name needs dots.
 
 ## Layer rules
 

@@ -137,6 +137,8 @@ def test_only_the_active_pane_is_marked(qtbot, window):
 
 
 def test_view_mode_and_hidden_files_apply_to_both(qtbot, window):
+    # One view for every folder, not one for each: see test_folder_views.py
+    settings.set_per_folder(False)
     first, second = split(qtbot, window)
 
     window.set_view_mode(settings.ICONS)
@@ -150,12 +152,18 @@ def test_view_mode_and_hidden_files_apply_to_both(qtbot, window):
     assert window._panes[1].view.mode == settings.ICONS
 
 
-def test_the_sort_order_is_the_panes_own(qtbot, window):
+def test_the_sort_order_goes_with_the_folder_of_each_pane(qtbot, window, tree):
     first, second = split(qtbot, window)
+    second.navigate(gfile(tree / "right"))
+    wait_loaded(qtbot, second)
 
     first.view.sort(main_window.SIZE, Qt.SortOrder.DescendingOrder)
 
     assert second.view.sort_column() == main_window.NAME
+    # The same folder is shown the same way in both
+    second.navigate(gfile(tree / "left"))
+    assert second.view.sort_column() == main_window.SIZE
+    assert second.view.sort_order() == Qt.SortOrder.DescendingOrder
 
 
 def test_copy_to_the_other_pane(qtbot, tree, jobs, wait_final, window):

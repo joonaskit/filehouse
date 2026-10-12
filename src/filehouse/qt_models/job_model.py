@@ -24,6 +24,7 @@ _SPEED_MIN_SECONDS = 0.5
 
 ICONS = {
     JobKind.COPY: "edit-copy",
+    JobKind.DUPLICATE: "edit-duplicate",
     JobKind.MOVE: "transform-move",
     JobKind.TRASH: "user-trash",
     JobKind.RESTORE: "edit-undo",
@@ -215,6 +216,8 @@ def short_heading(job):
         return f"Extracting {what}"
     if job.kind is JobKind.COMPRESS:
         return f"Compressing {what}"
+    if job.kind is JobKind.DUPLICATE:
+        return f"Duplicating {what}"
     return f"{'Copying' if job.kind is JobKind.COPY else 'Moving'} {what}"
 
 

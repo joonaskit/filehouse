@@ -25,6 +25,7 @@ _ids = itertools.count(1)
 
 class JobKind(Enum):
     COPY = "copy"
+    DUPLICATE = "duplicate"  # a copy beside the source, under a free name
     MOVE = "move"
     TRASH = "trash"
     RESTORE = "restore"
@@ -75,6 +76,7 @@ class _Cancelled(Exception):
 
 _VERBS = {
     JobKind.COPY: "Copied",
+    JobKind.DUPLICATE: "Duplicated",
     JobKind.MOVE: "Moved",
     JobKind.TRASH: "Moved",
     JobKind.RESTORE: "Restored",
@@ -88,7 +90,8 @@ class Job:
     """Copy or move `sources` into the folder `destination`, or trash or delete them.
 
     A restore takes trashed items as `sources` and, in `targets`, where each one
-    goes back to.
+    goes back to. A duplicate takes no destination: each source is copied into the
+    folder it is in, named as "Keep both" names things.
 
     `prompt(question)` answers the questions in `conflicts`. Without one, nothing
     is ever replaced, a failed item is skipped and reported, and a permanent
@@ -121,6 +124,12 @@ class Job:
         self._steps = []
         self._bytes_finished = 0
         self._conflict_default = None
+        if kind is JobKind.DUPLICATE:
+            self._items = [
+                (source, source.get_parent(), source.get_basename()) for source in self.sources
+            ]
+            # The name is taken, by the source itself: that is settled before it is asked
+            self._conflict_default = conflicts.Reply(Answer.KEEP_BOTH)
         self._no_trash_default = None
         self._skip_all_errors = False
 
@@ -238,7 +247,7 @@ class Job:
 
     @property
     def _is_transfer(self):
-        return self.kind in (JobKind.COPY, JobKind.MOVE)
+        return self.kind in (JobKind.COPY, JobKind.DUPLICATE, JobKind.MOVE)
 
     def _plan_item(self, source, folder, name, parent=None, rename=True):
         if self.kind is JobKind.TRASH:

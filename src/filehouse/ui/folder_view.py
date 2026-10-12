@@ -2,7 +2,7 @@
 
 import time
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QPoint, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -103,6 +103,8 @@ class FolderView(QWidget):
     # The list, or the empty folder in its place, was clicked or given the keyboard
     focused = Signal()
     open_in_tab = Signal(object)  # FileInfo of a folder
+    # The column and the order the list is sorted by changed, by a click or by `sort`
+    sort_changed = Signal(int, Qt.SortOrder)
 
     def __init__(self, proxy, parent=None):
         super().__init__(parent)
@@ -133,6 +135,7 @@ class FolderView(QWidget):
         for column, width in ((PERMISSIONS, 100), (MODIFIED, 120), (SIZE, 90)):
             header.resizeSection(column, style.px(width))
         header.setSortIndicatorClearable(False)
+        header.sortIndicatorChanged.connect(self.sort_changed)
 
         self._grid = _Grid()
         self._grid.setModel(proxy)
@@ -276,19 +279,21 @@ class FolderView(QWidget):
         self._stack.setCurrentWidget(self._message)
 
     def select_name(self, name):
-        """Select the entry with this file name and scroll to it."""
+        """Select the entry with this file name and scroll to it. False when the list
+        does not show it (yet)."""
         row = self._proxy.sourceModel().row_for_name(name)
         if row < 0:
-            return
+            return False
         index = self._proxy.mapFromSource(self._proxy.sourceModel().index(row, NAME))
         if not index.isValid():
-            return
+            return False
         self.selection_model().setCurrentIndex(
             index,
             QItemSelectionModel.SelectionFlag.ClearAndSelect
             | QItemSelectionModel.SelectionFlag.Rows,
         )
         self._items().scrollTo(index, QAbstractItemView.ScrollHint.PositionAtCenter)
+        return True
 
     def _selected_rows(self):
         # Not selectedRows(): the icons only ever select the name column
@@ -320,6 +325,41 @@ class FolderView(QWidget):
 
     def select_all(self):
         self._items().selectAll()
+
+    def info_at(self, row):
+        """The entry shown in a row of the list."""
+        return self._proxy.index(row, NAME).data(InfoRole)
+
+    def select_where(self, wanted, add=False):
+        """Select the entries `wanted(info)` is true for, in place of what is selected
+        or with `add` beside it. Returns how many it picked."""
+        rows = [row for row in range(self._proxy.rowCount()) if wanted(self.info_at(row))]
+        self._select_rows(rows, add)
+        return len(rows)
+
+    def invert_selection(self):
+        """Select what is not selected, and nothing else."""
+        selected = set(self._selected_rows())
+        self._select_rows([row for row in range(self._proxy.rowCount()) if row not in selected])
+
+    def _select_rows(self, rows, add=False):
+        selection = QItemSelection()
+        last = self._proxy.columnCount() - 1
+        start = previous = None
+        # One range for each run of rows: a folder of thousands is a few ranges
+        for row in [*rows, None]:
+            if start is not None and row != previous + 1:
+                selection.select(self._proxy.index(start, 0), self._proxy.index(previous, last))
+                start = None
+            if start is None:
+                start = row
+            previous = row
+        flags = QItemSelectionModel.SelectionFlag
+        self.selection_model().select(selection, flags.Select if add else flags.ClearAndSelect)
+        if rows:
+            first = self._proxy.index(rows[0], NAME)
+            self.selection_model().setCurrentIndex(first, flags.NoUpdate)
+            self._items().scrollTo(first)
 
     # The order is the table's: its header shows it, and the icons follow the same proxy
 

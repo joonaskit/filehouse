@@ -19,15 +19,25 @@ from filehouse.ui import settings
 
 _DENSITIES = (("comfortable", "Comfortable"), ("compact", "Compact"))
 _VIEWS = ((settings.DETAILS, "Details"), (settings.ICONS, "Icons"))
+# A sort and the way round it goes, as one choice
+_SORTS = (
+    (("name", False), "Name"),
+    (("name", True), "Name, Z first"),
+    (("modified", True), "Modified, newest first"),
+    (("modified", False), "Modified, oldest first"),
+    (("size", True), "Size, largest first"),
+    (("size", False), "Size, smallest first"),
+)
 _MAX_SECONDS = 600
 
 
 class SettingsDialog(QDialog):
-    """`set_view_mode(mode)` and `set_show_hidden(show)` change the window that opened the
-    dialog, which also remembers them for new windows; `clear_recent()` asks and empties
-    the list of recent files."""
+    """`set_show_hidden(show)` changes the window that opened the dialog, which also
+    remembers it for new windows; `clear_recent()` asks and empties the list of recent
+    files. The view and the sort order are the app's own, for every folder that has not
+    been given another: the open windows follow them from the settings."""
 
-    def __init__(self, parent, set_view_mode, set_show_hidden, clear_recent):
+    def __init__(self, parent, set_show_hidden, clear_recent):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setMinimumWidth(style.px(420))
@@ -44,7 +54,28 @@ class SettingsDialog(QDialog):
         for key, text in _VIEWS:
             self.view.addItem(text, key)
         self.view.setCurrentIndex(self.view.findData(settings.view_mode()))
-        self.view.currentIndexChanged.connect(lambda: set_view_mode(self.view.currentData()))
+        self.view.currentIndexChanged.connect(
+            lambda: settings.set_view_mode(self.view.currentData())
+        )
+
+        # By its place in the list: a combo box does not find a pair again
+        self._sorts = [key for key, _text in _SORTS]
+        self.sort = QComboBox()
+        self.sort.addItems([text for _key, text in _SORTS])
+        if settings.sort() not in self._sorts:
+            # Sorted by a column the list leaves out: shown as it is
+            self._sorts.append(settings.sort())
+            self.sort.addItem(settings.sort()[0].capitalize())
+        self.sort.setCurrentIndex(self._sorts.index(settings.sort()))
+        self.sort.currentIndexChanged.connect(lambda index: settings.set_sort(*self._sorts[index]))
+
+        self.per_folder = QCheckBox("Each folder keeps the view and the sort order chosen in it")
+        self.per_folder.setChecked(settings.per_folder())
+        self.per_folder.toggled.connect(settings.set_per_folder)
+
+        self.restore = QCheckBox("Start with the tabs of last time")
+        self.restore.setChecked(settings.restore_tabs())
+        self.restore.toggled.connect(settings.set_restore_tabs)
 
         self.pane = QCheckBox("Show the details pane")
         self.pane.setChecked(settings.details_pane())
@@ -81,13 +112,21 @@ class SettingsDialog(QDialog):
         layout.addLayout(appearance)
         layout.addWidget(self._note("Density applies the next time the app starts."))
 
+        layout.addWidget(self._heading("Folders"))
+        folders = QFormLayout()
+        folders.addRow("View", self.view)
+        folders.addRow("Sort by", self.sort)
+        layout.addLayout(folders)
+        layout.addWidget(self.per_folder)
+        layout.addWidget(
+            self._note("The view and the sort order above are for the folders without their own.")
+        )
+
         layout.addWidget(self._heading("New windows"))
-        defaults = QFormLayout()
-        defaults.addRow("View", self.view)
-        layout.addLayout(defaults)
+        layout.addWidget(self.restore)
         layout.addWidget(self.hidden)
         layout.addWidget(self.pane)
-        layout.addWidget(self._note("Changes the window you opened this from as well."))
+        layout.addWidget(self._note("These two change the window you opened this from as well."))
 
         layout.addWidget(self._heading("Privacy"))
         layout.addWidget(self.private)

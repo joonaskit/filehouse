@@ -8,7 +8,7 @@ from filehouse.ui.dialogs.settings import SettingsDialog
 
 class Calls:
     def __init__(self):
-        self.view, self.hidden, self.cleared = [], [], 0
+        self.hidden, self.cleared = [], 0
 
     def clear(self):
         self.cleared += 1
@@ -17,7 +17,7 @@ class Calls:
 @pytest.fixture
 def dialog(qtbot, home_dir):
     calls = Calls()
-    dialog = SettingsDialog(None, calls.view.append, calls.hidden.append, calls.clear)
+    dialog = SettingsDialog(None, calls.hidden.append, calls.clear)
     qtbot.addWidget(dialog)
     dialog.calls = calls
     return dialog
@@ -28,7 +28,7 @@ def test_it_shows_what_is_stored(qtbot, home_dir):
     settings.set_remember_opened(False)
     settings.set_notify(False)
     settings.set_long_job_seconds(30)
-    dialog = SettingsDialog(None, print, print, print)
+    dialog = SettingsDialog(None, print, print)
     qtbot.addWidget(dialog)
 
     assert dialog.density.currentData() == "compact"
@@ -44,12 +44,42 @@ def test_density_is_stored(dialog):
     assert settings.density() == "compact"
 
 
-def test_the_view_choices_go_to_the_window(dialog):
-    dialog.view.setCurrentIndex(dialog.view.findData(settings.ICONS))
+def test_hidden_files_go_to_the_window(dialog):
     dialog.hidden.setChecked(True)
 
-    assert dialog.calls.view == [settings.ICONS]
     assert dialog.calls.hidden == [True]
+
+
+def test_the_view_and_the_sort_order_of_folders_are_stored(dialog):
+    assert dialog.sort.currentText() == "Name"
+    assert dialog.per_folder.isChecked()
+
+    dialog.view.setCurrentIndex(dialog.view.findData(settings.ICONS))
+    dialog.sort.setCurrentIndex(dialog.sort.findText("Modified, newest first"))
+    dialog.per_folder.setChecked(False)
+
+    assert settings.view_mode() == settings.ICONS
+    assert settings.sort() == ("modified", True)
+    assert not settings.per_folder()
+
+
+def test_a_sort_the_list_does_not_offer_is_shown_as_it_is(qtbot, home_dir):
+    settings.set_sort("permissions", False)
+    dialog = SettingsDialog(None, print, print)
+    qtbot.addWidget(dialog)
+
+    assert dialog.sort.currentText() == "Permissions"
+    assert settings.sort() == ("permissions", False)
+    dialog.sort.setCurrentIndex(dialog.sort.findText("Size, largest first"))
+    assert settings.sort() == ("size", True)
+
+
+def test_starting_with_the_tabs_of_last_time_is_stored(dialog):
+    assert dialog.restore.isChecked()
+
+    dialog.restore.setChecked(False)
+
+    assert not settings.restore_tabs()
 
 
 def test_privacy_is_stored_and_followed(dialog):

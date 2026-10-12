@@ -102,9 +102,9 @@ def test_actions_follow_the_selection_and_the_clipboard(qtbot, tree, open_window
     select(window, "a.txt")
     assert all(action.isEnabled() for action in (*edits, window._rename))
 
+    # Several can be renamed too, in a dialog of their own
     select(window, "a.txt", "b.txt")
-    assert all(action.isEnabled() for action in edits)
-    assert not window._rename.isEnabled()
+    assert all(action.isEnabled() for action in (*edits, window._rename))
 
     window._copy.trigger()
     assert window._paste.isEnabled()
@@ -1141,6 +1141,8 @@ def test_a_question_whose_window_closes_is_asked_again(
 
 
 def test_hidden_files_and_view_mode_are_remembered(qtbot, tree, open_window):
+    # One view for every folder: with a view per folder, see test_folder_views.py
+    settings.set_per_folder(False)
     first = open_window(tree / "src")
     assert first._view.mode == settings.DETAILS and not first._hidden.isChecked()
 

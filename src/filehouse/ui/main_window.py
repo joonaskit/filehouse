@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from filehouse.core import archives, locations
+from filehouse.core import archives, locations, search
 from filehouse.core.errors import OperationError
 from filehouse.core.listing import mode_text
 from filehouse.core.operations import JobKind, permissions, quick
@@ -39,6 +39,8 @@ from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.dialogs.name import NameDialog
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
+from filehouse.ui.dialogs.rename_many import RenameManyDialog
+from filehouse.ui.dialogs.select import SelectDialog
 from filehouse.ui.dialogs.settings import SettingsDialog
 from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
@@ -72,6 +74,8 @@ _SORTS = (
 DETAILS, ICONS = settings.DETAILS, settings.ICONS
 
 KEEP_RUNNING, CANCEL_ALL, STAY_OPEN = range(3)
+# What a drop can be asked to do beside the two kinds of job
+LINK = "link"
 
 
 def ask_about_running_jobs(parent, count):
@@ -127,14 +131,46 @@ def quit_app():
     QApplication.quit()
 
 
+def session_to_open():
+    """The tabs of last time that can be opened now: a list of (the one or two folders
+    of a tab, which of them is the active one) and the tab in front, or None. A folder
+    that is gone is the nearest one above it that is there, and left out when none is."""
+    session = settings.session() if settings.restore_tabs() else None
+    if session is None:
+        return None
+    tabs, front = session
+    opened = []
+    in_front = 0
+    for index, (uris, active) in enumerate(tabs):
+        folders = [locations.nearest_folder(locations.from_uri(uri)) for uri in uris]
+        if all(folder is None for folder in folders):
+            continue
+        if folders[0] is None or len(folders) == 1 or folders[1] is None:
+            # One of a split is gone: the tab is the other
+            folders = [next(folder for folder in folders if folder is not None)]
+        if index == front:
+            in_front = len(opened)
+        opened.append((folders, active if 0 <= active < len(folders) else 0))
+    return (opened, in_front) if opened else None
+
+
 class MainWindow(QMainWindow):
     def __init__(
-        self, location, select=None, message=None, jobs=None, recent=None, favourites=None
+        self,
+        location,
+        select=None,
+        message=None,
+        jobs=None,
+        recent=None,
+        favourites=None,
+        session=None,
     ):
         """`jobs` is the process's JobModel. A window made without one gets its own.
         `recent` records the files opened from the window for the desktop's lists of
         recent files; without one nothing is recorded. `favourites` is the process's list
-        of favourite folders, shown in the sidebar; without one there is no such group."""
+        of favourite folders, shown in the sidebar; without one there is no such group.
+        `session` is what `session_to_open` gave: the tabs to open, `location` being
+        the first of them."""
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(QIcon.fromTheme("system-file-manager"))
@@ -156,7 +192,6 @@ class MainWindow(QMainWindow):
         # Tabs, each with a folder or two side by side. `_tab` is the shown one and
         # `_pane` its active pane: the toolbar, the title, the details, the status bar
         # and every action are about it
-        self._view_mode = settings.view_mode()
         self._action_icons = []  # (action, icon name, colour) to make them again
         self._unsplit_sizes = None
         self._tab_bar = TabBar()
@@ -274,11 +309,16 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().dataChanged.connect(self._update_state)
         style.themed.changed.connect(self._retheme)
 
-        self.set_view_mode(self._view_mode, remember=False)
         # A window opens without the pane when the user has put it away
         self._sync_details()
+        if session is not None and self.width() < style.px(NARROW_BELOW):
+            # No room for a split: the first tab is the pane of it that was active
+            first, active = session[0][0]
+            location = first[active]
         self.navigate(location, select=select)
-        if settings.split() and self.width() >= style.px(NARROW_BELOW):
+        if session is not None:
+            self._open_session(*session)
+        elif settings.split() and self.width() >= style.px(NARROW_BELOW):
             self.set_split(True, remember=False)
         if message:
             self.statusBar().showMessage(message, _MESSAGE_MS)
@@ -374,6 +414,10 @@ class MainWindow(QMainWindow):
             "Paste", "edit-paste", QKeySequence.keyBindings(keys.Paste), self.paste
         )
         self._rename = action("Rename…", "edit-rename", [QKeySequence("F2")], self.rename)
+        # A copy beside the file, and a link to it. Neither has a key: Ctrl+D is the
+        # favourites', and Dolphin has none for them either
+        self._duplicate = action("Duplicate", "edit-duplicate", [], self.duplicate)
+        self._link = action("Create link", "edit-link", [], self.create_link)
         self._trash = action(
             "Move to trash",
             "user-trash",
@@ -422,6 +466,16 @@ class MainWindow(QMainWindow):
             "edit-select-all",
             QKeySequence.keyBindings(keys.SelectAll),
             lambda: self._view.select_all(),
+        )
+        # The keys Dolphin has for these two
+        self._select_matching = action(
+            "Select matching…", "edit-select", [QKeySequence("Ctrl+S")], self.select_matching
+        )
+        self._invert = action(
+            "Invert selection",
+            "edit-select-invert",
+            [QKeySequence("Ctrl+Shift+A")],
+            self.invert_selection,
         )
         self._restore = action("Restore", "edit-undo", [], self.restore_selected)
         self._empty_trash = action("Empty trash…", "trash-empty", [], self.empty_trash)
@@ -690,7 +744,6 @@ class MainWindow(QMainWindow):
         view.context_menu_requested.connect(for_this_pane(self._on_context_menu))
         view.dropped.connect(for_this_pane(self._on_dropped))
         view.open_in_tab.connect(for_this_pane(self._open_in_new_tab))
-        view.set_mode(self._view_mode)
         view.set_compact(self._narrow)
         if tab.active is None:
             tab.active = pane
@@ -724,8 +777,9 @@ class MainWindow(QMainWindow):
         if pane is self._pane:
             self._on_location_changed()
 
-    def set_split(self, on=True, remember=True):
-        """Show two folders side by side, or one again: the active pane stays."""
+    def set_split(self, on=True, remember=True, location=None):
+        """Show two folders side by side, or one again: the active pane stays. The new
+        pane shows `location`, or by default the folder of the active one."""
         if on == self.is_split or (on and self._narrow):
             self._split_view.setChecked(self.is_split)
             return
@@ -733,7 +787,7 @@ class MainWindow(QMainWindow):
             settings.set_split(on)
         if on:
             pane = self._add_pane(self._tab)
-            pane.navigate(self._pane.location)
+            pane.navigate(location or self._pane.location)
             half = self._tab.splitter.width() // 2
             self._tab.splitter.setSizes([half, half])
         else:
@@ -891,13 +945,46 @@ class MainWindow(QMainWindow):
 
     # What is remembered
 
-    def set_view_mode(self, mode, remember=True):
-        self._view_mode = mode
-        for pane in self._all_panes():
-            pane.view.set_mode(mode)
-        (self._icons_mode if mode == ICONS else self._details_mode).setChecked(True)
-        if remember:
-            settings.set_view_mode(mode)
+    def set_view_mode(self, mode):
+        """Show the open folder as details or as icons. Where folders keep their view
+        it is this folder's, and otherwise every folder's: the panes follow the
+        settings, this one too."""
+        self._pane.choose_mode(mode)
+        self._sync_view_mode()
+
+    def _sync_view_mode(self):
+        """The two buttons say how the active pane shows its folder."""
+        (self._icons_mode if self._view.mode == ICONS else self._details_mode).setChecked(True)
+
+    # The tabs of last time
+
+    def session(self):
+        """The tabs as they are now, for `settings.set_session`."""
+        tabs = [
+            (
+                [locations.uri(pane.location) for pane in tab.panes],
+                tab.panes.index(tab.active),
+            )
+            for tab in self._tabs
+        ]
+        return tabs, self._tabs.index(self._tab)
+
+    def _open_session(self, tabs, front):
+        """Open the tabs of last time: the first is the one this window was made with."""
+        wide = self.width() >= style.px(NARROW_BELOW)
+        for index, (folders, active) in enumerate(tabs):
+            if not wide:
+                # No room for two lists: the one that was active
+                folders, active = [folders[active]], 0
+            if index:
+                self.new_tab(folders[0])
+            else:
+                self.navigate(folders[0])
+            if len(folders) > 1:
+                self.set_split(True, remember=False, location=folders[1])
+                if active == 1:
+                    self._activate(self._other_pane())
+        self._tab_bar.setCurrentIndex(front)
 
     def set_show_hidden(self, show):
         self._hidden.setChecked(show)
@@ -964,6 +1051,7 @@ class MainWindow(QMainWindow):
 
     def _update_state(self, *_args):
         self._pane.sync()
+        self._sync_view_mode()
         infos = self._view.selected_infos()
         selected = len(infos)
         in_trash = self._in_trash()
@@ -981,8 +1069,11 @@ class MainWindow(QMainWindow):
         self._forget.setEnabled(selected > 0 and self._in_recent())
         self._clear_recent.setEnabled(self._in_recent() and self._model.rowCount() > 0)
         self._update_favourite_action()
-        self._rename.setEnabled(selected == 1 and not read_only)
+        self._rename.setEnabled(selected > 0 and not read_only)
         self._move_to.setEnabled(selected > 0 and not read_only)
+        # Not of what is in the trash, and not into a list of what was used
+        for item in (self._duplicate, self._link):
+            item.setEnabled(selected > 0 and not read_only)
         has_archive = not in_trash and any(self._is_archive(info) for info in infos)
         self._extract_here.setEnabled(has_archive and not read_only)
         self._extract_to.setEnabled(has_archive)
@@ -1008,7 +1099,8 @@ class MainWindow(QMainWindow):
         self._empty_trash.setEnabled(at_trash and self._model.rowCount() > 0)
 
         count = self._proxy.rowCount()
-        self._select_all.setEnabled(count > 0)
+        for item in (self._select_all, self._select_matching, self._invert):
+            item.setEnabled(count > 0)
         if self._error:
             text = ""
         elif self._model.loading:
@@ -1284,9 +1376,7 @@ class MainWindow(QMainWindow):
         return True
 
     def open_settings(self):
-        dialog = SettingsDialog(
-            self, self.set_view_mode, self.set_show_hidden, self._clear_recent_from_settings
-        )
+        dialog = SettingsDialog(self, self.set_show_hidden, self._clear_recent_from_settings)
         dialog.exec()
 
     def _clear_recent_from_settings(self):
@@ -1466,7 +1556,8 @@ class MainWindow(QMainWindow):
                 menu.addSeparator()
                 menu.addAction(self._properties)
             else:
-                menu.addActions([self._empty_trash, self._select_all])
+                menu.addAction(self._empty_trash)
+                menu.addActions(self._selecting())
                 menu.addSeparator()
                 self._add_sort_and_view(menu)
             return menu
@@ -1476,7 +1567,8 @@ class MainWindow(QMainWindow):
             # The folder's own menu
             menu.addActions([self._new_folder, self._new_file])
             menu.addSeparator()
-            menu.addActions([self._paste, self._select_all])
+            menu.addAction(self._paste)
+            menu.addActions(self._selecting())
             menu.addSeparator()
             self._add_sort_and_view(menu)
             menu.addAction(self._hidden)
@@ -1522,7 +1614,7 @@ class MainWindow(QMainWindow):
             menu.addAction(self._preview_action)
         menu.addActions([self._cut, self._copy, self._paste])
         menu.addSeparator()
-        menu.addActions([self._rename, self._move_to])
+        menu.addActions([self._rename, self._duplicate, self._link, self._move_to])
         if self._is_archive(info) and not self._in_trash():
             menu.addActions([self._extract_here, self._extract_to])
         if archives.available() and not self._read_only():
@@ -1531,6 +1623,7 @@ class MainWindow(QMainWindow):
             menu.addActions([self._copy_other, self._move_other])
         menu.addActions([self._trash, self._delete])
         menu.addSeparator()
+        menu.addAction(self._select_type_action(menu, info))
         menu.addAction(self._copy_path)
         if info.is_dir and self._favourites is not None:
             menu.addAction(
@@ -1552,7 +1645,7 @@ class MainWindow(QMainWindow):
         """What a file of the recent files can do: be opened, found, copied or looked at,
         and be taken off the list."""
         if info is None:
-            menu.addActions([self._select_all])
+            menu.addActions(self._selecting())
             menu.addSeparator()
             self._add_sort_and_view(menu)
             menu.addAction(self._private)
@@ -1576,10 +1669,20 @@ class MainWindow(QMainWindow):
         if not info.is_dir:
             menu.addAction(self._preview_action)
         menu.addActions([self._copy, self._copy_path])
+        menu.addAction(self._select_type_action(menu, info))
         menu.addSeparator()
         menu.addAction(self._forget)
         menu.addAction(self._properties)
         return menu
+
+    def _selecting(self):
+        """The folder menu's entries for what is selected."""
+        return [self._select_all, self._select_matching, self._invert]
+
+    def _select_type_action(self, menu, info):
+        item = QAction(self._select_all.icon(), "Select all of this type", menu)
+        item.triggered.connect(lambda: self.select_same_type(info))
+        return item
 
     def _add_open_with(self, menu, info, target):
         apps = desktop.apps_for_type(info.content_type)
@@ -1658,6 +1761,10 @@ class MainWindow(QMainWindow):
         view = menus.menu(menu, "View")
         view.setIcon(style.icon("view-grid-symbolic", "view-grid"))
         view.addActions([self._details_mode, self._icons_mode])
+        if settings.per_folder():
+            # The view and the sort order that were chosen in this folder, given up
+            default = view.addAction("Use the default here", self._pane.use_default_view)
+            default.setEnabled(self._pane.has_own_view)
         view.addSeparator()
         view.addAction(self._split_view)
         view.addAction(self._pane_toggle)
@@ -1702,6 +1809,85 @@ class MainWindow(QMainWindow):
             if self._all_in(sources, self._location):
                 return None
         return self._start(JobKind.MOVE if cut else JobKind.COPY, sources, self._location)
+
+    def duplicate(self):
+        """A copy of each selected item beside itself, named as "Keep both" names it."""
+        selected = self._selected_locations()
+        if not selected or self._read_only():
+            return None
+        return self._start(JobKind.DUPLICATE, selected)
+
+    def create_link(self):
+        """A symbolic link to each selected item, beside it."""
+        selected = self._selected_locations()
+        if not selected or self._read_only():
+            return []
+        # Each beside what it points to, which for a result of a search is further down
+        made = []
+        errors = []
+        for target in selected:
+            links, failed = quick.create_links([target], locations.parent(target))
+            made += links
+            errors += failed
+        return self._after_linking(made, errors, len(selected), self._location)
+
+    def _link_into(self, sources, folder):
+        """A link in `folder` to each of the files dropped there."""
+        made, errors = quick.create_links(sources, folder)
+        return self._after_linking(made, errors, len(sources), folder)
+
+    def _after_linking(self, made, errors, count, folder):
+        if len(made) == 1:
+            self._select_when_listed(folder, locations.basename(made[0]))
+        if not errors:
+            self.statusBar().showMessage(
+                "Link created" if count == 1 else f"{count} links created", _COPIED_MS
+            )
+        elif len(errors) == 1:
+            self._show_error(f"Could not create a link to {errors[0]}.")
+        else:
+            # Every one of them, by name
+            summary = f"Could not create {len(errors)} of {count} links."
+            self._show_error(summary)
+            ErrorDetails(SimpleNamespace(errors=errors, summary=summary), self).open()
+        return made
+
+    # Selecting
+
+    def select_matching(self):
+        """Ask for a pattern or a few words, and select what has them in its name."""
+        if not self._proxy.rowCount():
+            return None
+        view = self._view
+
+        def picks(text):
+            wanted = search.selector(text)
+            return lambda info: wanted(info.display_name)
+
+        def apply(text, add):
+            view.select_where(picks(text), add)
+            view.setFocus()
+
+        def count(text):
+            wanted = picks(text)
+            return sum(wanted(info) for info in self._pane.shown_infos())
+
+        dialog = SelectDialog(self, count, apply)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.open()
+        return dialog
+
+    def invert_selection(self):
+        self._view.invert_selection()
+
+    def select_same_type(self, info):
+        """Select everything of the type of `info`: every folder for a folder."""
+        return self._view.select_where(
+            lambda other: (
+                other.is_dir == info.is_dir
+                and (info.is_dir or other.content_type == info.content_type)
+            )
+        )
 
     def trash_selected(self):
         if self._in_recent():
@@ -1937,8 +2123,10 @@ class MainWindow(QMainWindow):
 
     def rename(self):
         infos = self._view.selected_infos()
-        if len(infos) != 1 or self._read_only():
+        if not infos or self._read_only():
             return None
+        if len(infos) > 1:
+            return self._rename_many(infos)
         info = infos[0]
         folder = self._location
         target = locations.child(folder, info.name)
@@ -1959,6 +2147,28 @@ class MainWindow(QMainWindow):
         return self._ask_name(
             "Rename", f"New name for “{info.display_name}”:", name, apply, len(stem)
         )
+
+    def _rename_many(self, infos):
+        """Several at once, in a dialog that shows every new name first."""
+        pane = self._pane
+        folder = self._location
+
+        def renamed(now):
+            names = {locations.name_below(folder, location) for location in now}
+            pane.select_names_when_listed(folder, names)
+            # Nothing watches the folders below: results that were renamed are found again
+            pane.search_again()
+            count = len(now)
+            self.statusBar().showMessage(f"{count} items renamed", _COPIED_MS)
+
+        dialog = RenameManyDialog(
+            self,
+            [(locations.child(folder, info.name), info.is_dir) for info in infos],
+            renamed,
+        )
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.open()
+        return dialog
 
     def _ask_name(self, title, label, name, apply, select_to=None):
         dialog = NameDialog(self, title, label, name, apply, select_to)
@@ -2004,8 +2214,12 @@ class MainWindow(QMainWindow):
             return self._start(JobKind.TRASH, sources) if sources else None
 
         keys = Qt.KeyboardModifier
+        both = keys.ControlModifier | keys.ShiftModifier
         if modifiers & keys.AltModifier:
             kind = self._ask_drop_action(position)
+        elif modifiers & both == both:
+            # As in Dolphin: a link to what was dragged
+            kind = LINK
         elif modifiers & keys.ShiftModifier:
             kind = JobKind.MOVE
         elif modifiers & keys.ControlModifier:
@@ -2017,6 +2231,8 @@ class MainWindow(QMainWindow):
             kind = JobKind.COPY
         if kind is None:
             return None
+        if kind == LINK:
+            return self._link_into(sources, target)
         if kind is JobKind.MOVE and self._all_in(sources, target):
             # Already where they were dropped
             return None
@@ -2026,9 +2242,10 @@ class MainWindow(QMainWindow):
         menu = menus.menu(self)
         move = menu.addAction(style.icon("go-jump-symbolic", "transform-move"), "Move here")
         copy = menu.addAction(style.icon("edit-copy-symbolic", "edit-copy"), "Copy here")
+        link = menu.addAction(style.icon("edit-link-symbolic", "edit-link"), "Link here")
         menu.addSeparator()
         menu.addAction("Cancel")
-        return {move: JobKind.MOVE, copy: JobKind.COPY}.get(menu.exec(position))
+        return {move: JobKind.MOVE, copy: JobKind.COPY, link: LINK}.get(menu.exec(position))
 
     # Closing
 
@@ -2055,6 +2272,9 @@ class MainWindow(QMainWindow):
             self.hide()
             return
         self._preview.hide()
+        if not self._other_windows_open():
+            # The last window: where it was is where the next start begins
+            settings.set_session(*self.session())
         for pane in self._all_panes():
             pane.close()
         if self.isVisible():
