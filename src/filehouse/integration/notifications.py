@@ -115,7 +115,8 @@ class NotificationReporter(QObject):
     - Never a job the user cancelled, or one that never ran.
 
     `window_visible()` says whether any window of the app is on screen, and
-    `island_available()` whether the island is showing jobs.
+    `island_available()` whether the island is showing jobs. `enabled()` says whether the
+    user wants notifications at all, and `long_job_seconds` is a number or a function.
     """
 
     def __init__(
@@ -127,6 +128,7 @@ class NotificationReporter(QObject):
         parent=None,
         long_job_seconds=LONG_JOB_SECONDS,
         clock=time.monotonic,
+        enabled=lambda: True,
     ):
         super().__init__(parent)
         self._notifier = notifier
@@ -134,6 +136,7 @@ class NotificationReporter(QObject):
         self._island_available = island_available
         self._long = long_job_seconds
         self._clock = clock
+        self._enabled = enabled
         self._started = {}  # job id -> when it was first seen running
         self._notified = set()
         jobs.job_changed.connect(self._on_job_changed)
@@ -149,14 +152,22 @@ class NotificationReporter(QObject):
             return
         self._notified.add(job.id)
         started = self._started.pop(job.id, None)
-        if state is JobState.CANCELLED or not job.started or self._window_visible():
+        if (
+            state is JobState.CANCELLED
+            or not job.started
+            or self._window_visible()
+            or not self._enabled()
+        ):
             return
         if self._island_available():
             if state is JobState.FAILED:
                 return
-            if started is None or self._clock() - started < self._long:
+            if started is None or self._clock() - started < self._seconds():
                 return
         self._send(job)
+
+    def _seconds(self):
+        return self._long() if callable(self._long) else self._long
 
     def _on_job_removed(self, job):
         self._started.pop(job.id, None)

@@ -88,7 +88,15 @@ def main(argv=None):
     favourites = Favourites(parent=app)
 
     notifier = Notifier()
-    NotificationReporter(jobs, notifier, window_visible, lambda: client.available, jobs)
+    NotificationReporter(
+        jobs,
+        notifier,
+        window_visible,
+        lambda: client.available,
+        jobs,
+        long_job_seconds=settings.long_job_seconds,
+        enabled=settings.notify,
+    )
     notifier.start()
     # The process may end the moment the last job has: what was sent must be on the bus
     app.aboutToQuit.connect(notifier.flush)

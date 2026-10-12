@@ -171,6 +171,7 @@ def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
         ["Details", "Icons", "Split view"],
         # Only shown in a narrow window
         ["Folder menu"],
+        ["Settings"],
     ]
     # The location sits in a group of its own
     assert window._path_bar.parent() is groups[1]
@@ -334,3 +335,18 @@ def test_open_in_the_details_pane_enters_the_selected_folder(qtbot, tree):
     window._details.open_button.click()
 
     assert current_path(window) == str(tree / "Downloads" / "sub")
+
+
+def test_settings_open_with_the_shortcut_and_follow_hidden_files(qtbot, tree, monkeypatch):
+    from filehouse.ui.dialogs.settings import SettingsDialog
+
+    opened = []
+    monkeypatch.setattr(SettingsDialog, "exec", lambda self: opened.append(self))
+    window = open_window(qtbot, tree / "Downloads")
+
+    window._settings.trigger()
+    window.set_show_hidden(True)
+
+    assert len(opened) == 1
+    assert window._hidden.isChecked()
+    assert window._proxy.show_hidden

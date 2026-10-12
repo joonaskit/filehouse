@@ -1,5 +1,5 @@
 """What the app remembers between runs: window size, view mode, hidden files, the split,
-the density and whether opened files are remembered."""
+the density, the notifications and whether opened files are remembered."""
 
 from PySide6.QtCore import QObject, QSettings, QSize, Signal
 
@@ -55,6 +55,24 @@ def density():
 
 def set_density(density):
     _store().setValue("view/density", density)
+
+
+def notify():
+    """Whether a job that ends with no window showing is told in a notification."""
+    return _store().value("notifications/enabled", True, type=bool)
+
+
+def set_notify(notify):
+    _store().setValue("notifications/enabled", bool(notify))
+
+
+def long_job_seconds():
+    """With the island showing jobs, how long a job runs before it is worth a notification."""
+    return max(1, _store().value("notifications/long_job_seconds", 10, type=int))
+
+
+def set_long_job_seconds(seconds):
+    _store().setValue("notifications/long_job_seconds", max(1, int(seconds)))
 
 
 def split():
