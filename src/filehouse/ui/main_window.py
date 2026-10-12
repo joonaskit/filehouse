@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeyEvent, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -53,6 +53,7 @@ from filehouse.ui.tab_bar import TabBar
 
 # Width of the search field in a wide window, unscaled
 _SEARCH_WIDTH = 220
+_SEARCH_LEAST = 120
 _NO_LIMIT = 16777215
 _MESSAGE_MS = 8000
 _DETAILS_MS = 200
@@ -228,36 +229,11 @@ class MainWindow(QMainWindow):
         splitter.setSizes([style.px(200), style.px(620), style.px(250)])
         splitter.setHandleWidth(style.px(8))
         splitter.setContentsMargins(style.px(8), 0, style.px(8), style.px(4))
-        # Only in a narrow window, and only with something selected to act on
-        self._action_bar = self._group(
-            self._copy,
-            self._move_to,
-            self._rename,
-            self._trash,
-            self._show_details,
-            self._more,
-            self._permissions,
-        )
-        # The lock stands apart from the rest, behind a line
-        line = QFrame()
-        line.setObjectName("divider")
-        line.setFixedSize(1, style.px(20))
-        bar = self._action_bar.layout()
-        bar.insertSpacing(bar.count() - 1, style.px(6))
-        bar.insertWidget(bar.count() - 1, line)
-        bar.insertSpacing(bar.count() - 1, style.px(6))
-        bar_row = QHBoxLayout()
-        bar_row.setContentsMargins(0, 0, 0, style.px(4))
-        bar_row.addStretch(1)
-        bar_row.addWidget(self._action_bar)
-        bar_row.addStretch(1)
-        self._action_bar.hide()
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(splitter, 1)
-        layout.addLayout(bar_row)
         layout.addWidget(self._sheet)
         layout.addWidget(self._preview_sheet)
         layout.addWidget(self._panel)
@@ -266,6 +242,15 @@ class MainWindow(QMainWindow):
         # Item counts on the left, where temporary messages take their place for a
         # while; the running operations on the right, which open the panel
         self._count_label = QLabel()
+        # In a narrow window, in the corner under the rail: the details as a sheet
+        self._details_button = QToolButton()
+        self._details_button.setDefaultAction(self._show_details)
+        self._details_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._details_button.setIconSize(QSize(style.px(18), style.px(18)))
+        self._details_button.setFixedHeight(style.px(28))
+        self._details_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._details_button.setVisible(False)
+        self.statusBar().addWidget(self._details_button)
         self.statusBar().addWidget(self._count_label, 1)
         self._job_status = JobStatus(self._jobs)
         self._job_status.clicked.connect(self._panel.toggle)
@@ -478,7 +463,6 @@ class MainWindow(QMainWindow):
         self._favourite = action(
             "Add to favourites", "bookmark-new", [QKeySequence("Ctrl+D")], self.toggle_favourite
         )
-        self._more = action("More…", "view-more-horizontal", [], self._show_selection_menu)
         self._permissions = action("Permissions", "object-locked", [], self._show_permissions_menu)
         self._settings = action(
             "Settings", "preferences-system", [QKeySequence("Ctrl+,")], self.open_settings
@@ -488,31 +472,38 @@ class MainWindow(QMainWindow):
         )
         self._search = action("Search", "edit-find", [QKeySequence("Ctrl+F")], self.start_search)
 
-        # One row of rounded groups: where you are, what you can do, how it is shown
+        # One row of rounded groups, over the panes they go with: back and forward over
+        # the sidebar, the path and how the list is shown over the list, and search over
+        # the details. What is done to the selection is in its menu, and in the bar at
+        # the bottom of a narrow window
         toolbar = QToolBar()
         toolbar.setMovable(False)
         toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
-        toolbar.addWidget(self._group(self._back, self._forward, self._up))
+        # The first group is as wide as the sidebar under it, and the search field with
+        # the settings button as wide as the details pane: see _align_toolbar
+        self._navigation_group = self._group(self._back, self._forward, self._up)
+        self._navigation_group.layout().addStretch(1)
+        toolbar.addWidget(self._navigation_group)
         location = self._group()
         location.layout().addWidget(self._path_bar)
         location.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._toolbar_location = toolbar.addWidget(location)
+        self._view_group = self._group(self._details_mode, self._icons_mode, self._split_view)
+        toolbar.addWidget(self._view_group)
         # In a wide window the field is always there; in a narrow one it takes the
         # place of the path while it is in use, and a button opens it
         self._search_group = self._group()
         self._search_group.layout().addWidget(self._search_field)
         self._search_group.setFixedWidth(style.px(_SEARCH_WIDTH))
         self._toolbar_search = toolbar.addWidget(self._search_group)
-        # In a narrow window the actions are in a bar at the bottom, and the folder
-        # menu has a button
-        self._toolbar_actions = toolbar.addWidget(
-            self._group(self._copy, self._move_to, self._rename, self._trash)
-        )
-        toolbar.addWidget(self._group(self._details_mode, self._icons_mode, self._split_view))
         self._toolbar_menu = toolbar.addWidget(self._group(self._search, self._folder_menu))
         self._toolbar_menu.setVisible(False)
-        toolbar.addWidget(self._group(self._settings))
+        self._settings_group = self._group(self._settings)
+        toolbar.addWidget(self._settings_group)
+        self._toolbar = toolbar
         self.addToolBar(toolbar)
+        for pane in (self._sidebar, self._details):
+            pane.installEventFilter(self)
         if self._favourites is not None:
             self._favourites.changed.connect(self._update_favourite_action)
 
@@ -554,6 +545,76 @@ class MainWindow(QMainWindow):
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             layout.addWidget(button)
         return group
+
+    def eventFilter(self, watched, event):
+        if watched in (self._sidebar, self._details) and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.Hide,
+        ):
+            # Once the pane has its place
+            QTimer.singleShot(0, self._align_toolbar)
+        return super().eventFilter(watched, event)
+
+    def _align_toolbar(self):
+        """Make the toolbar's groups end where the panes under them do: the first group
+        is as wide as the sidebar, so the path starts where the list does, and the
+        search field with the settings button is as wide as the details pane. A pane
+        that is not there, or a toolbar without the room, leaves a group the width it
+        has by itself; a narrow window, whose sidebar is a rail, lays itself out."""
+        if self._narrow:
+            self._navigation_group.setFixedWidth(self._navigation_group.sizeHint().width())
+            self._relay_toolbar()
+            # The details button of the status bar: in the middle under the rail
+            start = self._details_button.mapTo(self, QPoint(0, 0)).x()
+            middle = self._sidebar.mapTo(self, QPoint(0, 0)).x() + self._sidebar.width() / 2
+            self._details_button.setFixedWidth(max(style.px(28), round(2 * (middle - start))))
+            return
+        navigation, search = self._navigation_group, self._search_group
+        # The least each can do with, and what it has when nothing is under it
+        least = {navigation: navigation.sizeHint().width(), search: style.px(_SEARCH_LEAST)}
+        wanted = {navigation: least[navigation], search: style.px(_SEARCH_WIDTH)}
+        # The toolbar's padding is its layout's. From where the panes are, not from
+        # their widths: the toolbar's padding and the panes' margin need not be the same
+        margins = self._toolbar.layout().contentsMargins()
+        spacing = self._toolbar.layout().spacing()
+        if self._sidebar.isVisible():
+            right = self._sidebar.mapTo(self, QPoint(0, 0)).x() + self._sidebar.width()
+            wanted[navigation] = max(least[navigation], right - margins.left())
+        if self._details.isVisible():
+            left = self._details.mapTo(self, QPoint(0, 0)).x()
+            beside = self._settings_group.sizeHint().width() + spacing
+            end = self._toolbar.width() - margins.right()
+            wanted[search] = max(least[search], end - left - beside)
+        # What the toolbar has left when every group has the least it needs
+        shown = [
+            self._toolbar.widgetForAction(action)
+            for action in self._toolbar.actions()
+            if action.isVisible()
+        ]
+        needed = sum(
+            least[group] if group in least else group.minimumSizeHint().width()
+            for group in shown
+            if group is not None
+        )
+        spare = (
+            self._toolbar.width()
+            - margins.left()
+            - margins.right()
+            - spacing * (len(shown) - 1)
+            - needed
+        )
+        # The sidebar's edge first: it is the one beside the path
+        for group in (navigation, search):
+            extra = min(wanted[group] - least[group], max(0, spare))
+            spare -= extra
+            group.setFixedWidth(least[group] + extra)
+        self._relay_toolbar()
+
+    def _relay_toolbar(self):
+        # The toolbar keeps the sizes of its widgets until it is told they changed
+        self._toolbar.layout().invalidate()
+        self._toolbar.layout().activate()
 
     # The active pane
 
@@ -929,7 +990,6 @@ class MainWindow(QMainWindow):
                 text = f"{infos[0].display_name} · {mode_text(infos[0].mode)}"
         self._count_label.setText(text)
         self._sync_search_field()
-        self._update_narrow_parts(selected)
         self._update_details(infos)
         self._preview_action.setEnabled(selected > 0)
         self._update_preview(infos)
@@ -966,7 +1026,6 @@ class MainWindow(QMainWindow):
             return
         self._preview_sheet.set_open(open_, animate=self.isVisible())
         self._update_sheet_actions()
-        self._update_narrow_parts(len(self._view.selected_infos()))
 
     def _preview_full_screen(self):
         """A double click on the sheet: the same file in the preview window, full screen.
@@ -1035,6 +1094,7 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._sheet_preview.set_sheet_height(round(self.height() * SHEET_SHARE))
         self._set_narrow(self.width() < style.px(NARROW_BELOW))
+        QTimer.singleShot(0, self._align_toolbar)
 
     @property
     def is_narrow(self):
@@ -1069,10 +1129,12 @@ class MainWindow(QMainWindow):
         self._button_for(self._split_view).setVisible(not narrow)
         self._job_status.set_compact(narrow)
         self._button_for(self._forward).setVisible(not narrow)
-        self._toolbar_actions.setVisible(not narrow)
         self._toolbar_menu.setVisible(narrow)
-        self._search_group.setMinimumWidth(0 if narrow else style.px(_SEARCH_WIDTH))
-        self._search_group.setMaximumWidth(_NO_LIMIT if narrow else style.px(_SEARCH_WIDTH))
+        self._details_button.setVisible(narrow)
+        if narrow:
+            # As wide as the path it takes the place of; a wide window sets its width
+            self._search_group.setMinimumWidth(0)
+            self._search_group.setMaximumWidth(_NO_LIMIT)
         self._search_group.setSizePolicy(
             QSizePolicy.Policy.Expanding if narrow else QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Preferred,
@@ -1084,11 +1146,6 @@ class MainWindow(QMainWindow):
         elif self._wide_sizes:
             self._splitter.setSizes(self._wide_sizes)
         self._update_state()
-
-    def _update_narrow_parts(self, selected):
-        # The bar acts on the selection, and makes way for the sheet
-        sheet_open = self._sheet.is_open or self._preview_sheet.is_open
-        self._action_bar.setVisible(self._narrow and selected > 0 and not sheet_open)
 
     def _set_sheet_open(self, open_):
         if open_ and self._narrow:
@@ -1136,13 +1193,6 @@ class MainWindow(QMainWindow):
     def _show_folder_menu(self):
         button = self._button_for(self._folder_menu)
         self._on_context_menu(None, button.mapToGlobal(button.rect().bottomLeft()))
-
-    def _show_selection_menu(self):
-        infos = self._view.selected_infos()
-        if infos:
-            button = self._button_for(self._more)
-            # The bar is at the bottom of the window: the menu opens upwards
-            self._on_context_menu(infos[0], button.mapToGlobal(button.rect().topLeft()), True)
 
     # Items
 
@@ -1514,11 +1564,7 @@ class MainWindow(QMainWindow):
     def _show_permissions_menu(self):
         if not self._view.selected_infos() or self._read_only():
             return
-        menu = self._permissions_menu(self)
-        button = self._button_for(self._permissions)
-        position = button.mapToGlobal(button.rect().topLeft())
-        # From the bar at the bottom of the window: upwards
-        menu.exec(QPoint(position.x(), position.y() - menu.sizeHint().height()))
+        self._permissions_menu(self).exec(QCursor.pos())
 
     def _add_open_in_manager(self, menu, folder):
         manager = desktop.file_manager()

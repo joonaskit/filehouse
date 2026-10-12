@@ -583,7 +583,6 @@ def test_in_a_narrow_window_the_preview_is_a_sheet(qtbot, window):
     # No title bar: the line under the picture names the file
     assert sheet._details.text().startswith("a.png")
     qtbot.waitUntil(lambda: sheet.height() >= 600 * preview.SHEET_SHARE - 30, timeout=TIMEOUT)
-    assert not window._action_bar.isVisible()
 
     qtbot.keyClick(window._view, Qt.Key.Key_Space)
     assert not window.preview_is_open

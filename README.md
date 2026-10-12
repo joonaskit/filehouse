@@ -17,7 +17,7 @@ Everyday browsing and file operations work, and operations show in the shell's i
 - **Tabs** (Ctrl+T, or middle-click a folder) and a **split view** (F3) with two folders side by side; each tab has its own split. Drop files on a tab or on the other pane
 - **Favourites**: a group in the sidebar (Ctrl+D adds the open folder, or drop a folder on it). They are Dolphin's places, so the two share them, and they can be put in another order by dragging. The groups of the sidebar fold shut with a click on their heading
 - **Search** (Ctrl+F): typing filters the open folder at once and finds names in the folders below it, with the folder of each result in a column
-- A narrow layout below 800 pixels: the sidebar becomes a rail of icons, the actions a bar under the list, and the details a sheet
+- A narrow layout below 800 pixels: the sidebar becomes a rail of icons, the search field opens from a button, and the details are a sheet opened from the button in the corner under the rail
 
 **Looking at files**
 
