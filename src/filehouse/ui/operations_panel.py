@@ -58,7 +58,8 @@ class JobRow(QWidget):
             buttons.addWidget(button)
 
         layout = QGridLayout(self)
-        layout.setContentsMargins(style.px(10), style.px(6), style.px(10), style.px(6))
+        job_padding = style.px(style.dense("job_padding"))
+        layout.setContentsMargins(style.px(10), job_padding, style.px(10), job_padding)
         layout.setHorizontalSpacing(style.px(10))
         layout.setVerticalSpacing(style.px(2))
         layout.addWidget(icon, 0, 0, 2, 1)

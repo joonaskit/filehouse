@@ -20,12 +20,6 @@ from PySide6.QtGui import (
 from filehouse.integration import theme as theme_reader
 
 BASE_FONT_PX = 13
-# Height of a button in the toolbar's groups, unscaled: icon buttons and breadcrumbs alike
-CONTROL_HEIGHT = 36
-# Space between a toolbar group's edge and its buttons, unscaled
-GROUP_PADDING = 4
-# Height of a button that stands alone, like Open in the details card, unscaled
-BUTTON_HEIGHT = 40
 # The space a tab leaves to its right and below, unscaled, and the close button's
 # distance from the tab's right edge
 TAB_GAP = 4
@@ -75,6 +69,69 @@ themed = _Themed()
 def px(size):
     """An unscaled pixel size at the user's UI scale."""
     return theme_reader.scaled(_theme, size)
+
+
+# How much room the lists and the sidebar take. Chosen at the start (it is set before
+# apply() and the widgets read it as they are made, like the scale), not a setting of the
+# theme: the shell has none. Unscaled pixels, like every size here
+DENSITIES = ("comfortable", "compact")
+_DENSITY_SIZES = {
+    "comfortable": {
+        "row_padding": 6,
+        "list_icon": 28,
+        "grid_icon": 64,
+        "grid_width": 116,
+        "grid_height": 112,
+        "sidebar_row": 42,
+        "sidebar_heading": 36,
+        "sidebar_icon": 28,
+        # Height of a button in the toolbar's groups: icon buttons and breadcrumbs alike
+        "control_height": 36,
+        # Space between a toolbar group's edge and its buttons
+        "group_padding": 4,
+        # Height of a button that stands alone, like Open in the details card
+        "button_height": 40,
+        "tab_padding": 6,
+        "menu_padding": 8,
+        "card_margin": 16,
+        "card_spacing": 12,
+        "row_spacing": 10,
+        "permissions_spacing": 14,
+        "job_padding": 6,
+    },
+    "compact": {
+        "row_padding": 3,
+        "list_icon": 20,
+        "grid_icon": 48,
+        "grid_width": 96,
+        "grid_height": 92,
+        "sidebar_row": 32,
+        "sidebar_heading": 28,
+        "sidebar_icon": 20,
+        "control_height": 30,
+        "group_padding": 3,
+        "button_height": 32,
+        "tab_padding": 4,
+        "menu_padding": 5,
+        "card_margin": 12,
+        "card_spacing": 8,
+        "row_spacing": 6,
+        "permissions_spacing": 9,
+        "job_padding": 3,
+    },
+}
+_density = "comfortable"
+
+
+def set_density(name):
+    """Use a density from now on: before apply() and before any widget is made."""
+    global _density
+    _density = name if name in _DENSITY_SIZES else "comfortable"
+
+
+def dense(key):
+    """A size that depends on the density, unscaled; `px()` it where it is used."""
+    return _DENSITY_SIZES[_density][key]
 
 
 def font_px(size):
@@ -308,6 +365,8 @@ def _stylesheet():
     window, card, raised = (layer(name).name() for name in ("window", "card", "raised"))
     card_border = overlay(_CARD_BORDER)
     small_font = theme_reader.font_scaled(_theme, 11)
+    control, group = dense("control_height"), dense("group_padding")
+    tab_padding, menu_padding = px(dense("tab_padding")), px(dense("menu_padding"))
     return f"""
         QToolBar {{
             border: none; spacing: {px(8)}px; padding: {px(8)}px;
@@ -318,9 +377,9 @@ def _stylesheet():
         #group, #card {{
             background: {card}; border: 1px solid {card_border}; border-radius: {large}px;
         }}
-        #group {{ border-radius: {radius_within("large", CONTROL_HEIGHT + 2 * GROUP_PADDING)}px; }}
+        #group {{ border-radius: {radius_within("large", control + 2 * group)}px; }}
         #group QToolButton {{
-            border-radius: {radius_within("medium", CONTROL_HEIGHT)}px; padding: {px(7)}px;
+            border-radius: {radius_within("medium", control)}px; padding: {px(7)}px;
         }}
 
         QToolButton {{
@@ -338,7 +397,7 @@ def _stylesheet():
         QLineEdit:focus {{ border-color: {colors["accent"]}; }}
 
         QTreeView, QListView {{ border: none; outline: none; background: transparent; }}
-        QTreeView::item {{ padding: {px(6)}px {px(6)}px; border: none; }}
+        QTreeView::item {{ padding: {px(dense("row_padding"))}px {px(6)}px; border: none; }}
         QTreeView::item:hover, QListView::item:hover {{ background: {hover}; }}
         QTreeView::item:selected, QListView::item:selected {{
             background: {selected}; color: {colors["textPrimary"]};
@@ -359,9 +418,9 @@ def _stylesheet():
 
         QTabBar {{ background: transparent; }}
         QTabBar::tab {{
-            padding: {px(6)}px {px(12)}px; margin: 0 {px(TAB_GAP)}px {px(TAB_GAP)}px 0;
+            padding: {tab_padding}px {px(12)}px; margin: 0 {px(TAB_GAP)}px {px(TAB_GAP)}px 0;
             border: 1px solid transparent; background: transparent;
-            border-radius: {radius_within("medium", CONTROL_HEIGHT)}px;
+            border-radius: {radius_within("medium", control)}px;
             color: {colors["textSecondary"]};
         }}
         QTabBar::tab:hover {{ background: {hover}; }}
@@ -387,7 +446,7 @@ def _stylesheet():
         #secondary {{ color: {colors["textSecondary"]}; font-size: {small_font}px; }}
         #divider {{ background: {divider}; border: none; }}
         #card QPushButton {{
-            border: none; border-radius: {radius_within("large", BUTTON_HEIGHT)}px;
+            border: none; border-radius: {radius_within("large", dense("button_height"))}px;
             padding: 0 {px(10)}px; background: {raised};
         }}
         #card QPushButton:hover {{ background: {hover}; }}
@@ -398,7 +457,7 @@ def _stylesheet():
             border-radius: {large}px; padding: {px(6)}px;
         }}
         QMenu::item {{
-            padding: {px(8)}px {px(14)}px; border-radius: {medium}px; margin: 0 {px(2)}px;
+            padding: {menu_padding}px {px(14)}px; border-radius: {medium}px; margin: 0 {px(2)}px;
         }}
         QMenu::item:selected {{ background: {hover}; color: {colors["textPrimary"]}; }}
         /* What is switched on: the menu draws no tick of its own with this style */

@@ -1,5 +1,5 @@
-"""What the app remembers between runs: window size, view mode, hidden files, the split
-and whether opened files are remembered."""
+"""What the app remembers between runs: window size, view mode, hidden files, the split,
+the density and whether opened files are remembered."""
 
 from PySide6.QtCore import QObject, QSettings, QSize, Signal
 
@@ -45,6 +45,16 @@ def show_hidden():
 
 def set_show_hidden(show):
     _store().setValue("view/show_hidden", bool(show))
+
+
+def density():
+    """How much room the lists and the sidebar take; read at the start."""
+    value = _store().value("view/density", "comfortable")
+    return value if value in ("comfortable", "compact") else "comfortable"
+
+
+def set_density(density):
+    _store().setValue("view/density", density)
 
 
 def split():

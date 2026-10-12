@@ -488,7 +488,7 @@ class MainWindow(QMainWindow):
         group = QFrame()
         group.setObjectName("group")
         layout = QHBoxLayout(group)
-        padding = style.px(style.GROUP_PADDING)
+        padding = style.px(style.dense("group_padding"))
         layout.setContentsMargins(padding, padding, padding, padding)
         layout.setSpacing(style.px(2))
         for item in actions:
@@ -496,7 +496,7 @@ class MainWindow(QMainWindow):
             button.setDefaultAction(item)
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             button.setIconSize(QSize(style.px(18), style.px(18)))
-            side = style.px(style.CONTROL_HEIGHT)
+            side = style.px(style.dense("control_height"))
             button.setFixedSize(side, side)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             layout.addWidget(button)
@@ -1140,6 +1140,13 @@ class MainWindow(QMainWindow):
             _COPIED_MS,
         )
 
+    def _set_density(self, density):
+        """Sizes are set when the widgets are made, so it applies at the next start."""
+        settings.set_density(density)
+        self.statusBar().showMessage(
+            f"{density.capitalize()} density applies at the next start", _COPIED_MS
+        )
+
     def _on_remember_opened_changed(self, remember):
         """Changed here or in another window: it is one setting."""
         self._private.setChecked(not remember)
@@ -1351,6 +1358,13 @@ class MainWindow(QMainWindow):
         view.addSeparator()
         view.addAction(self._split_view)
         view.addAction(self._new_tab)
+        density = menus.menu(view, "Density")
+        current = settings.density()
+        for key, text in (("comfortable", "Comfortable"), ("compact", "Compact")):
+            item = density.addAction(text, lambda key=key: self._set_density(key))
+            item.setCheckable(True)
+            item.setChecked(key == current)
+        view.addMenu(density)
         menu.addMenu(view)
 
     # File operations

@@ -48,6 +48,7 @@ def main(argv=None):
     # Let Ctrl+C in a terminal end the app
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    style.set_density(settings.density())
     style.apply(app, theme.load_theme())
     # The shell's accent colour or corner roundness changed: follow it without a restart
     ThemeWatcher(app, parent=app)

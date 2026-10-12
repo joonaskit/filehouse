@@ -122,7 +122,8 @@ def test_a_button_keeps_round_corners_however_round_the_theme_is(qtbot, qapp, la
     try:
         style.apply(qapp, round_theme)
         assert (
-            style.radius_within("large", style.BUTTON_HEIGHT) <= style.px(style.BUTTON_HEIGHT) / 2
+            style.radius_within("large", style.dense("button_height"))
+            <= style.px(style.dense("button_height")) / 2
         )
         pane = DetailsPane()
         qtbot.addWidget(pane)
@@ -199,3 +200,23 @@ print("app", app.font().pixelSize())
     assert sizes and int(sizes["app"]) > 0
     # In pixels, and the app's: the platform's would be a size in points, and say -1
     assert all(int(size) == int(sizes["app"]) for size in sizes.values()), sizes
+
+
+def test_density_sizes_follow_the_choice():
+    try:
+        style.set_density("compact")
+        compact = style.dense("sidebar_row")
+        style.set_density("nonsense")
+        assert style.dense("sidebar_row") > compact
+    finally:
+        style.set_density("comfortable")
+
+
+def test_density_is_remembered(home_dir):
+    from filehouse.ui import settings
+
+    assert settings.density() == "comfortable"
+    settings.set_density("compact")
+    assert settings.density() == "compact"
+    settings.set_density("cramped")
+    assert settings.density() == "comfortable"
