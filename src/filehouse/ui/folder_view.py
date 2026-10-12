@@ -1,8 +1,11 @@
 """The file list, as details (a table) or as icons with thumbnails."""
 
-from PySide6.QtCore import QItemSelectionModel, QPoint, QSize, Qt, Signal
+import time
+
+from PySide6.QtCore import QEvent, QItemSelectionModel, QPoint, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QHeaderView,
     QLabel,
     QListView,
@@ -109,6 +112,7 @@ class FolderView(QWidget):
         self.setProperty("active", True)
         self._proxy = proxy
         self._mode = settings.DETAILS
+        self._typed_at = None  # when a name was last typed at the list, to jump to it
 
         self._tree = _Tree()
         self._tree.setModel(proxy)
@@ -153,6 +157,7 @@ class FolderView(QWidget):
 
         for view in (self._tree, self._grid):
             view.setItemDelegate(_Rows(view))
+            view.installEventFilter(self)
             view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
             view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             view.setDragEnabled(True)
@@ -220,6 +225,44 @@ class FolderView(QWidget):
         current = self.selection_model().currentIndex()
         if current.isValid():
             self._items().scrollTo(current)
+
+    # Typing a name jumps to it (Qt's keyboard search). Space is the window's key for the
+    # preview, but in the middle of a name it is a part of the name
+
+    def is_searching(self):
+        """Whether a name is being typed at the list: a key of it came a moment ago."""
+        if self._typed_at is None:
+            return False
+        waited = (time.monotonic() - self._typed_at) * 1000
+        return waited < QApplication.keyboardInputInterval()
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind not in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
+            return False
+        if event.key() == Qt.Key.Key_Space:
+            if not self.is_searching():
+                return False
+            if kind == QEvent.Type.KeyPress:
+                watched.keyboardSearch(" ")
+                self._typed_at = time.monotonic()
+            else:
+                # Ours, not the shortcut's: the key press comes here next
+                event.accept()
+            return True
+        if kind == QEvent.Type.KeyPress and self._starts_a_name(event):
+            self._typed_at = time.monotonic()
+        return False
+
+    @staticmethod
+    def _starts_a_name(event):
+        commands = (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.AltModifier
+            | Qt.KeyboardModifier.MetaModifier
+        )
+        text = event.text()
+        return bool(text) and text.isprintable() and not (event.modifiers() & commands)
 
     def _items(self):
         return self._grid if self._mode == settings.ICONS else self._tree

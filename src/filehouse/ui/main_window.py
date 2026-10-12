@@ -44,7 +44,7 @@ from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
 from filehouse.ui.pane import Pane
 from filehouse.ui.path_bar import PathBar
-from filehouse.ui.preview import PreviewWindow
+from filehouse.ui.preview import SHEET_SHARE, PreviewWindow
 from filehouse.ui.sheet import Sheet
 from filehouse.ui.sidebar import Sidebar
 from filehouse.ui.tab import Tab
@@ -186,6 +186,14 @@ class MainWindow(QMainWindow):
         self._sheet = Sheet(self._sheet_details)
         self._preview = PreviewWindow(self)
         self._preview.navigate.connect(self._on_preview_key)
+        self._preview.shown_changed.connect(lambda _shown: self._update_sheet_actions())
+        # The same preview for a narrow window: a sheet too, in place of the details'
+        self._sheet_preview = PreviewWindow(self, sheet=True)
+        self._preview_sheet = Sheet(self._sheet_preview)
+        self._sheet_preview.close_requested.connect(self._close_preview)
+        self._sheet_preview.full_screen_requested.connect(self._preview_full_screen)
+        self._sheet_preview.pages_changed.connect(lambda _count: self._update_sheet_actions())
+        self._preview_sheet.settled.connect(lambda: QTimer.singleShot(0, self._view.show_current))
         # The sheet takes the list's lower part: what is selected stays in view.
         # A moment later, once the list has its new height
         self._sheet.settled.connect(lambda: QTimer.singleShot(0, self._view.show_current))
@@ -242,6 +250,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter, 1)
         layout.addLayout(bar_row)
         layout.addWidget(self._sheet)
+        layout.addWidget(self._preview_sheet)
         layout.addWidget(self._panel)
         self.setCentralWidget(central)
 
@@ -432,6 +441,19 @@ class MainWindow(QMainWindow):
         self._preview_action = action(
             "Preview", "view-preview", [QKeySequence("Space")], self.toggle_preview
         )
+        # For the preview as a sheet, which takes no keys itself. Only while it is open,
+        # and the page keys only for a document: they are the list's otherwise
+        self._close_preview_sheet = action(
+            "Close preview", "window-close", [QKeySequence("Escape")], self._close_preview
+        )
+        self._next_page = action(
+            "Next page", "go-down", [QKeySequence("PgDown")], lambda: self._turn_page(1)
+        )
+        self._previous_page = action(
+            "Previous page", "go-up", [QKeySequence("PgUp")], lambda: self._turn_page(-1)
+        )
+        for item in (self._close_preview_sheet, self._next_page, self._previous_page):
+            item.setEnabled(False)
         # In the recent files the Delete key takes the entry off the list
         self._forget = action(
             "Remove from recent files",
@@ -489,6 +511,7 @@ class MainWindow(QMainWindow):
         self._sidebar.retheme()
         self._details.retheme()
         self._sheet_details.retheme()
+        self._sheet_preview.retheme()
 
     def _button_for(self, action):
         """The toolbar or action bar button of an action."""
@@ -884,25 +907,78 @@ class MainWindow(QMainWindow):
         self._preview_action.setEnabled(selected > 0)
         self._update_preview(infos)
 
+    @property
+    def preview_is_open(self):
+        return self._preview.isVisible() or self._preview_sheet.is_open
+
     def toggle_preview(self):
-        """Open the preview of the selection, or close it."""
-        if self._preview.isVisible():
-            self._preview.hide()
+        """Open the preview of the selection, or close it. In a narrow window it is a
+        sheet at the bottom, otherwise a window of its own."""
+        if self.preview_is_open:
+            self._close_preview()
         elif self._view.selected_infos():
-            self._update_preview(self._view.selected_infos(), force=True)
+            self._open_preview()
+
+    def _open_preview(self):
+        infos = self._view.selected_infos()
+        if self._narrow:
+            # One sheet at a time
+            self._show_details.setChecked(False)
+            self._show_in(self._sheet_preview, infos)
+            self._set_preview_sheet_open(True)
+        else:
+            self._show_in(self._preview, infos)
             self._preview.open_over(self)
 
-    def _update_preview(self, infos, force=False):
+    def _close_preview(self):
+        self._preview.hide()
+        self._set_preview_sheet_open(False)
+
+    def _set_preview_sheet_open(self, open_):
+        if open_ == self._preview_sheet.is_open:
+            return
+        self._preview_sheet.set_open(open_, animate=self.isVisible())
+        self._update_sheet_actions()
+        self._update_narrow_parts(len(self._view.selected_infos()))
+
+    def _preview_full_screen(self):
+        """A double click on the sheet: the same file in the preview window, full screen.
+        Leaving the full screen closes that window, and the sheet is as it was."""
+        self._show_in(self._preview, self._view.selected_infos())
+        self._preview.open_over(self)
+        self._preview.showFullScreen()
+        self._preview.only_full_screen = True
+
+    def _update_sheet_actions(self):
+        """The keys of the preview as a sheet. Not while the preview window is up over
+        it, in full screen: that window has the same keys, and they are its own then."""
+        sheet = self._preview_sheet.is_open and not self._preview.isVisible()
+        self._close_preview_sheet.setEnabled(sheet)
+        pages = sheet and self._sheet_preview.page_count > 1
+        self._next_page.setEnabled(pages)
+        self._previous_page.setEnabled(pages)
+
+    def _turn_page(self, by):
+        self._sheet_preview.turn_page(by)
+
+    def _update_preview(self, infos):
         """Make an open preview show what is selected now."""
-        if not (self._preview.isVisible() or force):
+        if not self.preview_is_open:
             return
         if not infos:
-            self._preview.hide()
-        elif len(infos) > 1:
-            self._preview.show_message(f"{len(infos)} items selected")
+            self._close_preview()
+            return
+        if self._preview.isVisible():
+            self._show_in(self._preview, infos)
+        if self._preview_sheet.is_open:
+            self._show_in(self._sheet_preview, infos)
+
+    def _show_in(self, preview, infos):
+        if len(infos) != 1:
+            preview.show_message(f"{len(infos)} items selected")
         else:
             path = locations.local_path(locations.entry_location(self._location, infos[0]))
-            self._preview.show_item(infos[0], path)
+            preview.show_item(infos[0], path)
 
     def _on_preview_key(self, event):
         """An arrow key pressed in the preview moves the selection of the list."""
@@ -930,6 +1006,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._sheet_preview.set_sheet_height(round(self.height() * SHEET_SHARE))
         self._set_narrow(self.width() < style.px(NARROW_BELOW))
 
     @property
@@ -948,6 +1025,10 @@ class MainWindow(QMainWindow):
                     self._remove_other_pane(tab)
                     self._mark_active(tab)
         self._narrow = narrow
+        if self.preview_is_open and not self._preview.isFullScreen():
+            # The preview goes with the window: a sheet when narrow, a window when not
+            self._close_preview()
+            self._open_preview()
         if narrow:
             self._wide_sizes = self._splitter.sizes()
         else:
@@ -973,9 +1054,13 @@ class MainWindow(QMainWindow):
 
     def _update_narrow_parts(self, selected):
         # The bar acts on the selection, and makes way for the sheet
-        self._action_bar.setVisible(self._narrow and selected > 0 and not self._sheet.is_open)
+        sheet_open = self._sheet.is_open or self._preview_sheet.is_open
+        self._action_bar.setVisible(self._narrow and selected > 0 and not sheet_open)
 
     def _set_sheet_open(self, open_):
+        if open_ and self._narrow:
+            # One sheet at a time
+            self._set_preview_sheet_open(False)
         self._sheet.set_open(open_ and self._narrow, animate=self.isVisible())
         self._close_details.setEnabled(self._sheet.is_open)
         self._update_state()
