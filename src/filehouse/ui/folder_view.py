@@ -22,7 +22,11 @@ class _TakesDrops:
     """For an item view: takes drops of files. What a drop does is decided by the window.
 
     The view declares `dropped`: URIs, the FileInfo of the folder dropped on (None for
-    the open folder), the keyboard modifiers and a global position."""
+    the open folder), the keyboard modifiers and a global position, and `focused`."""
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self.focused.emit()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -67,10 +71,12 @@ class _Rows(QStyledItemDelegate):
 
 class _Tree(_TakesDrops, QTreeView):
     dropped = Signal(list, object, object, QPoint)
+    focused = Signal()
 
 
 class _Grid(_TakesDrops, QListView):
     dropped = Signal(list, object, object, QPoint)
+    focused = Signal()
 
 
 class FolderView(QWidget):
@@ -78,9 +84,15 @@ class FolderView(QWidget):
     dropped = Signal(list, object, object, QPoint)  # see _TakesDrops.dropped
     # FileInfo, or None for the empty area, and a global position
     context_menu_requested = Signal(object, QPoint)
+    # The list, or the empty folder in its place, was clicked or given the keyboard
+    focused = Signal()
 
     def __init__(self, proxy, parent=None):
         super().__init__(parent)
+        self.setObjectName("pane")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setProperty("split", False)
+        self.setProperty("active", True)
         self._proxy = proxy
         self._mode = settings.DETAILS
 
@@ -128,6 +140,7 @@ class FolderView(QWidget):
             view.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
             view.setDefaultDropAction(Qt.DropAction.MoveAction)
             view.dropped.connect(self.dropped)
+            view.focused.connect(self.focused)
             view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             view.customContextMenuRequested.connect(
                 lambda position, view=view: self._on_context_menu(view, position)
@@ -151,6 +164,19 @@ class FolderView(QWidget):
         # For the message shown in place of the list: an empty folder takes drops
         # and has a context menu too
         self.setAcceptDrops(True)
+
+    def set_split(self, split, active):
+        """Beside another list: framed, and in the accent colour while it is the active one."""
+        self.setProperty("split", split)
+        self.setProperty("active", active)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event):
+        # The message of an empty folder has nothing to take the click
+        self.setFocus()
+        self.focused.emit()
+        super().mousePressEvent(event)
 
     @property
     def mode(self):

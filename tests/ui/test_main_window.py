@@ -168,7 +168,7 @@ def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
         ["Back", "Forward", "Up"],
         [],
         ["Copy", "Move to…", "Rename…", "Move to trash"],
-        ["Details", "Icons"],
+        ["Details", "Icons", "Split view"],
         # Only shown in a narrow window
         ["Folder menu"],
     ]

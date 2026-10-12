@@ -129,6 +129,7 @@ filehouse/
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
 │       ├── main_window.py
+│       ├── pane.py              one folder: model, sort proxy, list, history, selection
 │       ├── sidebar.py           places and mounted volumes
 │       ├── path_bar.py          breadcrumbs, editable on click or Ctrl+L
 │       ├── folder_view.py       list and grid modes, delegates
@@ -545,7 +546,21 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19.
 - Video and PDF thumbnails: #20.
 
-Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and a split view (#12).
+Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and tabs (#22). The split view (#12) is built; see below.
+
+### Split view (#12)
+
+F3, the toolbar button or View → Split view shows two folders side by side. Each is a `Pane` (`ui/pane.py`: model, sort proxy, list, history, selection, error state); the window has one or two and an active one, `_pane`. The active pane is the one whose list was last clicked or given the keyboard, and it is framed in the accent colour while the split is on. The path bar, back/forward/up, the title, the actions, the status bar and the sidebar's highlight all follow it. A drop, a click or a menu in a list makes it active first, so a drop lands in the folder of the list it was dropped on, with the rules for drops as before (move on the same file system, copy across).
+
+Decided, from the issue's open questions:
+
+- **Narrow layout:** no split below 800 pixels. Narrowing the window closes the split (the active pane stays) and it is not brought back by widening; the toggle is disabled there.
+- **Details pane:** hidden while the split is on; the sizes of the window's parts are put back when it closes.
+- **Path bar:** one, following the active pane.
+- **Tabs:** out of scope, #22. A tab is meant to be a `Pane` too.
+- **Shared between the panes:** view mode and hidden files (both are settings of the window). Sort order and folder are each pane's own. A new second pane opens in the active pane's folder.
+- **Copy and Move to the other pane:** Shift+F5 and Shift+F6 (F5 is Reload), also in the item's context menu while the split is on. Disabled when either pane is in the trash.
+- **Not done:** remembering the split between runs.
 
 ### What phase 3 added to the plan above
 
