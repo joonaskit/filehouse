@@ -181,6 +181,8 @@ def test_a_tab_can_be_split_on_its_own(qtbot, window):
 
 
 def test_view_mode_and_hidden_files_reach_every_tab(qtbot, window):
+    # One view for every folder, not one for each: see test_folder_views.py
+    settings.set_per_folder(False)
     open_tab(qtbot, window)
 
     window.set_view_mode(settings.ICONS)

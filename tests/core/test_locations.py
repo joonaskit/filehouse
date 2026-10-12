@@ -111,3 +111,23 @@ def test_the_root_has_no_folder_to_be_shown_in():
     root = locations.resolve_item("/")
 
     assert root.location.get_path() == "/" and root.select is None
+
+
+def test_the_nearest_folder_that_is_there(tmp_path):
+    (tmp_path / "there").mkdir()
+    (tmp_path / "there" / "file.txt").write_text("f")
+    there = Gio.File.new_for_path(str(tmp_path / "there"))
+
+    assert locations.nearest_folder(there).equal(there)
+    assert locations.nearest_folder(there.get_child("gone").get_child("deeper")).equal(there)
+    # A file is not a folder to open: the one it is in
+    assert locations.nearest_folder(there.get_child("file.txt")).equal(there)
+    assert locations.nearest_folder(Gio.File.new_for_uri("no-such-scheme://host/a/b")) is None
+
+
+def test_the_name_of_an_entry_below_a_folder(tmp_path):
+    folder = Gio.File.new_for_path(str(tmp_path))
+
+    assert locations.name_below(folder, folder.get_child("a.txt")) == "a.txt"
+    assert locations.name_below(folder, folder.get_child("sub").get_child("a.txt")) == "sub/a.txt"
+    assert locations.name_below(folder.get_child("sub"), folder.get_child("a.txt")) is None

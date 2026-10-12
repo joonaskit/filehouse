@@ -112,7 +112,8 @@ filehouse/
 │   │       ├── delete.py        permanent delete
 │   │       ├── archive.py       extract and compress, each a job
 │   │       ├── conflicts.py     the questions a job asks, answers, names for "Keep both"
-│   │       ├── quick.py         new folder, new file and rename: immediate, no job
+│   │       ├── quick.py         new folder, new file, rename and links: immediate, no job
+│   │       ├── rename_many.py   several renames as one: the names, the check, all or none
 │   │       ├── permissions.py   the permission presets: immediate, no job
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
@@ -156,7 +157,8 @@ filehouse/
 │       ├── settings.py          what is remembered between runs
 │       └── dialogs/             questions (conflict, error, no trash, confirm delete, name
 │                                taken, password) and the prompter that shows them, name
-│                                (rename, new folder), compress, details, properties
+│                                (rename, new folder), rename_many, select, compress,
+│                                details, properties, settings
 └── tests/
     ├── core/                    copy, move, trash, cancel, failure, conflicts against tmp dirs
     └── integration/             island reporter against a fake bus, theme reader
@@ -170,7 +172,7 @@ filehouse/
 1. Parse arguments: zero or more paths or `file://` URIs (`%U` from the `.desktop` file). A file argument opens its folder with the file selected. A missing path opens home and shows a message.
 2. `QGuiApplication.setDesktopFileName("filehouse")`. On Wayland this sets the app id, which the shell's `DockService.findToplevels` compares **exactly** against `StartupWMClass`. This is what gives point 3a for free.
 3. Load the theme and apply the style before creating any window.
-4. Open one window per path argument (one window when there are none).
+4. Open one window per path argument. With none, the tabs of last time in one window (see "The tabs of last time"), or home.
 
 ### One process, and the desktop's file manager (`integration/instance.py`, #38)
 
@@ -194,7 +196,7 @@ The app is meant to stand where Dolphin stood, so the desktop has to be able to 
 - **`core/listing.py`** enumerates a folder with `Gio.File.enumerate_children` on a worker thread, in batches of about 200, asking only for the attributes the view needs (`standard::*`, `time::modified`, `unix::mode`, `thumbnail::*`). Large folders appear progressively.
 - **`DirectoryModel`** holds one folder. It appends batches, then follows changes with a `Gio.FileMonitor` (created, deleted, renamed, changed). Sorting and the hidden-files filter are a `QSortFilterProxyModel` on top: folders first, then natural order by name, case-insensitive.
 - Navigation keeps a back/forward history per window. Up goes to the parent.
-- **`FolderView`** has a details mode (`QTreeView`: name, permissions, modified, size) and an icons mode (`QListView` in icon mode, with thumbnails). The mode is remembered per window, not per folder, in v1.
+- **`FolderView`** has a details mode (`QTreeView`: name, permissions, modified, size) and an icons mode (`QListView` in icon mode, with thumbnails). The mode and the sort order go with the folder: see "The view of each folder".
 - Thumbnails: look up `~/.cache/thumbnails/{normal,large}/<md5 of URI>.png` and check its `Thumb::MTime`. On a miss, generate image thumbnails with `QImageReader` on a thread pool and write them back to the cache following the freedesktop spec, so Dolphin can reuse them. Other types show their MIME icon.
 - **Sidebar:** Home, Desktop, Documents, Downloads, Pictures, Music, Videos, Trash, then mounted volumes from `Gio.VolumeMonitor`, with eject. Without GVFS installed the volume monitor only sees mounts, not unmounted drives; that is acceptable for v1.
 
@@ -208,7 +210,7 @@ The app is meant to stand where Dolphin stood, so the desktop has to be able to 
 
 This is the part that has to be right. Every user action that changes files becomes a **Job**.
 
-**Job kinds:** copy, move, trash, permanent delete, create folder, rename. Restore from trash is a job kind too, but it is built in phase 5 together with the trash view, so it is designed against the view that triggers it. Rename and create folder are synchronous and fast; they don't need an activity, but they go through the same error type.
+**Job kinds:** copy, duplicate, move, trash, permanent delete, create folder, rename. Restore from trash is a job kind too, but it is built in phase 5 together with the trash view, so it is designed against the view that triggers it. Rename and create folder are synchronous and fast; they don't need an activity, but they go through the same error type.
 
 **Life of a job:**
 
@@ -276,6 +278,60 @@ A field in the toolbar, reached with Ctrl+F. What is typed is a list of words; a
 - **A search belongs to the folder it was typed in.** Each pane has its own, the field shows the active pane's, going to another folder ends it, and it is not a place in the history. Escape in the field ends it and returns to the list; Down or Return go to the list with the results kept.
 - **In a narrow window** a button in the toolbar opens the field, which takes the place of the path for as long as it has the keyboard or a text.
 - **Not done:** searching contents or by type, asking an index (Baloo), results as a place in the history, and a wider Folder column (it has the width of the Permissions column, and cuts long paths).
+
+### Duplicate and Create link (#41)
+
+Both are in the menu of a file, after Rename. Neither has a key: Ctrl+D is the favourites', and Dolphin has none for them either (the issue's first question).
+
+- **Duplicate** is a job (`JobKind.DUPLICATE`), so it has progress, cancel, errors and the island like a copy, of which it is one: each source is copied into the folder it is in, and the conflict that the source itself is (the name is taken) is answered "Keep both" before it is asked, so "report.pdf" becomes "report (2).pdf" and a folder "album (2)" with all that is in it. It asks nothing and replaces nothing; a name that turns up taken when the copy is put in place gets the next number. A link is duplicated as a link. Results of a search are each copied where they are.
+- **Create link** makes a symbolic link (`quick.create_link`), immediately and without a job, like a rename. **Beside its target** the link is relative (the target's bare name), so a folder that is moved keeps both working, and it is called "Link to report.pdf". **In another folder** it is the target's full path, so the link can be moved about, and it has the target's own name (the issue's second question: relative survives a move of both, absolute a move of the link, and which one is likely follows from where the link is made). A name that is taken is never replaced: "Link to …", then "Link to … (2)". A link to a link points at the link.
+- **Into another folder:** a drop with Ctrl+Shift, as in Dolphin, and "Link here" in the menu a drop with Alt opens. `MainWindow._drop_into` answers the drop as it does every drop, and makes the links itself.
+- **Not offered** in the trash and in the recent files, and a link can only point to a file of this computer (the third question): a link to `trash:///…` would point nowhere a program could follow. Several links carry on after one that cannot be made, and say which.
+- Not done: selecting the duplicate once the job has ended, and a hard link.
+
+### Selecting (#42)
+
+Beside the click, Shift, Ctrl, the rubber band and Ctrl+A:
+
+- **Select matching…** (Ctrl+S, as in Dolphin; the folder menu, under Select all) asks for a text in a small dialog that says how many entries match as it is typed. With a `*`, a `?` or a `[` the text is a pattern for the whole name (`*.jpg`); without one it is the search field's words, in any order (`core/search.selector`). Both, then, and any case: the issue's first question. It **replaces** the selection unless "Add to what is selected" is ticked (the second).
+- **Invert selection** (Ctrl+Shift+A, as in Dolphin; the folder menu).
+- **Select all of this type**, in the menu of a file: every entry with its content type, and every folder for a folder.
+- All three pick from what the list shows: a hidden file that is not shown, or an entry a search has filtered out, is not selected behind the user's back. `FolderView.select_where` makes one range for each run of rows, so a folder of thousands is a few ranges.
+
+### Renaming several at once (#40)
+
+F2 with several entries selected opens `ui/dialogs/rename_many.py` in place of the name dialog. The work is `core/operations/rename_many.py`.
+
+- **The ways** (the issue's first question): find and replace in the name; a name and a number ("Holiday #" gives "Holiday 1", "Holiday 2", in the order of the list); upper case and lower case. The extension of a file stays unless "Change the extension too" is ticked; a folder has none.
+- **Numbers** (the third question): each `#` is a digit, so `##` gives 01, 02; a pattern without a `#` gets the number at its end; and the count starts where the dialog says, 1 by default.
+- **Every new name is shown first**, beside the old one, and checked on every key (`rename_many.check`): a name that cannot be used, a name two of them would get, and a name something else has, each shown in the danger colour with the reason, and any one of them **blocks all of it**. A name that another of the selected has now is free when that one gets a new name too (1 → 2, 2 → 3 is done 2 first); two that trade names are blocked, since no order does it.
+- **All or none.** It is immediate, not a job (the second question): a rename is one call, and hundreds are done before a progress bar could be read. The check is advisory, as planning is for a job, so each rename is still the single rename that never replaces; when one fails (a file appeared meanwhile, a permission), those done before it are given their names back and the dialog says which file and why. If one of those cannot go back either, that is said with the count.
+- Afterwards the renamed entries are selected.
+- Not done: a job for a slow drive, undo (#16, for which this is one step), trading names through a temporary name, and regular expressions.
+
+### The view of each folder (#43)
+
+The view mode (details or icons) and the sort order belong to the folder that is shown, not to the window.
+
+- **The app's own choice** is `view/mode`, `view/sort` and `view/sort_descending` in the settings, so the sort order is remembered between runs. It is what a folder without a choice of its own is shown with.
+- **A folder's own.** Changing the view or the sort order in a folder (the toolbar, the menu, a click on a column) is that folder's from then on, and only what was changed: a folder given icons still follows the app's sort order. `settings.choose_view` writes it, and `Pane._use_view` applies `settings.view_for(uri)` on every arrival. The app's own choice is then changed in the settings dialog only.
+- **Per folder or one for all** is a setting (`view/per_folder`, on; the issue's first question, answered as Dolphin does: both). Off, a change anywhere is the app's and every folder follows; the folders' own choices are kept for when it is turned on again.
+- **Where it is kept:** `folders.json` beside the settings file, by URI, written under another name and moved into place, read once per run. Not a `.directory` file in each folder: that litters them and fails on a read-only one. So a folder that is renamed loses its view. What the file holds is checked when read.
+- **Not for the folders below** (the second question): Pictures as icons says nothing about a folder in it. It is the simpler rule, and Dolphin's.
+- **500 folders** at most (the third question); past that the one whose view was changed longest ago is forgotten.
+- **The way back:** "Use the default here" in the View menu, enabled where the folder has a choice of its own, and not there at all with one view for all.
+- **The recent files** are the latest first whenever they are entered, as before (the fourth question). A sort chosen there is for that visit and is not kept; their view mode is kept like any folder's.
+- **Every pane follows the settings** (`settings.changes.views_changed`), so another window, the other pane and the other tabs show a folder the new way at once, and the toolbar's two buttons say how the active pane shows its folder.
+
+### The tabs of last time (#49)
+
+- **Kept** when the last window closes (`MainWindow.closeEvent`, `settings.set_session`): each tab's folder, or the two of a split and which was the active one, and the tab in front. With several windows it is the one closed last (the issue's second question).
+- **Opened** by a start without a path, when the process has no window (`app.py`, `main_window.session_to_open`). A start with a path opens that path in a window of its own, as before, and what was remembered is replaced when that window is the last to close (the fourth question). A later start without a path, while a window is open, opens a home window: the tabs of last time are in front of the user already.
+- **A folder that is gone** is the nearest folder above it that is there (`locations.nearest_folder`); when nothing of it can be reached (a drive that is not mounted) the tab is left out, and a split with one such pane opens as the other alone.
+- **The trash and the recent files** come back as any folder does (the third question).
+- **A narrow window** opens the active pane of each split, as narrowing a window leaves it.
+- **A setting** (`window/restore_tabs`, "Start with the tabs of last time" in the settings dialog), on by default as in Dolphin, which this app stands in for (the first question). This reverses what "Tabs" first decided.
+- Not kept: the history of a pane, the selection, the scroll position, and more than one window.
 
 ### Archives (`core/archives.py`, `core/operations/archive.py`, #19)
 
@@ -396,7 +452,7 @@ For a job that ends while the process has no window to show it (the user chose "
 
 ### Settings dialog (#23, `ui/dialogs/settings.py`)
 
-A modal dialog, opened with Ctrl+, or the gear button at the right end of the toolbar. A choice is stored as it is made; there is only Close. Sections: **Appearance** (density, which says it applies at the next start), **New windows** (view mode and hidden files: the same values the app remembers when they are changed in a window, so the dialog also changes the window it was opened from, through `set_view_mode` and `set_show_hidden`), **Privacy** (the "Don't remember opened files" switch, followed live from the folder menu and the status bar, and Clear recent files…, which asks first) and **Notifications** (on or off, and the seconds a job must run before the island's user is told). The dialog holds no logic of its own: it reads and writes `ui/settings.py` and calls the window for what a window has to do. Not in it: the scale and fonts (the shell's), and anything the shell owns.
+A modal dialog, opened with Ctrl+, or the gear button at the right end of the toolbar. A choice is stored as it is made; there is only Close. Sections: **Appearance** (density, which says it applies at the next start), **Folders** (the app's view mode and sort order, for the folders without their own, and whether each folder keeps its own: the open windows follow these from the settings), **New windows** (whether a start opens the tabs of last time; hidden files and the details pane, which also change the window the dialog was opened from), **Privacy** (the "Don't remember opened files" switch, followed live from the folder menu and the status bar, and Clear recent files…, which asks first) and **Notifications** (on or off, and the seconds a job must run before the island's user is told). The dialog holds no logic of its own: it reads and writes `ui/settings.py` and calls the window for what a window has to do. Not in it: the scale and fonts (the shell's), and anything the shell owns.
 
 ### Preview (`ui/preview.py`, `qt_models/previews.py`)
 
@@ -447,7 +503,7 @@ Not done: `QtMultimedia` for video, and KDE's thumbnail plugins through KIO: wit
 ### Drag and drop and clipboard
 
 - Dragging out sets `text/uri-list`. This is what the dock's future `DropArea` in #32 will accept.
-- Dropping in: copy by default across devices, move on the same device, Shift and Ctrl to force move or copy, and a menu when Alt is held, matching Dolphin.
+- Dropping in: copy by default across devices, move on the same device, Shift and Ctrl to force move or copy, Ctrl+Shift to link, and a menu (Move, Copy, Link) when Alt is held, matching Dolphin.
 - Cut, copy and paste use `text/uri-list` plus `application/x-kde-cutselection` for cut, so pasting between this app and Dolphin works both ways.
 
 ## Implementation plan
@@ -528,7 +584,7 @@ The tests use `/dev/shm` as the second file system when it is one, and also alwa
 - **Volumes** (`qt_models/volumes.py`) follow `Gio.VolumeMonitor`: mounted volumes, then drives that could be mounted. Clicking an unmounted one mounts it and goes there. The context menu ejects, or unmounts what can't be ejected. A window showing a drive that goes away returns to home. Encrypted drives that need a passphrase are not handled: the error is shown.
 - **Icons view.** A second view on the same model and selection (Ctrl+1 icons, Ctrl+3 details, as in Dolphin). Thumbnails are only loaded in this mode, for images Qt can read on local files, and only for items that are painted. `qt_models/thumbnails.py` follows the freedesktop thumbnail spec (`normal`, 128 px, `Thumb::URI` and `Thumb::MTime`, written under a temporary name and moved into place), so the cache is shared with Dolphin both ways.
 - **Properties** (Alt+Return) reads one file with `core/properties.py` and adds up folders on a worker thread, links not followed. For several items it shows the totals. It is read only.
-- **Remembered** in `$XDG_CONFIG_HOME/filehouse/filehouse.conf`: window size (saved when a window closes), view mode and whether hidden files are shown.
+- **Remembered** in `$XDG_CONFIG_HOME/filehouse/filehouse.conf`: window size (saved when a window closes), view mode and whether hidden files are shown. Since then also the sort order and the tabs of last time, and beside it `folders.json` with the view of each folder.
 
 ### Phase 6: the new design
 
@@ -591,7 +647,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 - **Keeping counts current.** The folder's monitor says when a subfolder appears or changes its attributes, and that subfolder is counted again (changes are gathered for 300 ms, and only one count runs at a time). It does **not** say when something is put into or taken out of a subfolder. So all folders are counted again when the last job ends and when the window becomes active. In between, a count can be out of date until a reload.
 - **Sorting.** The Size column sorts files by size and folders by their count, folders still on top. Sorting by size while the counts come in moves the folders as they arrive.
 - **Folder menu**, in the order of the picture: New folder, Paste, Select all; Sort by, View, Show hidden files; Open folder in Dolphin, Properties. "Sort by" offers Name, Modified and Size (Modified and Size start with the newest and the largest) and Ascending or Descending; clicking a column header still works, also for Permissions. Select all is on Ctrl+A. The trash's menu gets Select all, Sort by and View as well.
-- Not done: the sort order is not remembered between runs; a new window sorts by name.
+- The sort order was not remembered then. It is now, for the app and for each folder: see "The view of each folder".
 
 **6c. Details pane.**
 
@@ -709,6 +765,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Search: #18, built; see "Search".
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19, built; see "Archives".
 - Video and PDF thumbnails: #20, built; see below.
+- Duplicate and Create link (#41), selecting by pattern (#42), renaming several at once (#40), the view of each folder (#43) and the tabs of last time (#49): built; each has a section above.
 
 Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and tabs (#22). The split view (#12) and tabs are built; see below.
 
@@ -724,9 +781,9 @@ Decided, from the issue's open questions:
 - **Details pane:** hidden while the split is on; the sizes of the window's parts are put back when it closes.
 - **Path bar:** one, following the active pane.
 - **Tabs:** out of scope, #22. A tab is meant to be a `Pane` too.
-- **Shared between the panes:** view mode and hidden files (both are settings of the window). Sort order and folder are each pane's own. A new second pane opens in the active pane's folder.
+- **Shared between the panes:** hidden files. The view mode and the sort order go with the folder each pane shows (#43), so two panes on one folder show it the same way; the toolbar's two view buttons say how the active pane shows its. A new second pane opens in the active pane's folder.
 - **Copy and Move to the other pane:** Shift+F5 and Shift+F6 (F5 is Reload), also in the item's context menu while the split is on. Disabled when either pane is in the trash.
-- **Remembered:** whether the split is on (`view/split`), for every new window. The second pane opens in the first pane's folder; its own folder is not remembered. Closing the split because the window got narrow does not forget it.
+- **Remembered:** whether the split is on (`view/split`), for every new window. The second pane opens in the first pane's folder. Closing the split because the window got narrow does not forget it. A window that opens the tabs of last time (#49) has their splits and their folders instead.
 
 ### Tabs (#22)
 
@@ -735,8 +792,8 @@ Ctrl+T, "New tab" in the View menu, or a middle click on a folder (and "Open in 
 - **Keys:** Ctrl+W closes the tab, or the window when it is the last; Ctrl+Tab and Ctrl+PageDown go to the next tab, Ctrl+Shift+Tab and Ctrl+PageUp to the previous. A new tab from Ctrl+T or the menu is shown at once; one from a middle click opens behind.
 - **The bar** is shown only with two or more tabs, also in the narrow layout (it scrolls, and the tabs elide). Tabs can be dragged to reorder. The title is the folder's name, the tooltip its path.
 - **Dropping on a tab** puts the files in that tab's active folder, by the rules of any drop, without switching to it.
-- **Shared by all tabs:** view mode and hidden files. Sort order, folder and history are each pane's own.
-- **Not remembered between runs:** the open tabs. A file manager that brings back the tabs of a window the user closed surprises more than it helps.
+- **Shared by all tabs:** hidden files. Folder and history are each pane's own, and the view mode and sort order go with the folder (#43).
+- **Remembered between runs** since #49, which reversed the first decision (that bringing tabs back surprises more than it helps): see "The tabs of last time". It can be turned off.
 - **Narrowing** the window closes the split of every tab, as for one tab. A drive that goes away takes every pane that was on it to home.
 
 ### What phase 3 added to the plan above

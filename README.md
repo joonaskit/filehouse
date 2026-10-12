@@ -12,12 +12,14 @@ Everyday browsing and file operations work, and operations show in the shell's i
 
 - Breadcrumb path bar, editable with a click or Ctrl+L; back, forward and up, with history per pane
 - Details view (name, permissions, modified, size) and an icons view with thumbnails; sort by name, modified or size; hidden files on request
+- **Each folder keeps its view and sort order**: Downloads the newest first, Pictures as icons. "Use the default here" in the View menu gives a folder's own up, and the settings can make it one view for every folder
 - Folders load in batches on a worker thread and follow changes made elsewhere
 - A sidebar with home, the special folders, **Recent** (the files used lately), the trash and the drives, with a usage bar per drive and eject
-- **Tabs** (Ctrl+T, or middle-click a folder) and a **split view** (F3) with two folders side by side; each tab has its own split. Drop files on a tab or on the other pane
+- **Tabs** (Ctrl+T, or middle-click a folder) and a **split view** (F3) with two folders side by side; each tab has its own split. Drop files on a tab or on the other pane. A start without a path opens the tabs and splits the last window had
 - **Favourites**: a group in the sidebar (Ctrl+D adds the open folder, or drag folders to the group: to its heading, or to the edge of a favourite to put them there). They are Dolphin's places, so the two share them, and they can be put in another order by dragging. The groups of the sidebar fold shut with a click on their heading
 - The details pane can be put away with F11, the View menu, a toolbar button or the settings; it stays away in every window until it is asked back
 - **Search** (Ctrl+F): typing filters the open folder at once and finds names in the folders below it, with the folder of each result in a column
+- **Selecting**: by a pattern or a few words (Ctrl+S: `*.jpg`, or "holiday 2024"), inverted (Ctrl+Shift+A), and all of one type from the menu of a file
 - A narrow layout below 800 pixels: the sidebar becomes a rail of icons, the search field opens from a button, and the details are a sheet opened from the button in the corner under the rail
 
 **Looking at files**
@@ -31,6 +33,8 @@ Everyday browsing and file operations work, and operations show in the shell's i
 **Changing files**
 
 - Copy, cut and paste, drag and drop (a move on the same file system, a copy across), Move to…, rename, new folder and new file
+- **Duplicate** (a copy beside the file, "report (2).pdf") and **Create link** (a symbolic link beside it, or in another folder by dropping with Ctrl+Shift or from the Alt drop menu)
+- **Rename several at once** (F2 with several selected): find and replace, a name with a number, or upper and lower case, with every new name shown first. A name that is taken blocks all of it, so nothing is half renamed, and nothing is ever replaced
 - Move to trash, with restore and empty; permanent delete asks first and never happens by itself
 - Permission presets (Private, Shared, Make executable, Read-only) and a properties dialog
 - **Archives**: Extract here, Extract to… and Compress… (zip or tar.gz), each a background operation. Reads zip, tar, 7z, rar and more through libarchive, asks for the password of a protected zip, and never writes outside the folder it extracts into or over what is there
@@ -93,7 +97,9 @@ install -Dm644 data/filehouse.desktop ~/.local/share/applications/filehouse.desk
 | Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, paste |
 | Delete | Move to trash |
 | Shift+Delete | Delete permanently (asks first) |
-| F2 | Rename |
+| F2 | Rename (several at once when several are selected) |
+| Ctrl+S | Select by a pattern or words |
+| Ctrl+Shift+A | Invert the selection |
 | Ctrl+Shift+N | New folder |
 | Ctrl+Alt+C | Copy the path |
 | Shift+F4 | Open terminal here |

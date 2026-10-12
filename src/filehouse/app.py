@@ -24,7 +24,7 @@ from filehouse.qt_models.job_model import JobModel
 from filehouse.ui import clipboard, settings
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
-from filehouse.ui.main_window import MainWindow
+from filehouse.ui.main_window import MainWindow, session_to_open
 
 # How often the garbage is collected, in milliseconds
 _COLLECT_MS = 5000
@@ -119,7 +119,7 @@ def main(argv=None):
     # The process may end the moment the last job has: what was sent must be on the bus
     app.aboutToQuit.connect(notifier.flush)
 
-    def open_window(target, token=""):
+    def open_window(target, token="", session=None):
         window = MainWindow(
             target.location,
             select=target.select,
@@ -127,6 +127,7 @@ def main(argv=None):
             jobs=jobs,
             recent=recent,
             favourites=favourites,
+            session=session,
         )
         windows.append(window)
         window.destroyed.connect(lambda _obj=None, w=window: windows.remove(w))
@@ -135,6 +136,12 @@ def main(argv=None):
         return window
 
     def open_all(targets, token):
+        if not targets and not windows:
+            # Started without a path, with no window open: where the last one was
+            session = session_to_open()
+            if session is not None:
+                open_window(locations.StartTarget(session[0][0][0][0]), token, session)
+                return
         seen = []
         for target in targets or [locations.StartTarget(locations.home())]:
             # One window for a folder, however often it was named

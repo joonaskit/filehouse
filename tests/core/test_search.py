@@ -140,3 +140,24 @@ def test_the_trash_and_the_recent_files_are_not_searched_below(tmp_path):
     assert search.can_search_below(gfile(tmp_path))
     assert not search.can_search_below(locations.trash())
     assert not search.can_search_below(locations.recent())
+
+
+@pytest.mark.parametrize(
+    "text, name, expected",
+    [
+        ("*.jpg", "Holiday.JPG", True),
+        ("*.jpg", "holiday.jpg.txt", False),
+        ("img_??.png", "IMG_01.png", True),
+        ("img_??.png", "IMG_001.png", False),
+        ("[ab]*", "beta", True),
+        ("[ab]*", "gamma", False),
+        # Without a pattern sign it is the search's words, in any order
+        ("2024 holiday", "Holiday in 2024.jpg", True),
+        ("2024 holiday", "Holiday.jpg", False),
+        ("jpg", "notes about jpg.txt", True),
+        ("", "anything", False),
+        ("   ", "anything", False),
+    ],
+)
+def test_what_a_text_selects(text, name, expected):
+    assert search.selector(text)(name) is expected

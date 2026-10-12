@@ -103,6 +103,12 @@ def basename(location):
     return location.get_basename()
 
 
+def name_below(folder, location):
+    """The name of `location` as an entry of `folder`: its path below it ("sub/a.txt"
+    for a result of a search), or None when it is not in it."""
+    return folder.get_relative_path(location)
+
+
 def uri(location):
     return location.get_uri()
 
@@ -243,6 +249,14 @@ def is_folder(location):
 
 def from_uri(uri):
     return Gio.File.new_for_uri(uri)
+
+
+def nearest_folder(location):
+    """`location` when it is a folder, or else the nearest folder above it that is
+    there: for a place remembered from last time. None when nothing of it is left."""
+    while location is not None and not is_folder(location):
+        location = location.get_parent()
+    return location
 
 
 def same_filesystem(a, b):

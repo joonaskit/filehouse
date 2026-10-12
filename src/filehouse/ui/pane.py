@@ -4,11 +4,22 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from filehouse.core import locations
 from filehouse.core.history import History
-from filehouse.qt_models.directory_model import MODIFIED, DirectoryModel, DirectorySortProxy
+from filehouse.qt_models.directory_model import (
+    MODIFIED,
+    NAME,
+    PERMISSIONS,
+    SIZE,
+    DirectoryModel,
+    DirectorySortProxy,
+)
+from filehouse.ui import settings
 from filehouse.ui.folder_view import FolderView
 
 # The folders below are searched this long after the last key: the list is filtered at once
 _SEARCH_DELAY_MS = 250
+# The columns a list is sorted by, as the settings name them
+_COLUMNS = {"name": NAME, "permissions": PERMISSIONS, "modified": MODIFIED, "size": SIZE}
+_SORTS = {column: key for key, column in _COLUMNS.items()}
 
 
 class Pane(QObject):
@@ -23,7 +34,10 @@ class Pane(QObject):
         self.location = None
         self.error = None
         self._pending_select = None
-        self._sort_before_recent = None
+        self._pending_names = set()
+        # While the view is given the sort order of a folder: that is not a choice
+        self._applying = False
+        self._closed = False
         self.search_text = ""
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -39,6 +53,8 @@ class Pane(QObject):
         self.model.search_changed.connect(self.changed)
         self.view = FolderView(self.proxy)
         self.view.selection_model().selectionChanged.connect(self.changed)
+        self.view.sort_changed.connect(self._on_sort_chosen)
+        settings.changes.views_changed.connect(self._use_view)
 
         for signal in (
             self.proxy.rowsInserted,
@@ -86,24 +102,53 @@ class Pane(QObject):
         self._search_timer.stop()
         self.search_text = ""
         self.proxy.set_filter_text("")
-        self._sort_for(location)
         self.location = location
+        self._use_view()
         self._pending_select = select
+        self._pending_names = set()
         self.error = None
         self.model.set_location(location)
         self.location_changed.emit(location)
 
-    def _sort_for(self, location):
-        """The recent files are shown the latest first, and the sort that was chosen
-        comes back when the pane leaves them."""
-        now = locations.in_recent(location)
-        before = self.location is not None and locations.in_recent(self.location)
-        if now and not before:
-            self._sort_before_recent = (self.view.sort_column(), self.view.sort_order())
-            self.view.sort(MODIFIED, Qt.SortOrder.DescendingOrder)
-        elif before and not now and self._sort_before_recent is not None:
-            self.view.sort(*self._sort_before_recent)
-            self._sort_before_recent = None
+    # How the folder is shown
+
+    def _use_view(self):
+        """Show the folder as it was chosen for it, or as the app's choice says. The
+        recent files are always the latest first, whatever was chosen."""
+        if self.location is None:
+            return
+        mode, key, descending = settings.view_for(locations.uri(self.location))
+        if self.in_recent:
+            key, descending = "modified", True
+        order = Qt.SortOrder.DescendingOrder if descending else Qt.SortOrder.AscendingOrder
+        changed = mode != self.view.mode
+        self._applying = True
+        try:
+            self.view.set_mode(mode)
+            self.view.sort(_COLUMNS[key], order)
+        finally:
+            self._applying = False
+        if changed:
+            self.changed.emit()
+
+    def choose_mode(self, mode):
+        """The user wants this folder as details or as icons."""
+        settings.choose_view(locations.uri(self.location), mode=mode)
+
+    def _on_sort_chosen(self, column, order):
+        # In the recent files a sort is for now: they are the latest first when entered
+        if self._applying or self.location is None or self.in_recent:
+            return
+        descending = order == Qt.SortOrder.DescendingOrder
+        settings.choose_view(locations.uri(self.location), sort=(_SORTS[column], descending))
+
+    @property
+    def has_own_view(self):
+        """Whether this folder is shown its own way, which "Use the default here" ends."""
+        return settings.per_folder() and bool(settings.folder_view(locations.uri(self.location)))
+
+    def use_default_view(self):
+        settings.forget_folder_view(locations.uri(self.location))
 
     @staticmethod
     def _name_within(location, folder):
@@ -151,15 +196,35 @@ class Pane(QObject):
             self._pending_select = name
             self.changed.emit()
 
+    def select_names_when_listed(self, folder, names):
+        """Select several entries that were renamed together, once all are listed."""
+        if locations.same(folder, self.location):
+            self._pending_names = set(names)
+            self.changed.emit()
+
     def _on_loaded(self):
         self.select_pending()
         self.changed.emit()
 
     def select_pending(self):
         name = self._pending_select
-        if name and self.model.row_for_name(name) >= 0:
-            self.view.select_name(name)
+        # The model may have a row a moment before the list has: then it stays pending
+        if name and self.model.row_for_name(name) >= 0 and self.view.select_name(name):
             self._pending_select = None
+        names = self._pending_names
+        if names and all(self.model.row_for_name(name) >= 0 for name in names):
+            self._pending_names = set()
+            # Once the list has caught up with the model. Those it shows: a filter or
+            # the hidden files may leave some out
+            QTimer.singleShot(0, self, lambda: self._select_names(names))
+
+    def _select_names(self, names):
+        if not self._closed:
+            self.view.select_where(lambda info: info.name in names)
+
+    def shown_infos(self):
+        """Every entry the list shows, selected or not."""
+        return [self.view.info_at(row) for row in range(self.proxy.rowCount())]
 
     def _on_load_failed(self, message):
         self.error = message
@@ -213,4 +278,8 @@ class Pane(QObject):
         ]
 
     def close(self):
+        if not self._closed:
+            self._closed = True
+            # The view may be gone before this is: nothing more is to be shown in it
+            settings.changes.views_changed.disconnect(self._use_view)
         self.model.close()

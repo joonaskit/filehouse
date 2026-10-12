@@ -7,6 +7,7 @@ found first. A result is a `FileInfo` whose `name` is its path below the root
 any other: `root.get_child(name)` is the file.
 """
 
+import fnmatch
 import time
 from collections import deque
 from dataclasses import replace
@@ -34,6 +35,18 @@ def matches(wanted, name):
     """Whether a name has every one of the words in it."""
     name = name.casefold()
     return all(word in name for word in wanted)
+
+
+def selector(text):
+    """What a text typed to select by picks, as a function of a name. With a "*", a "?"
+    or a "[" it is a pattern for the whole name ("*.jpg"); without one it is the
+    search's words. Any case, and an empty text picks nothing."""
+    text = text.strip()
+    if any(sign in text for sign in "*?["):
+        pattern = text.casefold()
+        return lambda name: fnmatch.fnmatchcase(name.casefold(), pattern)
+    wanted = words(text)
+    return lambda name: bool(wanted) and matches(wanted, name)
 
 
 def can_search_below(location):
