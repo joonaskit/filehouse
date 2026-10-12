@@ -46,6 +46,11 @@ class SettingsDialog(QDialog):
         self.view.setCurrentIndex(self.view.findData(settings.view_mode()))
         self.view.currentIndexChanged.connect(lambda: set_view_mode(self.view.currentData()))
 
+        self.pane = QCheckBox("Show the details pane")
+        self.pane.setChecked(settings.details_pane())
+        self.pane.toggled.connect(settings.set_details_pane)
+        settings.changes.details_pane_changed.connect(self._on_details_pane_changed)
+
         self.hidden = QCheckBox("Show hidden files")
         self.hidden.setChecked(settings.show_hidden())
         self.hidden.toggled.connect(set_show_hidden)
@@ -81,6 +86,7 @@ class SettingsDialog(QDialog):
         defaults.addRow("View", self.view)
         layout.addLayout(defaults)
         layout.addWidget(self.hidden)
+        layout.addWidget(self.pane)
         layout.addWidget(self._note("Changes the window you opened this from as well."))
 
         layout.addWidget(self._heading("Privacy"))
@@ -114,6 +120,11 @@ class SettingsDialog(QDialog):
         settings.set_notify(on)
         self.seconds.setEnabled(on)
 
+    def _on_details_pane_changed(self, show):
+        self.pane.blockSignals(True)
+        self.pane.setChecked(show)
+        self.pane.blockSignals(False)
+
     def _on_remember_opened_changed(self, remember):
         self.private.blockSignals(True)
         self.private.setChecked(not remember)
@@ -121,4 +132,5 @@ class SettingsDialog(QDialog):
 
     def done(self, result):
         settings.changes.remember_opened_changed.disconnect(self._on_remember_opened_changed)
+        settings.changes.details_pane_changed.disconnect(self._on_details_pane_changed)
         super().done(result)

@@ -594,3 +594,168 @@ def test_the_insertion_line_shows_while_dragging_and_not_after(qtbot, window, th
 
     sidebar.dragLeaveEvent(QDragLeaveEvent())
     assert sidebar._drop_line is None
+
+
+def test_its_menu_opens_it_in_the_other_pane_right_below_the_tab(
+    qtbot, window, favourites, tree, monkeypatch
+):
+    favourites.add(gfile(tree / "alpha"))
+    menu, split = pick(window, favourites.items[0], "Open in split view", monkeypatch)
+    texts = [a.text() for a in menu.actions()]
+    assert texts[texts.index("Open in new tab") + 1] == "Open in split view"
+    first = window._pane
+
+    split.trigger()
+
+    assert window.is_split and window._pane is first
+    assert window._other_pane().location.get_path() == str(tree / "alpha")
+
+
+def test_its_menu_has_no_split_in_a_narrow_window(qtbot, window, favourites, tree, monkeypatch):
+    favourites.add(gfile(tree / "alpha"))
+    window.resize(500, 600)
+    shown = []
+    real = main_window_module.menus.menu
+
+    def build(parent, title=None):
+        menu = real(parent, title) if title else real(parent)
+        menu.exec = lambda position: shown.append(menu) or None
+        return menu
+
+    monkeypatch.setattr(main_window_module.menus, "menu", build)
+
+    window._show_favourite_menu(favourites.items[0], QPoint(0, 0))
+
+    assert "Open in split view" not in [a.text() for a in shown[0].actions()]
+
+
+# Folders dropped on the edges of a favourite are added next to it
+
+
+@pytest.fixture(autouse=True)
+def more_folders(tree):
+    """Folders that are not favourites, to be dropped."""
+    for name in ("delta", "epsilon"):
+        (tree / name).mkdir(exist_ok=True)
+
+
+def drag_over(window, row, uris, where, drop_it=True):
+    """Drag URIs over a row of the sidebar, `where` being how far down the row: 0.0 is
+    its top edge and 1.0 its bottom. Enter, move and, with `drop_it`, the drop."""
+    from PySide6.QtCore import QMimeData, QPointF, QUrl
+    from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
+
+    sidebar = window._sidebar
+    mime = QMimeData()
+    mime.setUrls([QUrl(uri) for uri in uris])
+    rect = sidebar.visualItemRect(sidebar.item(row))
+    point = QPointF(rect.center().x(), rect.top() + where * (rect.height() - 1))
+    copy, left, no_keys = (
+        Qt.DropAction.CopyAction,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    sidebar.dragEnterEvent(QDragEnterEvent(point.toPoint(), copy, mime, left, no_keys))
+    sidebar.dragMoveEvent(QDragMoveEvent(point.toPoint(), copy, mime, left, no_keys))
+    if not drop_it:
+        return None
+    event = QDropEvent(point, copy, mime, left, no_keys)
+    sidebar.dropEvent(event)
+    return event
+
+
+def test_a_folder_dropped_on_the_top_edge_goes_before_the_favourite(qtbot, window, three, tree):
+    drag_over(window, favourite_row(window, "beta"), [gfile(tree / "delta").get_uri()], 0.05)
+
+    assert titles(three) == ["alpha", "delta", "beta", "gamma"]
+
+
+def test_a_folder_dropped_on_the_bottom_edge_goes_after_it(qtbot, window, three, tree):
+    drag_over(window, favourite_row(window, "beta"), [gfile(tree / "delta").get_uri()], 0.95)
+
+    assert titles(three) == ["alpha", "beta", "delta", "gamma"]
+
+
+def test_the_last_edge_adds_at_the_end_and_the_first_at_the_start(qtbot, window, three, tree):
+    drag_over(window, favourite_row(window, "gamma"), [gfile(tree / "delta").get_uri()], 0.95)
+    drag_over(window, favourite_row(window, "alpha"), [gfile(tree / "epsilon").get_uri()], 0.05)
+
+    assert titles(three) == ["epsilon", "alpha", "beta", "gamma", "delta"]
+
+
+def test_several_folders_keep_their_order_at_the_edge(qtbot, window, three, tree):
+    uris = [gfile(tree / name).get_uri() for name in ("delta", "epsilon")]
+
+    drag_over(window, favourite_row(window, "alpha"), uris, 0.95)
+
+    assert titles(three) == ["alpha", "delta", "epsilon", "beta", "gamma"]
+
+
+def test_a_folder_that_is_a_favourite_already_stays_where_it_is(qtbot, window, three, tree):
+    drag_over(window, favourite_row(window, "gamma"), [gfile(tree / "alpha").get_uri()], 0.05)
+
+    assert titles(three) == ["alpha", "beta", "gamma"]
+
+
+def test_the_middle_of_a_favourite_still_takes_the_folder_into_it(
+    qtbot, window, three, tree, jobs, wait_final
+):
+    drag_over(window, favourite_row(window, "beta"), [gfile(tree / "delta").get_uri()], 0.5)
+
+    assert titles(three) == ["alpha", "beta", "gamma"]
+    qtbot.waitUntil(lambda: bool(jobs.jobs), timeout=TIMEOUT)
+    wait_final(jobs, jobs.jobs[0])
+    assert (tree / "beta" / "delta").is_dir()
+
+
+def test_files_at_the_edge_are_not_added_and_are_copied_in_as_before(
+    qtbot, window, three, tree, jobs, wait_final
+):
+    uris = [gfile(tree / "note.txt").get_uri()]
+
+    drag_over(window, favourite_row(window, "beta"), uris, 0.05)
+
+    assert titles(three) == ["alpha", "beta", "gamma"]
+    qtbot.waitUntil(lambda: bool(jobs.jobs), timeout=TIMEOUT)
+
+
+def test_folders_mixed_with_files_are_not_added_at_an_edge(qtbot, window, three, tree, jobs):
+    uris = [gfile(tree / "delta").get_uri(), gfile(tree / "note.txt").get_uri()]
+
+    drag_over(window, favourite_row(window, "beta"), uris, 0.05)
+
+    assert titles(three) == ["alpha", "beta", "gamma"]
+
+
+def test_a_line_shows_where_the_folder_would_go_and_not_over_the_middle(qtbot, window, three, tree):
+    sidebar = window._sidebar
+    uris = [gfile(tree / "delta").get_uri()]
+    row = favourite_row(window, "beta")
+    rect = sidebar.visualItemRect(sidebar.item(row))
+
+    drag_over(window, row, uris, 0.05, drop_it=False)
+    assert sidebar._drop_line == rect.top()
+
+    drag_over(window, row, uris, 0.95, drop_it=False)
+    assert sidebar._drop_line == rect.bottom()
+
+    drag_over(window, row, uris, 0.5, drop_it=False)
+    assert sidebar._drop_line is None
+
+
+def test_no_line_for_files_or_over_the_places(qtbot, window, three, tree):
+    sidebar = window._sidebar
+    drag_over(
+        window, favourite_row(window, "beta"), [gfile(tree / "note.txt").get_uri()], 0.05, False
+    )
+    assert sidebar._drop_line is None
+
+    home = sidebar_names(window).index("Home")
+    drag_over(window, home, [gfile(tree / "delta").get_uri()], 0.05, drop_it=False)
+    assert sidebar._drop_line is None
+
+
+def test_dropped_on_the_heading_or_the_hint_it_still_goes_to_the_end(qtbot, window, three, tree):
+    drop(window, sidebar_names(window).index("▾ Favourites"), [gfile(tree / "delta").get_uri()])
+
+    assert titles(three) == ["alpha", "beta", "gamma", "delta"]

@@ -283,3 +283,86 @@ def test_a_narrow_window_neither_splits_nor_forgets_the_split(qtbot, window):
     assert not window.is_split
     # Not the user's choice: the next wide window is split again
     assert settings.split()
+
+
+# Open a folder of the list in the other pane
+
+
+def folder_info(window, name):
+    return window._model.info(window._model.row_for_name(name))
+
+
+def test_a_folder_opens_in_split_view_from_its_menu_and_a_file_does_not(qtbot, tree, window):
+    (tree / "left" / "sub").mkdir()
+    qtbot.waitUntil(lambda: window._model.row_for_name("sub") >= 0, timeout=TIMEOUT)
+
+    folder = [a.text() for a in window._menu_for(folder_info(window, "sub")).actions()]
+    file = [a.text() for a in window._menu_for(folder_info(window, "a.txt")).actions()]
+
+    # Right below Open in new tab
+    assert folder[folder.index("Open in new tab") + 1] == "Open in split view"
+    assert "Open in split view" not in file
+
+
+def test_it_splits_the_window_and_shows_the_folder_in_the_new_pane(qtbot, tree, window):
+    (tree / "left" / "sub").mkdir()
+    (tree / "left" / "sub" / "inner.txt").write_text("x")
+    qtbot.waitUntil(lambda: window._model.row_for_name("sub") >= 0, timeout=TIMEOUT)
+    first = window._pane
+    assert not window.is_split
+
+    window._open_in_split(folder_info(window, "sub"))
+
+    assert window.is_split
+    # The list the folder was chosen in stays where it was, and stays the active one
+    assert window._pane is first
+    assert first.location.get_path() == str(tree / "left")
+    other = window._other_pane()
+    assert other.location.get_path() == str(tree / "left" / "sub")
+    wait_loaded(qtbot, other)
+    assert [other.model.info(0).name] == ["inner.txt"]
+    # Not a choice of how the next window opens
+    assert not settings.split()
+
+
+def test_a_window_that_is_split_already_opens_it_in_the_other_pane(qtbot, tree, window):
+    (tree / "left" / "sub").mkdir()
+    qtbot.waitUntil(lambda: window._model.row_for_name("sub") >= 0, timeout=TIMEOUT)
+    window.set_split(True)
+    other = window._other_pane()
+    window._open_in_split(folder_info(window, "sub"))
+
+    assert window._other_pane() is other
+    assert other.location.get_path() == str(tree / "left" / "sub")
+    assert len(window._tab.panes) == 2
+    # Back in that pane goes to where it was
+    other.go_back()
+    assert other.location.get_path() == str(tree / "left")
+
+
+def test_the_other_pane_can_be_the_one_it_is_opened_from(qtbot, tree, window):
+    (tree / "left" / "sub").mkdir()
+    qtbot.waitUntil(lambda: window._model.row_for_name("sub") >= 0, timeout=TIMEOUT)
+    window.set_split(True)
+    right = window._other_pane()
+    window._activate(right)
+    wait_loaded(qtbot, right)
+    qtbot.waitUntil(lambda: right.model.row_for_name("sub") >= 0, timeout=TIMEOUT)
+    left = window._other_pane()
+
+    window._open_in_split(right.model.info(right.model.row_for_name("sub")))
+
+    assert window._pane is right
+    assert left.location.get_path() == str(tree / "left" / "sub")
+
+
+def test_a_narrow_window_has_no_split_to_open_it_in(qtbot, tree, window):
+    (tree / "left" / "sub").mkdir()
+    qtbot.waitUntil(lambda: window._model.row_for_name("sub") >= 0, timeout=TIMEOUT)
+    window.resize(NARROW, 600)
+
+    actions = [a.text() for a in window._menu_for(folder_info(window, "sub")).actions()]
+    window._open_in_split(folder_info(window, "sub"))
+
+    assert "Open in split view" not in actions
+    assert not window.is_split

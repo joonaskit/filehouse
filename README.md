@@ -15,7 +15,8 @@ Everyday browsing and file operations work, and operations show in the shell's i
 - Folders load in batches on a worker thread and follow changes made elsewhere
 - A sidebar with home, the special folders, **Recent** (the files used lately), the trash and the drives, with a usage bar per drive and eject
 - **Tabs** (Ctrl+T, or middle-click a folder) and a **split view** (F3) with two folders side by side; each tab has its own split. Drop files on a tab or on the other pane
-- **Favourites**: a group in the sidebar (Ctrl+D adds the open folder, or drop a folder on it). They are Dolphin's places, so the two share them, and they can be put in another order by dragging. The groups of the sidebar fold shut with a click on their heading
+- **Favourites**: a group in the sidebar (Ctrl+D adds the open folder, or drag folders to the group: to its heading, or to the edge of a favourite to put them there). They are Dolphin's places, so the two share them, and they can be put in another order by dragging. The groups of the sidebar fold shut with a click on their heading
+- The details pane can be put away with F11, the View menu, a toolbar button or the settings; it stays away in every window until it is asked back
 - **Search** (Ctrl+F): typing filters the open folder at once and finds names in the folders below it, with the folder of each result in a column
 - A narrow layout below 800 pixels: the sidebar becomes a rail of icons, the search field opens from a button, and the details are a sheet opened from the button in the corner under the rail
 
