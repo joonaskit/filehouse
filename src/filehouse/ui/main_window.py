@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from filehouse.core import locations
+from filehouse.core import archives, locations
 from filehouse.core.errors import OperationError
 from filehouse.core.listing import mode_text
 from filehouse.core.operations import JobKind, permissions, quick
@@ -34,6 +34,7 @@ from filehouse.qt_models.permissions import PermissionChange
 from filehouse.qt_models.volumes import Volumes
 from filehouse.ui import clipboard, menus, settings
 from filehouse.ui.details_pane import DetailsPane
+from filehouse.ui.dialogs.compress import CompressDialog
 from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.dialogs.name import NameDialog
 from filehouse.ui.dialogs.prompter import Prompter
@@ -379,6 +380,10 @@ class MainWindow(QMainWindow):
         )
         self._new_file = action("New file…", "document-new", [], self.new_file)
         self._move_to = action("Move to…", "document-export", [], self.move_selected)
+        # Archives: nothing is offered when libarchive is not installed
+        self._extract_here = action("Extract here", "archive-extract", [], self.extract_here)
+        self._extract_to = action("Extract to…", "archive-extract", [], self.extract_to)
+        self._compress = action("Compress…", "archive-insert", [], self.compress)
         # Beside the other list, for the keyboard. Shift: F5 is Reload
         self._copy_other = action(
             "Copy to other pane", "edit-copy", [QKeySequence("Shift+F5")], self.copy_to_other_pane
@@ -834,6 +839,10 @@ class MainWindow(QMainWindow):
         self._update_favourite_action()
         self._rename.setEnabled(selected == 1 and not read_only)
         self._move_to.setEnabled(selected > 0 and not read_only)
+        has_archive = not in_trash and any(self._is_archive(info) for info in infos)
+        self._extract_here.setEnabled(has_archive and not read_only)
+        self._extract_to.setEnabled(has_archive)
+        self._compress.setEnabled(selected > 0 and not read_only and archives.available())
         self._permissions.setEnabled(selected > 0 and not read_only)
         self._paste.setEnabled(bool(clipboard.get()[0]) and not read_only)
         other = self._other_pane()
@@ -1243,6 +1252,10 @@ class MainWindow(QMainWindow):
         menu.addActions([self._cut, self._copy, self._paste])
         menu.addSeparator()
         menu.addActions([self._rename, self._move_to])
+        if self._is_archive(info) and not self._in_trash():
+            menu.addActions([self._extract_here, self._extract_to])
+        if archives.available() and not self._read_only():
+            menu.addAction(self._compress)
         if self.is_split:
             menu.addActions([self._copy_other, self._move_other])
         menu.addActions([self._trash, self._delete])
@@ -1537,6 +1550,71 @@ class MainWindow(QMainWindow):
             # Already there
             return None
         return self._start(JobKind.MOVE, selected, target)
+
+    # Archives
+
+    @staticmethod
+    def _is_archive(info):
+        return not info.is_dir and archives.can_extract(info.content_type)
+
+    def _selected_archives(self):
+        return [
+            locations.entry_location(self._location, info)
+            for info in self._view.selected_infos()
+            if self._is_archive(info)
+        ]
+
+    def extract_here(self):
+        """Extract the selected archives beside themselves, a job each."""
+        if self._read_only() or self._in_trash():
+            return []
+        return self._extract(self._location)
+
+    def extract_to(self):
+        """Extract the selected archives into a folder that is picked in a dialog."""
+        selected = self._selected_archives()
+        if not selected or self._in_trash():
+            return []
+        start = locations.local_path(self._location) or locations.local_path(locations.home())
+        path = pick_folder(self, "Extract to", start)
+        return self._extract(locations.from_path(path)) if path else []
+
+    def _extract(self, destination):
+        return [
+            self._jobs.extract(archive, destination, origin=self)
+            for archive in self._selected_archives()
+        ]
+
+    def compress(self):
+        """Compress the selection into an archive in this folder, after asking for its
+        name and kind."""
+        selected = self._selected_locations()
+        if not selected or self._read_only() or not archives.available():
+            return None
+        folder = self._location
+        names = [locations.basename(location) for location in selected]
+        what = f"“{names[0]}”" if len(names) == 1 else f"{len(names)} items"
+
+        def apply(text, format):
+            name = text.strip()
+            if not name or "/" in name or name in (".", ".."):
+                return "The archive needs a name, without “/”."
+            extension = archives.format_for(format).extension
+            if not name.endswith(extension):
+                name += extension
+            self._jobs.compress(selected, folder, name, format, origin=self)
+            return None
+
+        dialog = CompressDialog(
+            self,
+            what,
+            archives.FORMATS,
+            lambda format: archives.archive_name(names, locations.basename(folder), format),
+            apply,
+        )
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.open()
+        return dialog
 
     def copy_to_other_pane(self):
         return self._transfer(JobKind.COPY)

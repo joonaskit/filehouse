@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 from shiboken6 import isValid
 
 from filehouse.core.operations import Answer, JobState, Reply
-from filehouse.ui.dialogs.questions import QuestionBox
+from filehouse.ui.dialogs.questions import box_for
 
 
 class Prompter(QObject):
@@ -17,7 +17,7 @@ class Prompter(QObject):
         super().__init__(parent)
         self._jobs = jobs
         self._waiting = deque()
-        self.current = None  # the QuestionBox on screen
+        self.current = None  # the question's box on screen
         self._current_job = None
         jobs.question_asked.connect(self._on_asked)
         jobs.job_changed.connect(self._on_job_changed)
@@ -32,7 +32,7 @@ class Prompter(QObject):
             if job.state is not JobState.WAITING:
                 # Cancelled before its turn came
                 continue
-            box = QuestionBox(question, self._parent_for(job))
+            box = box_for(question, self._parent_for(job))
             box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
             box.finished.connect(lambda _result, box=box: self._on_finished(box))
             box.destroyed.connect(lambda _box=None, question=question: self._on_gone(question))

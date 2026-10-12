@@ -7,12 +7,13 @@ A small file browser for KDE Plasma (Wayland), companion to the Quickshell Islan
 - Python 3.12+, **PySide6 with Qt Widgets** (not Qt Quick/QML)
 - **Gio via PyGObject** for all file system work, trash, MIME, default apps and file monitors
 - **Gio.DBusConnection** for D-Bus (not QtDBus)
+- **libarchive via `libarchive-c`** for archives, and it is optional: without it the app runs and offers nothing for them
 - pytest for `core/`, pytest-qt for the few UI tests
 
 ## Setup and commands
 
 ```sh
-sudo dnf install python3-pyside6 python3-gobject
+sudo dnf install python3-pyside6 python3-gobject python3-libarchive-c
 python3 -m venv --system-site-packages .venv   # system site packages are needed for gi
 source .venv/bin/activate
 pip install -e '.[dev]'
@@ -56,6 +57,7 @@ These are requirements, not guidelines. Any change in `core/operations/` needs a
 4. Every failure is an `OperationError(path, step, message)` naming the file.
 5. Delete goes to the trash. Permanent delete always asks first, and trash never falls back to permanent delete silently.
 6. Never pass `OVERWRITE` unless the user chose Replace. Planning-time conflict checks are advisory; handle `EXISTS` at run time as well.
+7. Nothing in an archive is trusted. A path from one is used only when `archives.safe_parts` accepts it, nothing is written through a link, and an extraction or a new archive never replaces what exists.
 
 ## Conventions
 

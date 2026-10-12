@@ -46,9 +46,10 @@ These shape the operations engine more than anything else:
 | File system | **Gio (PyGObject)** | Copy and move with progress callbacks and a `Gio.Cancellable`, trash, MIME types, default apps and file monitors in one library, all of which the "use existing system libraries" rule in #24 asks for. GVFS locations (`trash://`, `sftp://`, `smb://`, MTP) come for free later |
 | D-Bus | **Gio.DBusConnection** | Exact control over variant types (`a{sv}`, `a(ss)`), which the activities API needs and QtDBus makes awkward from Python. It is already a dependency |
 | Thumbnails | Freedesktop thumbnail cache, `QImageReader` for what Qt reads (images, and PDFs when Qt has its PDF plugin), the desktop's thumbnailers for the rest | Shares the cache with Dolphin, both ways |
+| Archives | **libarchive**, through `libarchive-c` (optional) | Reads nearly every format (zip, tar and its compressions, 7z, rar, cpio) and writes zip and tar in our own job, so progress, cancel and the path checks are ours. Python's `zipfile` and `tarfile` would need no dependency but read no 7z or rar; handing off to Ark would give up the job model |
 | Tests | pytest (core), pytest-qt (a few UI tests) | The core has no UI and can be tested against temporary folders |
 
-On Fedora: `dnf install python3-pyside6 python3-gobject`. For development, a venv created with `--system-site-packages` sees both.
+On Fedora: `dnf install python3-pyside6 python3-gobject`, and `python3-libarchive-c` for archives (without it the app runs and offers nothing for them). For development, a venv created with `--system-site-packages` sees both.
 
 **Decided: Qt Widgets.** Qt Quick would make it easier to match the shell's look and animations, at the cost of building the views by hand.
 
@@ -101,12 +102,14 @@ filehouse/
 │   │   ├── history.py           back and forward history for one window
 │   │   ├── properties.py        details of a file, size of a folder all the way down
 │   │   ├── errors.py            OperationError: which file, which step, readable message
+│   │   ├── archives.py          libarchive: reading and writing archives, which paths are safe
 │   │   └── operations/
 │   │       ├── job.py           Job, JobState, JobProgress
 │   │       ├── plan.py          expand a request into concrete steps, count bytes
 │   │       ├── copy.py          copy and move (same-device rename, cross-device copy+delete)
 │   │       ├── trash.py         trash (restore is added in phase 5)
 │   │       ├── delete.py        permanent delete
+│   │       ├── archive.py       extract and compress, each a job
 │   │       ├── conflicts.py     the questions a job asks, answers, names for "Keep both"
 │   │       ├── quick.py         new folder, new file and rename: immediate, no job
 │   │       ├── permissions.py   the permission presets: immediate, no job
@@ -148,9 +151,9 @@ filehouse/
 │       ├── details_pane.py      what is selected, beside the list
 │       ├── clipboard.py         cut, copy and paste of files as `text/uri-list`
 │       ├── settings.py          what is remembered between runs
-│       └── dialogs/             questions (conflict, error, no trash, confirm delete) and the
-│                                prompter that shows them, name (rename, new folder), details,
-│                                properties
+│       └── dialogs/             questions (conflict, error, no trash, confirm delete, name
+│                                taken, password) and the prompter that shows them, name
+│                                (rename, new folder), compress, details, properties
 └── tests/
     ├── core/                    copy, move, trash, cancel, failure, conflicts against tmp dirs
     └── integration/             island reporter against a fake bus, theme reader
@@ -230,6 +233,19 @@ This is the part that has to be right. Every user action that changes files beco
 **Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. The core starts no threads: `JobQueue` is given a `spawn` function by `qt_models/`. A job cancelled while it is still queued reports `cancelled` at once and is never started. This also keeps the app well inside the island's limit of 8 activities per sender.
 
 **Undo.** Not in v1. Trash is the safety net. A later "Undo" can cover rename, move (same device) and trash.
+
+### Archives (`core/archives.py`, `core/operations/archive.py`, #19)
+
+**Extract here**, **Extract to…** and **Compress…** are in the menu of a file. Each is a job (`JobKind.EXTRACT`, `JobKind.COMPRESS`), so it shows in the status bar, the panel and the island like a copy, with progress and cancel. `ExtractJob` and `CompressJob` are `Job`s with a `_work` of their own: an archive is one stream read or written from start to end, so they plan no steps and cannot be retried in the middle (`can_retry` is false).
+
+- **libarchive is optional.** `archives.available()` is false without the binding or the library, and then the menu has none of the three. `archives.can_extract(content_type)` says which files get the Extract entries: archives that hold files under names, not a lone `.gz` or `.xz`.
+- **Extracting makes one new item.** The archive is listed first (the totals, and what is at its top level): an archive with one top-level item extracts as that item, one with several goes into a folder named after the archive (`pack.tar.gz` → `pack`), so nothing is spread over the open folder. That one item must be new: a taken name asks (`NameTaken`: Keep both or Cancel, never Replace), at planning and again when it is made, and with nobody to ask the job fails before writing anything. Everything else is written inside it.
+- **Paths from an archive are not trusted.** `archives.safe_parts` is the one place that decides: an absolute path, or one with `..`, is refused and reported as an error naming the entry, and the rest is still extracted. Folders on the way to a file are opened one component at a time with `O_NOFOLLOW` below a descriptor of the root, and files are made with `O_EXCL | O_NOFOLLOW`, so a link that the archive itself made earlier cannot be written through, and an entry listed twice does not replace the first. A link is made as a link and never followed; a hard link may only point at a safe path inside the root; devices, pipes and sockets are left out and said so. Set-user-id bits are dropped, the umask applies, and folders get their permissions last so a read-only one can be filled.
+- **Cancel and failure.** Cancel removes the file being written and nothing else, and says "Cancelled after 5 of 12 files". A damaged archive ends the job as failed, naming the entry it stopped at; what was complete before stays. An entry that cannot be written is left out and reported, the job goes on, and it ends failed ("Extracted 10 of 12 files, 2 left out"); no space left stops it.
+- **Passwords.** A protected archive asks (`Password`), and asks again while the password is wrong, before anything is written. With nobody to ask it fails. libarchive opens zip protection (the old ZipCrypto and AES); protected 7z and rar are not supported by it, and say so without asking.
+- **Compressing** asks for a name and a kind (`ui/dialogs/compress.py`): zip, the default, or tar with gzip. It reads the sources and never changes them, stores links as links without walking into them, and writes to a temporary `.filehouse-….part` in the destination that gets its name only when the archive is complete, never onto something that is there (`NameTaken` again). Cancel removes the temporary file. A file that cannot be read is left out and named, and the job ends failed with the archive holding the rest; when nothing could be read, no archive is made.
+- **Local files only.** Both work on paths, so an archive or a destination that Gio reaches through GVFS fails with a message. That goes with #17.
+- **Not done:** a lone compressed file (`.gz`, `.xz`), choosing a password when compressing, more formats for Compress (tar.xz, tar.zst, 7z), and selecting what was made once the job is done.
 
 ### Job model and in-app panel
 
@@ -623,7 +639,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 - **Afterwards** the status bar says what was changed. One failure is named in the status bar; several open the "What went wrong" list with every one of them by name. The list and the details pane update by themselves, through the folder's monitor.
 - **The grid stays a display** (open question 3, decided). Permissions are changed through the presets only.
 
-**Left for later:** search (the field in the toolbar) and Compress. Both are on the "Later" list already, and both are features of their own.
+**Left for later:** search (the field in the toolbar). Compress was left for later here and is built since: see "Archives".
 
 **Open questions for this phase**
 
@@ -645,7 +661,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Undo for rename, move and trash: #16.
 - Remote locations through GVFS: #17.
 - Search: #18.
-- Archives, extracting and compressing, each a job so it reuses the activity mapping: #19.
+- Archives, extracting and compressing, each a job so it reuses the activity mapping: #19, built; see "Archives".
 - Video and PDF thumbnails: #20, built; see below.
 
 Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and tabs (#22). The split view (#12) and tabs are built; see below.

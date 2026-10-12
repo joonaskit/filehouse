@@ -31,6 +31,7 @@ Everyday browsing and file operations work, and operations show in the shell's i
 - Copy, cut and paste, drag and drop (a move on the same file system, a copy across), Move to…, rename, new folder and new file
 - Move to trash, with restore and empty; permanent delete asks first and never happens by itself
 - Permission presets (Private, Shared, Make executable, Read-only) and a properties dialog
+- **Archives**: Extract here, Extract to… and Compress… (zip or tar.gz), each a background operation. Reads zip, tar, 7z, rar and more through libarchive, asks for the password of a protected zip, and never writes outside the folder it extracts into or over what is there
 - Operations run in the background, with progress, cancel, retry and error details. A cancel reports how far the job got, and a move never removes a file before its copy is complete
 - Closing the last window while jobs run offers to let them finish in the background; a desktop notification tells how it went when no window is left to show it
 
@@ -45,13 +46,13 @@ Everyday browsing and file operations work, and operations show in the shell's i
 Fedora:
 
 ```sh
-sudo dnf install python3-pyside6 python3-gobject
+sudo dnf install python3-pyside6 python3-gobject python3-libarchive-c
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
-Use the distribution's PySide6 and PyGObject rather than the ones from PyPI, so that Qt and Gio share one event loop.
+Use the distribution's PySide6 and PyGObject rather than the ones from PyPI, so that Qt and Gio share one event loop. `python3-libarchive-c` is for extracting and compressing archives; without it the app runs and leaves those out of the menu.
 
 ## Run
 
