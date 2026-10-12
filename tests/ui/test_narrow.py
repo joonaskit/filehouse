@@ -48,7 +48,7 @@ def test_a_wide_window_has_the_wide_layout(window):
     assert not window.is_narrow
     assert window._details.isVisible()
     assert not window._sidebar.is_rail
-    assert not window._action_bar.isVisible()
+    assert not window._details_button.isVisible()
     assert button(window, window._forward).isVisible()
     assert not button(window, window._folder_menu).isVisible()
 
@@ -68,16 +68,12 @@ def test_below_the_width_the_layout_changes(qtbot, window, folder):
     # Back and up stay; forward and the actions make way, the folder menu gets a button
     assert button(window, window._back).isVisible()
     assert not button(window, window._forward).isVisible()
-    toolbar = window.findChild(QToolBar)
-    in_toolbar = [b for b in toolbar.findChildren(type(button(window, window._copy)))]
-    copy_buttons = [b for b in in_toolbar if b.defaultAction() is window._copy]
-    assert copy_buttons
-    # The toolbar puts its widgets away when it next lays itself out
-    qtbot.waitUntil(lambda: not any(b.isVisible() for b in copy_buttons), timeout=TIMEOUT)
     qtbot.waitUntil(lambda: button(window, window._folder_menu).isVisible(), timeout=TIMEOUT)
     assert button(window, window._search).isVisible()
-    # The actions are in the bar at the bottom, for what is selected
-    assert window._action_bar.isVisible()
+    # What is done to the selection is in its menu. The details have a button in the
+    # corner under the rail
+    assert window._details_button.isVisible()
+    assert window._details_button.defaultAction() is window._show_details
     # The list gives up the Modified column
     tree = window._view._tree
     assert tree.isColumnHidden(MODIFIED) and not tree.isColumnHidden(PERMISSIONS)
@@ -115,7 +111,7 @@ def test_going_back_to_wide_restores_everything(qtbot, window):
 
     assert not window.is_narrow
     assert window._details.isVisible() and not window._sidebar.is_rail
-    assert not window._action_bar.isVisible() and not window._sheet.is_open
+    assert not window._details_button.isVisible() and not window._sheet.is_open
     assert not window._show_details.isChecked()
     assert button(window, window._forward).isVisible()
     assert not window._view._tree.isColumnHidden(MODIFIED)
@@ -136,15 +132,18 @@ def test_switching_keeps_the_selection_and_the_place_in_the_list(qtbot, window):
         assert window._view.scroll_position() == place
 
 
-def test_the_action_bar_is_there_only_with_a_selection(qtbot, window):
+def test_the_details_button_is_there_with_or_without_a_selection(qtbot, window):
     window.resize(NARROW, 600)
-    assert not window._action_bar.isVisible()
+    assert window._details_button.isVisible()
 
     window._view.select_name("run.sh")
-    assert window._action_bar.isVisible()
+    assert window._details_button.isVisible()
 
+    # Nothing selected: the sheet tells of the folder
     window._view.selection_model().clear()
-    assert not window._action_bar.isVisible()
+    window._details_button.click()
+    assert window._sheet.is_open
+    qtbot.waitUntil(lambda: window._sheet_details.name.toolTip() == "island", timeout=TIMEOUT)
 
 
 def test_the_sheet_shows_the_details_and_follows_the_selection(qtbot, window):
@@ -155,8 +154,7 @@ def test_the_sheet_shows_the_details_and_follows_the_selection(qtbot, window):
     button(window, window._show_details).click()
 
     assert sheet.is_open and sheet.isVisible()
-    # The bar makes way for it
-    assert not window._action_bar.isVisible()
+    assert window._details_button.isChecked()
     qtbot.waitUntil(lambda: pane.name.toolTip() == "run.sh", timeout=TIMEOUT)
     assert pane.mode.text() == "rwxr-x--- · 750"
     assert not pane.open_button.isVisible()
@@ -167,7 +165,7 @@ def test_the_sheet_shows_the_details_and_follows_the_selection(qtbot, window):
     pane.close_button.click()
     assert not sheet.is_open and not window._show_details.isChecked()
     qtbot.waitUntil(lambda: not sheet.isVisible(), timeout=TIMEOUT)
-    assert window._action_bar.isVisible()
+    assert not window._details_button.isChecked()
 
 
 def test_escape_closes_the_sheet_and_does_nothing_else_without_one(qtbot, window):
@@ -198,7 +196,7 @@ def test_what_is_selected_stays_in_view_when_the_sheet_takes_the_room(qtbot, win
     qtbot.waitUntil(in_view, timeout=TIMEOUT)
 
 
-def test_the_menu_buttons_show_the_folder_menu_and_the_selection_menu(qtbot, window, monkeypatch):
+def test_the_menu_button_shows_the_folder_menu(qtbot, window, monkeypatch):
     shown = []
     monkeypatch.setattr(
         window, "_on_context_menu", lambda info, position, above=False: shown.append((info, above))
@@ -207,11 +205,24 @@ def test_the_menu_buttons_show_the_folder_menu_and_the_selection_menu(qtbot, win
     window._view.select_name("run.sh")
 
     button(window, window._folder_menu).click()
-    button(window, window._more).click()
 
-    assert shown[0] == (None, False)
-    # From the bar at the bottom, the menu opens upwards
-    assert shown[1][0].name == "run.sh" and shown[1][1] is True
+    assert shown == [(None, False)]
+
+
+def test_a_narrow_window_has_no_bar_of_actions(qtbot, window):
+    from PySide6.QtWidgets import QToolButton
+
+    window.resize(NARROW, 600)
+    window._view.select_name("run.sh")
+
+    # Copy, move, rename and trash are in the menu of the file, and on their keys
+    assert not [
+        b
+        for b in window.findChildren(QToolButton)
+        if b.defaultAction() in (window._copy, window._move_to, window._rename, window._trash)
+    ]
+    texts = [a.text() for a in window._menu_for(window._view.selected_infos()[0]).actions()]
+    assert {"Copy", "Rename…", "Move to…", "Move to trash"} <= set(texts)
 
 
 def test_menus_are_made_without_being_shown(qtbot, window):
@@ -241,33 +252,6 @@ def test_the_job_line_is_one_word_in_a_narrow_window(qtbot, window):
     assert window._job_status.title.text() == "Copying 4 items"
     window._jobs._jobs.remove(one)
     window._jobs.job_removed.emit(one)
-
-
-def test_the_lock_in_the_action_bar_opens_the_presets_upwards(qtbot, window, monkeypatch):
-    from filehouse.ui import menus
-
-    shown = []
-    make = menus.menu
-
-    def menu_that_does_not_block(parent, title=None):
-        # Patched on the menu itself: Qt calls its own exec past a patched class
-        made = make(parent, title)
-        made.exec = lambda position: shown.append((made.title(), position.y()))
-        return made
-
-    monkeypatch.setattr(menus, "menu", menu_that_does_not_block)
-    window.resize(NARROW, 600)
-    window._view.select_name("run.sh")
-    lock = button(window, window._permissions)
-    assert lock.isVisible() and lock.parent() is window._action_bar
-
-    lock.click()
-
-    assert len(shown) == 1 and shown[0][0] == "Permissions"
-    assert shown[0][1] < lock.mapToGlobal(lock.rect().topLeft()).y()
-
-
-# The parts by themselves
 
 
 def segments(*names):

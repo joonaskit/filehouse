@@ -168,10 +168,9 @@ def test_toolbar_is_made_of_groups_with_icon_buttons(qtbot, tree):
     assert buttons == [
         ["Back", "Forward", "Up"],
         [],
+        ["Details", "Icons", "Split view"],
         # The search field
         [],
-        ["Copy", "Move to…", "Rename…", "Move to trash"],
-        ["Details", "Icons", "Split view"],
         # Only shown in a narrow window
         ["Search", "Folder menu"],
         ["Settings"],
@@ -353,3 +352,54 @@ def test_settings_open_with_the_shortcut_and_follow_hidden_files(qtbot, tree, mo
     assert len(opened) == 1
     assert window._hidden.isChecked()
     assert window._proxy.show_hidden
+
+
+def edges(window, widget):
+    from PySide6.QtCore import QPoint
+
+    left = widget.mapTo(window, QPoint(0, 0)).x()
+    return left, left + widget.width()
+
+
+def test_the_toolbar_groups_end_where_the_panes_under_them_do(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1200, 600)
+    window.show()
+
+    def aligned():
+        sidebar, details = edges(window, window._sidebar), edges(window, window._details)
+        # The outer edges are the window's padding, which the tests' plain style and
+        # the app's own differ in: the edges between the panes are what line up
+        return (
+            edges(window, window._navigation_group)[1] == sidebar[1]
+            and edges(window, window._search_group)[0] == details[0]
+        )
+
+    # Panes of sizes the toolbar has room for
+    window._splitter.setSizes([220, 720, 240])
+    qtbot.waitUntil(lambda: window._sidebar.width() == 220, timeout=5000)
+    qtbot.waitUntil(aligned, timeout=5000)
+
+    # The panes are the user's to resize, and the groups follow
+    window._splitter.setSizes([260, 600, 300])
+    qtbot.waitUntil(lambda: window._sidebar.width() == 260, timeout=5000)
+    qtbot.waitUntil(aligned, timeout=5000)
+
+
+def test_the_toolbar_groups_keep_to_what_fits(qtbot, tree):
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1000, 600)
+    window.show()
+
+    # Panes so wide that the toolbar has no room to match both
+    window._splitter.setSizes([420, 200, 360])
+    qtbot.waitUntil(lambda: window._sidebar.width() > 300, timeout=5000)
+    qtbot.wait(100)
+
+    toolbar = window._toolbar
+    for action in toolbar.actions():
+        group = toolbar.widgetForAction(action)
+        if action.isVisible():
+            left, right = edges(window, group)
+            assert 0 <= left and right <= window.width()
+    assert edges(window, window._settings_group)[1] > edges(window, window._search_group)[1]
