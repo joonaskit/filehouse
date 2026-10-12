@@ -45,11 +45,15 @@ from filehouse.ui.operations_panel import OperationsPanel
 from filehouse.ui.pane import Pane
 from filehouse.ui.path_bar import PathBar
 from filehouse.ui.preview import SHEET_SHARE, PreviewWindow
+from filehouse.ui.search_field import SearchField
 from filehouse.ui.sheet import Sheet
 from filehouse.ui.sidebar import Sidebar
 from filehouse.ui.tab import Tab
 from filehouse.ui.tab_bar import TabBar
 
+# Width of the search field in a wide window, unscaled
+_SEARCH_WIDTH = 220
+_NO_LIMIT = 16777215
 _MESSAGE_MS = 8000
 _DETAILS_MS = 200
 _COPIED_MS = 2500
@@ -201,6 +205,11 @@ class MainWindow(QMainWindow):
         self._path_bar = PathBar()
         self._path_bar.location_chosen.connect(self.navigate)
         self._path_bar.text_entered.connect(self._on_path_entered)
+        self._search_field = SearchField()
+        self._search_field.textChanged.connect(self._on_search_text)
+        self._search_field.cancelled.connect(self.end_search)
+        self._search_field.left.connect(self._to_the_list)
+        self._search_field.editingFinished.connect(self._sync_search_field)
         self._create_actions()
         self._sheet_details.close_requested.connect(lambda: self._show_details.setChecked(False))
 
@@ -477,6 +486,7 @@ class MainWindow(QMainWindow):
         self._folder_menu = action(
             "Folder menu", "view-more-horizontal", [], self._show_folder_menu
         )
+        self._search = action("Search", "edit-find", [QKeySequence("Ctrl+F")], self.start_search)
 
         # One row of rounded groups: where you are, what you can do, how it is shown
         toolbar = QToolBar()
@@ -486,14 +496,20 @@ class MainWindow(QMainWindow):
         location = self._group()
         location.layout().addWidget(self._path_bar)
         location.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(location)
+        self._toolbar_location = toolbar.addWidget(location)
+        # In a wide window the field is always there; in a narrow one it takes the
+        # place of the path while it is in use, and a button opens it
+        self._search_group = self._group()
+        self._search_group.layout().addWidget(self._search_field)
+        self._search_group.setFixedWidth(style.px(_SEARCH_WIDTH))
+        self._toolbar_search = toolbar.addWidget(self._search_group)
         # In a narrow window the actions are in a bar at the bottom, and the folder
         # menu has a button
         self._toolbar_actions = toolbar.addWidget(
             self._group(self._copy, self._move_to, self._rename, self._trash)
         )
         toolbar.addWidget(self._group(self._details_mode, self._icons_mode, self._split_view))
-        self._toolbar_menu = toolbar.addWidget(self._group(self._folder_menu))
+        self._toolbar_menu = toolbar.addWidget(self._group(self._search, self._folder_menu))
         self._toolbar_menu.setVisible(False)
         toolbar.addWidget(self._group(self._settings))
         self.addToolBar(toolbar)
@@ -512,6 +528,7 @@ class MainWindow(QMainWindow):
         self._details.retheme()
         self._sheet_details.retheme()
         self._sheet_preview.retheme()
+        self._search_field.retheme()
 
     def _button_for(self, action):
         """The toolbar or action bar button of an action."""
@@ -894,7 +911,16 @@ class MainWindow(QMainWindow):
             text = "Loading…"
         else:
             text = "1 item" if count == 1 else f"{count} items"
-            if selected == 1:
+            if self._pane.search_text.strip():
+                text = f"{count} found"
+                if self._pane.searching:
+                    text += " · searching…"
+                elif self._model.search_truncated:
+                    text += " · there are more: type more of the name"
+            if selected == 1 and infos[0].folder:
+                # A result of a search: where it is
+                text += f" · {infos[0].display_name} in {infos[0].folder}"
+            elif selected == 1:
                 text += f" · {infos[0].display_name} selected"
             elif selected:
                 text += f" · {selected} selected"
@@ -902,6 +928,7 @@ class MainWindow(QMainWindow):
                 # Short, and with what the narrow list has no column to spare for
                 text = f"{infos[0].display_name} · {mode_text(infos[0].mode)}"
         self._count_label.setText(text)
+        self._sync_search_field()
         self._update_narrow_parts(selected)
         self._update_details(infos)
         self._preview_action.setEnabled(selected > 0)
@@ -1044,6 +1071,12 @@ class MainWindow(QMainWindow):
         self._button_for(self._forward).setVisible(not narrow)
         self._toolbar_actions.setVisible(not narrow)
         self._toolbar_menu.setVisible(narrow)
+        self._search_group.setMinimumWidth(0 if narrow else style.px(_SEARCH_WIDTH))
+        self._search_group.setMaximumWidth(_NO_LIMIT if narrow else style.px(_SEARCH_WIDTH))
+        self._search_group.setSizePolicy(
+            QSizePolicy.Policy.Expanding if narrow else QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Preferred,
+        )
         if narrow:
             # All the width the rail leaves is the list's
             rail = self._sidebar.maximumWidth()
@@ -1064,6 +1097,41 @@ class MainWindow(QMainWindow):
         self._sheet.set_open(open_ and self._narrow, animate=self.isVisible())
         self._close_details.setEnabled(self._sheet.is_open)
         self._update_state()
+
+    # Search
+
+    def start_search(self):
+        """Ctrl+F: to the search field, which a narrow window shows in place of the path."""
+        self._show_search_field(True)
+        self._search_field.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._search_field.selectAll()
+
+    def end_search(self):
+        """Escape in the field: the whole folder again, and back to the list."""
+        self._search_field.clear()
+        self._to_the_list()
+
+    def _to_the_list(self):
+        self._view.setFocus()
+        self._sync_search_field()
+
+    def _on_search_text(self, text):
+        self._pane.set_search(text)
+
+    def _sync_search_field(self):
+        """The field shows the search of the active pane, and in a narrow window it is
+        there only while it is in use."""
+        text = self._pane.search_text
+        if self._search_field.text() != text:
+            self._search_field.blockSignals(True)
+            self._search_field.setText(text)
+            self._search_field.blockSignals(False)
+        self._show_search_field(bool(text) or self._search_field.hasFocus())
+
+    def _show_search_field(self, in_use):
+        shown = in_use or not self._narrow
+        self._toolbar_search.setVisible(shown)
+        self._toolbar_location.setVisible(not (self._narrow and in_use))
 
     def _show_folder_menu(self):
         button = self._button_for(self._folder_menu)
@@ -1133,7 +1201,8 @@ class MainWindow(QMainWindow):
         self._recent.clear(self._pane.reload if self._in_recent() else None)
 
     def show_in_folder(self, info):
-        """Go to the folder a file of the recent files is in, with the file selected."""
+        """Go to the folder a file of the recent files, or a result of a search, is in,
+        with the file selected."""
         target = locations.entry_location(self._location, info)
         parent = target.get_parent()
         if parent is not None:
@@ -1321,6 +1390,13 @@ class MainWindow(QMainWindow):
             "Open",
             lambda: self._on_item_activated(info),
         )
+        if info.folder:
+            # A result of a search, from a folder below this one
+            menu.addAction(
+                style.icon("folder-open-symbolic", "folder-open"),
+                "Show in folder",
+                lambda: self.show_in_folder(info),
+            )
         if info.is_dir:
             folder = target
             menu.addAction(
@@ -1766,11 +1842,15 @@ class MainWindow(QMainWindow):
             except OperationError as error:
                 return f"Could not rename “{info.display_name}”: {error.message}."
             self._select_when_listed(folder, locations.basename(renamed))
+            # Nothing watches the folders below: a result that was renamed is found again
+            self._pane.search_again()
             return None
 
-        stem = info.name if info.is_dir else split_extension(info.name)[0]
+        # Not `info.name`: for a result of a search that is its path below this folder
+        name = locations.basename(target)
+        stem = name if info.is_dir else split_extension(name)[0]
         return self._ask_name(
-            "Rename", f"New name for “{info.display_name}”:", info.name, apply, len(stem)
+            "Rename", f"New name for “{info.display_name}”:", name, apply, len(stem)
         )
 
     def _ask_name(self, title, label, name, apply, select_to=None):
@@ -1891,6 +1971,8 @@ class MainWindow(QMainWindow):
     def _on_jobs_idle(self):
         for pane in self._all_panes():
             pane.model.recount()
+            # What a job moved or deleted below a folder is not told by any monitor
+            pane.search_again()
         # What a job copied or deleted shows in how full the drives are
         self._volumes.refresh_usage()
         if self._closing_when_idle:

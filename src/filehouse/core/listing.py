@@ -60,6 +60,12 @@ class FileInfo:
     used: int = 0  # when an entry of the recent files was last used, 0 elsewhere
 
     @property
+    def folder(self):
+        """For a result of a search, the folder it is in, as a path below the one that
+        was searched ("sub/deep"). Empty for an entry of the listed folder itself."""
+        return self.name.rpartition("/")[0]
+
+    @property
     def shown_date(self):
         """The date the Modified column shows: in the recent files when it was used, which
         is also their order, and elsewhere when the file changed."""

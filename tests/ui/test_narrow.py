@@ -74,7 +74,8 @@ def test_below_the_width_the_layout_changes(qtbot, window, folder):
     assert copy_buttons
     # The toolbar puts its widgets away when it next lays itself out
     qtbot.waitUntil(lambda: not any(b.isVisible() for b in copy_buttons), timeout=TIMEOUT)
-    assert button(window, window._folder_menu).isVisible()
+    qtbot.waitUntil(lambda: button(window, window._folder_menu).isVisible(), timeout=TIMEOUT)
+    assert button(window, window._search).isVisible()
     # The actions are in the bar at the bottom, for what is selected
     assert window._action_bar.isVisible()
     # The list gives up the Modified column

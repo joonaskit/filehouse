@@ -1,11 +1,14 @@
 """One folder in a window: its model, sort order, list, history and selection."""
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from filehouse.core import locations
 from filehouse.core.history import History
 from filehouse.qt_models.directory_model import MODIFIED, DirectoryModel, DirectorySortProxy
 from filehouse.ui.folder_view import FolderView
+
+# The folders below are searched this long after the last key: the list is filtered at once
+_SEARCH_DELAY_MS = 250
 
 
 class Pane(QObject):
@@ -21,6 +24,11 @@ class Pane(QObject):
         self.error = None
         self._pending_select = None
         self._sort_before_recent = None
+        self.search_text = ""
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(_SEARCH_DELAY_MS)
+        self._search_timer.timeout.connect(self._search_below)
 
         self.model = DirectoryModel(self)
         self.proxy = DirectorySortProxy(self)
@@ -28,6 +36,7 @@ class Pane(QObject):
         self.proxy.set_show_hidden(show_hidden)
         self.model.loaded.connect(self._on_loaded)
         self.model.load_failed.connect(self._on_load_failed)
+        self.model.search_changed.connect(self.changed)
         self.view = FolderView(self.proxy)
         self.view.selection_model().selectionChanged.connect(self.changed)
 
@@ -67,9 +76,16 @@ class Pane(QObject):
             self.navigate(parent, select=locations.basename(self.location))
 
     def reload(self):
+        """List the folder again. A search that is on stays on."""
+        text = self.search_text
         self.show(self.location)
+        self.set_search(text)
 
     def show(self, location, select=None):
+        # A search is of the folder it was typed in: it ends with it
+        self._search_timer.stop()
+        self.search_text = ""
+        self.proxy.set_filter_text("")
         self._sort_for(location)
         self.location = location
         self._pending_select = select
@@ -95,6 +111,37 @@ class Pane(QObject):
         if locations.same(locations.parent(location), folder):
             return locations.basename(location)
         return None
+
+    # Searching
+
+    def set_search(self, text):
+        """Show what matches `text`: of this folder at once, and of the folders below
+        it as it is found. An empty text ends the search."""
+        if text == self.search_text:
+            return
+        self.search_text = text
+        self.proxy.set_filter_text(text)
+        if text.strip():
+            self._search_timer.start()
+        else:
+            self._search_timer.stop()
+            self.model.set_search("")
+        self.changed.emit()
+
+    def search_again(self):
+        """The files below may have changed (a job ended): nothing watches them."""
+        if self.model.search_text:
+            self._search_below()
+
+    def _search_below(self):
+        self.model.set_search(self.search_text, self.proxy.show_hidden)
+
+    @property
+    def searching(self):
+        """Whether results may still come."""
+        return bool(self.search_text.strip()) and (
+            self._search_timer.isActive() or self.model.searching
+        )
 
     # State
 
@@ -129,6 +176,11 @@ class Pane(QObject):
             self.view.show_message(self.error)
         elif count or self.model.loading:
             self.view.show_items()
+        elif self.search_text.strip():
+            if self.searching:
+                self.view.show_message("Searching…")
+            else:
+                self.view.show_message(f"Nothing called “{self.search_text.strip()}” here")
         elif self.model.rowCount():
             self.view.show_message("Only hidden files here. Press Ctrl+H to show them.")
         elif self.at_trash:

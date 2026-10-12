@@ -99,6 +99,7 @@ filehouse/
 │   ├── core/
 │   │   ├── locations.py         path/URI handling, places (home, Downloads, …), display names
 │   │   ├── listing.py           batched directory enumeration, file info records
+│   │   ├── search.py            finding files by name in the folders below one
 │   │   ├── history.py           back and forward history for one window
 │   │   ├── properties.py        details of a file, size of a folder all the way down
 │   │   ├── errors.py            OperationError: which file, which step, readable message
@@ -144,6 +145,7 @@ filehouse/
 │       ├── tab_bar.py           the row of tabs, a drop target
 │       ├── sidebar.py           places and mounted volumes
 │       ├── path_bar.py          breadcrumbs, editable on click or Ctrl+L
+│       ├── search_field.py      the search field of the toolbar
 │       ├── folder_view.py       list and grid modes, delegates
 │       ├── operations_panel.py  in-app list of jobs, with cancel, retry and details
 │       ├── job_status.py        the running jobs as one line in the status bar
@@ -233,6 +235,19 @@ This is the part that has to be right. Every user action that changes files beco
 **Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. The core starts no threads: `JobQueue` is given a `spawn` function by `qt_models/`. A job cancelled while it is still queued reports `cancelled` at once and is never started. This also keeps the app well inside the island's limit of 8 activities per sender.
 
 **Undo.** Not in v1. Trash is the safety net. A later "Undo" can cover rename, move (same device) and trash.
+
+### Search (`core/search.py`, `ui/search_field.py`, #18)
+
+A field in the toolbar, reached with Ctrl+F. What is typed is a list of words; a name matches when it has every one of them, in any order and any case ("2024 rep" finds "Report 2024.pdf"). Names only, no contents, and always by walking: no index is asked.
+
+- **The folder itself is filtered at once**, in the sort proxy (`DirectorySortProxy.set_filter_text`), on every key.
+- **The folders below are searched 250 ms after the last key**, on a worker thread (`search.search_below`), breadth first so what is near comes first, in batches like a listing. A link to a folder is found and never gone into, so the walk ends; a folder that cannot be read is passed over; `/proc`, `/sys`, `/dev` and `/run` are not searched. Hidden files and folders are searched only while they are shown, and a search follows the switch. It stops at 5000 results and says there are more. The trash and the recent files are only filtered.
+- **A result is an entry of the open folder whose name is its path below it** ("docs/old/report.txt", with the file's own name as its display name). `Gio.File.get_child` resolves such a name, so `locations.child(folder, info.name)` and `entry_location` give the real file, and opening, renaming, trashing, dragging out, thumbnails, the preview and the details all work on results with the code that was there. `FileInfo.folder` is the path part, empty for an entry of the folder itself. The model adds results to its rows (`DirectoryModel.set_search`) and takes them away when the text changes.
+- **Where a result is:** while a search is on, the Permissions column is "Folder" and shows the path below the open folder, sorts by it, and the tooltip of a row is the whole path; the status bar says "report.txt in docs/old" for a selected result and "3 found", with "searching…" while more may come. The menu of a result has "Show in folder".
+- **Nothing watches the folders below**, so results are a snapshot: the search runs again when the jobs of the process have ended and after a rename, and reloading keeps it.
+- **A search belongs to the folder it was typed in.** Each pane has its own, the field shows the active pane's, going to another folder ends it, and it is not a place in the history. Escape in the field ends it and returns to the list; Down or Return go to the list with the results kept.
+- **In a narrow window** a button in the toolbar opens the field, which takes the place of the path for as long as it has the keyboard or a text.
+- **Not done:** searching contents or by type, asking an index (Baloo), results as a place in the history, and a wider Folder column (it has the width of the Permissions column, and cuts long paths).
 
 ### Archives (`core/archives.py`, `core/operations/archive.py`, #19)
 
@@ -642,7 +657,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 - **Afterwards** the status bar says what was changed. One failure is named in the status bar; several open the "What went wrong" list with every one of them by name. The list and the details pane update by themselves, through the folder's monitor.
 - **The grid stays a display** (open question 3, decided). Permissions are changed through the presets only.
 
-**Left for later:** search (the field in the toolbar). Compress was left for later here and is built since: see "Archives".
+**Left for later** here, and built since: search (see "Search") and Compress (see "Archives").
 
 **Open questions for this phase**
 
@@ -663,7 +678,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - A notification for a job that finished while the window was hidden (shell #24, point 7): #15, built; see below.
 - Undo for rename, move and trash: #16.
 - Remote locations through GVFS: #17.
-- Search: #18.
+- Search: #18, built; see "Search".
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19, built; see "Archives".
 - Video and PDF thumbnails: #20, built; see below.
 
