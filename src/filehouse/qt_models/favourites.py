@@ -76,6 +76,10 @@ class Favourites(QObject):
     def move(self, favourite, offset):
         return self._after(self._file.move(favourite.id, offset))
 
+    def move_to(self, favourite, index):
+        """Put a favourite at `index` of the list, where 0 is the first."""
+        return self._after(self._file.reorder(favourite.id, index))
+
     def _after(self, done):
         if done:
             self.reload()

@@ -2,7 +2,7 @@
 
 Each of the three is a group that folds shut when its heading is clicked."""
 
-from PySide6.QtCore import QLocale, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QLocale, QMimeData, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QFont, QFontInfo, QIcon, QPainter, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -32,6 +32,10 @@ _FavouriteRole = Qt.ItemDataRole.UserRole + 4
 # On the line that says what an empty group is for
 _HintRole = Qt.ItemDataRole.UserRole + 5
 _PLACES, _FAVOURITES, _DEVICES = "places", "favourites", "devices"
+# What a dragged favourite carries: its ID, and nothing a file manager could take for a
+# file, so that dropping it on a folder cannot move the folder
+FAVOURITE_MIME = "application/x-filehouse-favourite"
+_DROP_LINE = 2
 # A drive this full shows its bar in the warning colour
 _NEARLY_FULL = 0.9
 
@@ -168,6 +172,11 @@ class Sidebar(QListWidget):
         self.customContextMenuRequested.connect(self._on_context_menu)
         self.itemClicked.connect(self._on_clicked)
         self.setAcceptDrops(True)
+        # Only the favourites can be picked up: to put them in another order
+        self.setDragEnabled(True)
+        self.setDragDropMode(QListWidget.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._drop_line = None  # where a dragged favourite would go: a y in the viewport
         volumes.changed.connect(self._fill)
         volumes.usage_changed.connect(self._show_usage)
         if favourites is not None:
@@ -330,6 +339,8 @@ class Sidebar(QListWidget):
         if favourite is not None:
             item.setData(_FavouriteRole, favourite)
             item.setToolTip(favourite.location.get_parse_name())
+        else:
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
         if entry.location is None:
             item.setToolTip(
                 f"{entry.name}: not opened yet. Click to open it."
@@ -372,21 +383,99 @@ class Sidebar(QListWidget):
             return
         super().mouseReleaseEvent(event)
 
+    # A favourite can be dragged to another place in its group
+
+    def mimeTypes(self):
+        return [FAVOURITE_MIME]
+
+    def mimeData(self, items):
+        favourite = items[0].data(_FavouriteRole) if items else None
+        if favourite is None:
+            return None
+        data = QMimeData()
+        data.setData(FAVOURITE_MIME, favourite.id.encode())
+        return data
+
+    def _favourite_rows(self):
+        return [r for r in range(self.count()) if self.item(r).data(_FavouriteRole) is not None]
+
+    def _insertion(self, position):
+        """Where a favourite dropped at `position` would go: its index among the favourites
+        (the one it would stand before) and the y of the gap, or None outside the group."""
+        rows = self._favourite_rows()
+        item = self.itemAt(position)
+        if item is None:
+            return None
+        rect = self.visualItemRect(item)
+        if item.data(_FavouriteRole) is not None:
+            before = position.y() < rect.center().y()
+            index = rows.index(self.row(item)) + (0 if before else 1)
+            return index, rect.top() if before else rect.bottom()
+        if item.data(_GroupRole) == _FAVOURITES:
+            return 0, rect.bottom()
+        return None
+
+    def _dragged_favourite(self, mime):
+        if not mime.hasFormat(FAVOURITE_MIME) or self._favourites is None:
+            return None
+        favourite_id = bytes(mime.data(FAVOURITE_MIME)).decode()
+        return next((f for f in self._favourites.items if f.id == favourite_id), None)
+
+    def _show_drop_line(self, y):
+        if y != self._drop_line:
+            self._drop_line = y
+            self.viewport().update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._drop_line is not None:
+            painter = QPainter(self.viewport())
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self.palette().color(QPalette.ColorRole.Highlight))
+            painter.drawRoundedRect(
+                QRectF(
+                    style.px(8),
+                    self._drop_line - style.px(_DROP_LINE) / 2,
+                    self.viewport().width() - 2 * style.px(8),
+                    style.px(_DROP_LINE),
+                ),
+                style.px(_DROP_LINE) / 2,
+                style.px(_DROP_LINE) / 2,
+            )
+
+    def dragLeaveEvent(self, event):
+        self._show_drop_line(None)
+        super().dragLeaveEvent(event)
+
     # Files dropped on an entry go into it, and a folder dropped among the favourites is added
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or self._dragged_favourite(event.mimeData()):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
+        mime = event.mimeData()
+        if self._dragged_favourite(mime) is not None:
+            target = self._insertion(event.position().toPoint())
+            self._show_drop_line(target[1] if target else None)
+            if target is not None:
+                event.setDropAction(Qt.DropAction.MoveAction)
+                event.accept()
+            else:
+                event.ignore()
+        elif mime.hasUrls():
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event):
+        self._show_drop_line(None)
+        dragged = self._dragged_favourite(event.mimeData())
+        if dragged is not None:
+            self._drop_favourite(event, dragged)
+            return
         uris, _cut = clipboard.read(event.mimeData())
         if not uris:
             event.ignore()
@@ -411,6 +500,24 @@ class Sidebar(QListWidget):
             self.folders_dropped.emit(uris)
         else:
             event.ignore()
+
+    def _drop_favourite(self, event, dragged):
+        target = self._insertion(event.position().toPoint())
+        if target is None:
+            event.ignore()
+            return
+        before = target[0]
+        items = self._favourites.items
+        current = next((i for i, f in enumerate(items) if f.id == dragged.id), None)
+        if current is not None:
+            # The index asked for counts the one being moved; the list without it is shorter
+            index = before - 1 if before > current else before
+            if index != current:
+                self._favourites.move_to(dragged, index)
+        # Not a move: a list that was dragged from takes a move to mean that what was dragged
+        # is to be removed from it, and it is the favourites that are changed, not the rows
+        event.setDropAction(Qt.DropAction.CopyAction)
+        event.accept()
 
     def _on_context_menu(self, position):
         item = self.itemAt(position)

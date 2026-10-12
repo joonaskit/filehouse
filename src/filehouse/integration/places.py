@@ -157,6 +157,26 @@ class PlacesFile:
         root[:] = children
         return self._save(root)
 
+    def reorder(self, place_id, index):
+        """Put a place at `index` among the user's (0 is the first). Whether it changed."""
+        bookmark = self._find(root := self._load(), place_id)
+        if bookmark is None:
+            return False
+        users = [b for b in root.iterfind("bookmark") if _is_users(b)]
+        others = [b for b in users if b is not bookmark]
+        index = max(0, min(index, len(others)))
+        if index == users.index(bookmark):
+            return False
+        children = list(root)
+        children.remove(bookmark)
+        if index < len(others):
+            position = children.index(others[index])
+        else:
+            position = children.index(others[-1]) + 1 if others else len(children)
+        children.insert(position, bookmark)
+        root[:] = children
+        return self._save(root)
+
     # The file
 
     @staticmethod

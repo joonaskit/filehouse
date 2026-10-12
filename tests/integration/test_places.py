@@ -241,3 +241,37 @@ def test_titles_with_markup_are_kept_whole(path):
     places.add("file:///home/me/a&b", 'A & <B> "C"')
 
     assert [p.title for p in places.read()][-1] == 'A & <B> "C"'
+
+
+def test_a_place_is_put_at_an_index(path):
+    places = PlacesFile(path)
+    for name in ("A", "B", "C"):
+        places.add(f"file:///home/me/{name}", name)
+    ids = {p.title: p.id for p in places.read()}
+    assert titles(places) == ["Code", "A", "B", "C"]
+
+    assert places.reorder(ids["C"], 0)
+    assert titles(places) == ["C", "Code", "A", "B"]
+    assert places.reorder(ids["C"], 3)
+    assert titles(places) == ["Code", "A", "B", "C"]
+    assert places.reorder(ids["Code"], 2)
+    assert titles(places) == ["A", "B", "Code", "C"]
+    # Beyond the end is the end; where it already is is nothing to do
+    assert places.reorder(ids["A"], 99)
+    assert titles(places) == ["B", "Code", "C", "A"]
+    assert not places.reorder(ids["A"], 3)
+    assert not places.reorder("no/such", 0)
+
+
+def test_reordering_leaves_the_system_items_and_the_separators_where_they_were(path):
+    places = PlacesFile(path)
+    places.add("file:///home/me/a", "A")
+    [code, a] = places.read()
+
+    places.reorder(a.id, 0)
+
+    tags = [el.tag for el in ET.parse(path).getroot()]
+    assert tags == ["info", "bookmark", "bookmark", "bookmark", "bookmark", "bookmark", "separator"]
+    system = [el.findtext("title") for el in ET.parse(path).getroot().iterfind("bookmark")][:2]
+    assert system == ["Home", "Trash"]
+    assert "block_devices/nvme0n1p2" in open(path).read()

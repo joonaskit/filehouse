@@ -457,3 +457,140 @@ def test_its_menu_opens_it_in_a_tab(qtbot, window, favourites, tree, monkeypatch
     open_in_tab.trigger()
 
     assert window._tabs[1].active.location.get_path() == str(tree / "gamma")
+
+
+# Dragging a favourite to another place in the group
+
+
+def drag_favourite(window, favourite, row, upper):
+    """Drop a favourite on a row of the sidebar, on its upper or lower half."""
+    from PySide6.QtCore import QMimeData, QPointF
+    from PySide6.QtGui import QDropEvent
+
+    sidebar = window._sidebar
+    mime = QMimeData()
+    mime.setData(sidebar_module.FAVOURITE_MIME, favourite.id.encode())
+    rect = sidebar.visualItemRect(sidebar.item(row))
+    point = QPointF(rect.center().x(), rect.top() + 3 if upper else rect.bottom() - 3)
+    event = QDropEvent(
+        point,
+        Qt.DropAction.MoveAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    sidebar.dropEvent(event)
+    return event
+
+
+@pytest.fixture
+def three(favourites, tree):
+    for name in ("alpha", "beta", "gamma"):
+        favourites.add(gfile(tree / name))
+    return favourites
+
+
+def test_only_favourites_can_be_picked_up(qtbot, window, three):
+    sidebar = window._sidebar
+    for row in range(sidebar.count()):
+        item = sidebar.item(row)
+        draggable = bool(item.flags() & Qt.ItemFlag.ItemIsDragEnabled)
+        assert draggable == (item.data(sidebar_module._FavouriteRole) is not None), item.text()
+
+
+def test_a_dragged_favourite_carries_its_id_and_no_file(qtbot, window, three):
+    sidebar = window._sidebar
+    item = sidebar.item(favourite_row(window, "beta"))
+
+    data = sidebar.mimeData([item])
+
+    assert bytes(data.data(sidebar_module.FAVOURITE_MIME)).decode() == three.items[1].id
+    # Nothing that a folder or another app could take for a file
+    assert not data.hasUrls()
+    assert data.formats() == [sidebar_module.FAVOURITE_MIME]
+
+
+def test_a_favourite_dropped_before_another_goes_before_it(qtbot, window, three):
+    gamma = three.items[2]
+
+    event = drag_favourite(window, gamma, favourite_row(window, "alpha"), upper=True)
+
+    assert event.isAccepted()
+    assert titles(three) == ["gamma", "alpha", "beta"]
+
+
+def test_a_favourite_dropped_after_another_goes_after_it(qtbot, window, three):
+    alpha = three.items[0]
+
+    drag_favourite(window, alpha, favourite_row(window, "beta"), upper=False)
+
+    assert titles(three) == ["beta", "alpha", "gamma"]
+
+
+def test_dropped_where_it_already_is_changes_nothing(qtbot, window, three, places_file):
+    before = places_file.read_text()
+    beta = three.items[1]
+
+    drag_favourite(window, beta, favourite_row(window, "gamma"), upper=True)
+    drag_favourite(window, beta, favourite_row(window, "beta"), upper=True)
+    drag_favourite(window, beta, favourite_row(window, "beta"), upper=False)
+
+    assert titles(three) == ["alpha", "beta", "gamma"]
+    assert places_file.read_text() == before
+
+
+def test_dropped_on_the_heading_it_goes_first_and_at_the_end_it_goes_last(qtbot, window, three):
+    gamma = three.items[2]
+
+    drag_favourite(window, gamma, sidebar_names(window).index("▾ Favourites"), upper=False)
+    assert titles(three) == ["gamma", "alpha", "beta"]
+
+    # Alpha is second now: below beta it is last
+    drag_favourite(window, three.items[1], favourite_row(window, "beta"), upper=False)
+    assert titles(three) == ["gamma", "beta", "alpha"]
+
+
+def test_dropped_on_a_place_it_is_refused_and_nothing_moves(qtbot, window, three, tree, jobs):
+    event = drag_favourite(window, three.items[0], window._sidebar.row_of("Home"), upper=True)
+
+    assert not event.isAccepted()
+    assert titles(three) == ["alpha", "beta", "gamma"]
+    assert jobs.jobs == []
+    assert (tree / "alpha").exists()
+    # And the folder stays where it is: the drag carried no file to move
+    assert window._location.get_path() == str(tree)
+
+
+def test_a_favourite_that_is_gone_is_not_moved(qtbot, window, three):
+    from filehouse.qt_models.favourites import Favourite
+
+    stale = Favourite("0/0", "gone", gfile("/nowhere"))
+
+    drag_favourite(window, stale, favourite_row(window, "beta"), upper=True)
+
+    assert titles(three) == ["alpha", "beta", "gamma"]
+
+
+def test_the_insertion_line_shows_while_dragging_and_not_after(qtbot, window, three):
+    from PySide6.QtCore import QMimeData
+    from PySide6.QtGui import QDragLeaveEvent, QDragMoveEvent
+
+    sidebar = window._sidebar
+    mime = QMimeData()
+    mime.setData(sidebar_module.FAVOURITE_MIME, three.items[0].id.encode())
+    row = favourite_row(window, "gamma")
+    rect = sidebar.visualItemRect(sidebar.item(row))
+
+    sidebar.dragMoveEvent(
+        QDragMoveEvent(
+            rect.center(),
+            Qt.DropAction.MoveAction,
+            mime,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+    assert sidebar._drop_line is not None
+
+    sidebar.dragLeaveEvent(QDragLeaveEvent())
+    assert sidebar._drop_line is None
