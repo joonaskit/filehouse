@@ -23,6 +23,7 @@ class Answer(Enum):
     KEEP_BOTH = "keep-both"
     RETRY = "retry"
     DELETE = "delete"  # permanently
+    PASSWORD = "password"  # the reply's `text` is it
     CANCEL = "cancel"  # the whole job
 
 
@@ -30,6 +31,7 @@ class Answer(Enum):
 class Reply:
     answer: Answer
     apply_to_all: bool = False
+    text: str = ""
 
 
 class Exists(Exception):
@@ -107,6 +109,29 @@ class ConfirmDelete(Question):
     def __init__(self, sources):
         super().__init__()
         self.sources = tuple(sources)
+
+
+class NameTaken(Question):
+    """What an extraction or a new archive would be called exists at `destination`.
+    It can get another name; replacing is not offered."""
+
+    answers = (Answer.KEEP_BOTH, Answer.CANCEL)
+
+    def __init__(self, destination, destination_is_dir):
+        super().__init__()
+        self.destination = destination
+        self.destination_is_dir = destination_is_dir
+
+
+class Password(Question):
+    """The archive at `location` is protected. `wrong` when a password was tried already."""
+
+    answers = (Answer.PASSWORD, Answer.CANCEL)
+
+    def __init__(self, location, wrong=False):
+        super().__init__()
+        self.location = location
+        self.wrong = wrong
 
 
 def as_reply(value):

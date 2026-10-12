@@ -1,6 +1,14 @@
 """The questions a job can ask, as message boxes, and the answer each button gives."""
 
-from PySide6.QtWidgets import QCheckBox, QMessageBox
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QVBoxLayout,
+)
 
 from filehouse.core import locations
 from filehouse.core.operations import (
@@ -8,11 +16,55 @@ from filehouse.core.operations import (
     ConfirmDelete,
     Conflict,
     Failure,
+    NameTaken,
+    Password,
     Reply,
     TrashUnsupported,
 )
+from filehouse.integration import style
 
 _ROLES = QMessageBox.ButtonRole
+
+
+def box_for(question, parent=None):
+    """The dialog that asks `question`. Its `reply()` is the answer once it has closed."""
+    if isinstance(question, Password):
+        return PasswordBox(question, parent)
+    return QuestionBox(question, parent)
+
+
+class PasswordBox(QDialog):
+    """Asks for the password of an archive. Closing it cancels the job."""
+
+    def __init__(self, question, parent=None):
+        super().__init__(parent)
+        self.question = question
+        name = locations.basename(question.location)
+        self.setWindowTitle("Password needed")
+        self.setMinimumWidth(style.px(380))
+        text = QLabel(
+            f"That password does not open “{name}”. Try again:"
+            if question.wrong
+            else f"“{name}” is protected. Its password:"
+        )
+        text.setWordWrap(True)
+        self.edit = QLineEdit()
+        self.edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Extract")
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(text)
+        layout.addWidget(self.edit)
+        layout.addWidget(self.buttons)
+
+    def reply(self):
+        if self.result() == QDialog.DialogCode.Accepted:
+            return Reply(Answer.PASSWORD, text=self.edit.text())
+        return Reply(Answer.CANCEL)
 
 
 class QuestionBox(QMessageBox):
@@ -32,6 +84,8 @@ class QuestionBox(QMessageBox):
             self._no_trash(question)
         elif isinstance(question, ConfirmDelete):
             self._confirm_delete(question)
+        elif isinstance(question, NameTaken):
+            self._name_taken(question)
         else:
             raise TypeError(f"no dialog for {type(question).__name__}")
 
@@ -74,6 +128,15 @@ class QuestionBox(QMessageBox):
         self._add("Skip", Answer.SKIP)
         self._add_cancel()
         self._offer_all("Do this for all conflicts")
+
+    def _name_taken(self, question):
+        name = locations.basename(question.destination)
+        folder = locations.display_name(locations.parent(question.destination))
+        self.setWindowTitle("Folder exists" if question.destination_is_dir else "File exists")
+        self.setText(f"“{name}” already exists in {folder}.")
+        self.setInformativeText("It is not replaced. Keep both gives the new one another name.")
+        self._add("Keep both", Answer.KEEP_BOTH)
+        self._add_cancel()
 
     def _failure(self, question):
         error = question.error

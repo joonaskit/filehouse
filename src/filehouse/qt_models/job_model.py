@@ -12,6 +12,7 @@ from PySide6.QtCore import QLocale, QObject, QTimer, Signal
 
 from filehouse.core import locations
 from filehouse.core.operations import Job, JobKind, JobQueue, JobState
+from filehouse.core.operations.archive import CompressJob, ExtractJob
 from filehouse.qt_models import workers
 
 # At most this often per job, apart from state changes
@@ -27,6 +28,8 @@ ICONS = {
     JobKind.TRASH: "user-trash",
     JobKind.RESTORE: "edit-undo",
     JobKind.DELETE: "edit-delete",
+    JobKind.EXTRACT: "archive-extract",
+    JobKind.COMPRESS: "archive-insert",
 }
 
 
@@ -92,6 +95,20 @@ class JobModel(QObject):
             targets=targets,
             prompt=self._prompt,
             on_change=self._report,
+        )
+        self._add(job, origin)
+        return job
+
+    def extract(self, archive, destination, origin=None):
+        """Queue the extraction of an archive into a folder, and return the job."""
+        job = ExtractJob(archive, destination, prompt=self._prompt, on_change=self._report)
+        self._add(job, origin)
+        return job
+
+    def compress(self, sources, destination, name, format, origin=None):
+        """Queue the making of the archive `name` in a folder, and return the job."""
+        job = CompressJob(
+            sources, destination, name, format, prompt=self._prompt, on_change=self._report
         )
         self._add(job, origin)
         return job
@@ -194,6 +211,10 @@ def short_heading(job):
         return f"Restoring {what}"
     if job.kind is JobKind.DELETE:
         return f"Deleting {what}"
+    if job.kind is JobKind.EXTRACT:
+        return f"Extracting {what}"
+    if job.kind is JobKind.COMPRESS:
+        return f"Compressing {what}"
     return f"{'Copying' if job.kind is JobKind.COPY else 'Moving'} {what}"
 
 
@@ -205,7 +226,7 @@ def verb(job):
 def heading(job):
     """What the job is doing, whatever state it is in: "Copying 3 items to Pictures"."""
     text = short_heading(job)
-    if job.kind in (JobKind.COPY, JobKind.MOVE):
+    if job.kind in (JobKind.COPY, JobKind.MOVE, JobKind.EXTRACT):
         text += f" to {locations.display_name(job.destination)}"
     return text
 

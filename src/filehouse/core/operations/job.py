@@ -29,6 +29,8 @@ class JobKind(Enum):
     TRASH = "trash"
     RESTORE = "restore"
     DELETE = "delete"
+    EXTRACT = "extract"
+    COMPRESS = "compress"
 
 
 class JobState(Enum):
@@ -77,6 +79,8 @@ _VERBS = {
     JobKind.TRASH: "Moved",
     JobKind.RESTORE: "Restored",
     JobKind.DELETE: "Deleted",
+    JobKind.EXTRACT: "Extracted",
+    JobKind.COMPRESS: "Compressed",
 }
 
 

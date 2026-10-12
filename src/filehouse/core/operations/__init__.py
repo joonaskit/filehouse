@@ -6,6 +6,8 @@ from filehouse.core.operations.conflicts import (
     ConfirmDelete,
     Conflict,
     Failure,
+    NameTaken,
+    Password,
     Reply,
     TrashUnsupported,
 )
@@ -22,7 +24,9 @@ __all__ = [
     "JobProgress",
     "JobQueue",
     "JobState",
+    "NameTaken",
     "OperationError",
+    "Password",
     "Reply",
     "TrashUnsupported",
 ]
