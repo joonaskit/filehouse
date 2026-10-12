@@ -223,6 +223,8 @@ This is the part that has to be right. Every user action that changes files beco
 
 **Trash and delete.** Trash uses `Gio.File.trash`. On a file system without trash support (some removable drives) the job stops and asks whether to delete permanently instead; it never falls back silently. Permanent delete always shows a confirmation with the item count: the delete job itself asks (`ConfirmDelete`) before it plans or touches anything, so no caller can skip it. Delete removes files one by one and each folder only once it is empty, never recursively and never through a link.
 
+**Garbage collection is for the main thread.** Python's cyclic collector runs in whichever thread allocates enough, and collecting a Qt object's wrapper in a worker thread aborts the process (seen as intermittent crashes in the test suite, in a pooled thread, while a thumbnailer or a listing ran). `app.py` turns it off and collects every 5 seconds from a timer on the main thread; the tests do the same, collecting after each test. A new thread that makes Qt objects must still not leave them to be collected.
+
 **Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. The core starts no threads: `JobQueue` is given a `spawn` function by `qt_models/`. A job cancelled while it is still queued reports `cancelled` at once and is never started. This also keeps the app well inside the island's limit of 8 activities per sender.
 
 **Undo.** Not in v1. Trash is the safety net. A later "Undo" can cover rename, move (same device) and trash.
@@ -284,7 +286,7 @@ A file opened from the app (Enter, a double click, Open, Open with, the details 
 
 **Privacy.** Nothing is told when:
 
-- the user chose **"Don't remember opened files"** (the folder menu): a setting of the app, not of a window, remembered between runs, and the same switch in every window, as the browsers' private mode is not per window either. Thumbnails written to the shared cache are not covered yet;
+- the user chose **"Don't remember opened files"** (the folder menu): a setting of the app, not of a window, remembered between runs, and the same switch in every window (`settings.changes` tells the others), as the browsers' private mode is not per window either. Turning it on or off says so in the status bar, and while it is on a "Private" sign sits in the status bar, which ends it when clicked. Thumbnails written to the shared cache are not covered yet. **To remember:** this belongs in a settings page when there is one (#23);
 - **Plasma's own setting** says no (System Settings, Recent Files, `kactivitymanagerd-pluginsrc`): "Do not remember" (`what-to-remember=2`), this app on the excluded list, or "only for specific applications" with this app not on the list. The values were read off the KCM's own files, not tested by changing the system's setting;
 - the thing is a folder, a file that does not exist, a place off this computer, or in the trash. Only files.
 

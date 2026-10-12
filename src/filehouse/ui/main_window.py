@@ -216,6 +216,20 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self._count_label, 1)
         self._job_status = JobStatus(self._jobs)
         self._job_status.clicked.connect(self._panel.toggle)
+        # A sign that nothing is remembered, as long as it is so: a click ends it
+        self._private_button = QToolButton()
+        self._private_button.setIcon(self._private.icon())
+        self._private_button.setText("Private")
+        self._private_button.clicked.connect(self._private.trigger)
+        self._private_button.setToolTip(
+            "Opened files are not remembered. Click to remember them again."
+        )
+        self._private_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._private_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._private_button.setIconSize(QSize(style.px(14), style.px(14)))
+        self._private_button.setVisible(not settings.remember_opened())
+        settings.changes.remember_opened_changed.connect(self._on_remember_opened_changed)
+        self.statusBar().addPermanentWidget(self._private_button)
         self.statusBar().addPermanentWidget(self._job_status)
         self.statusBar().setSizeGripEnabled(False)
 
@@ -416,6 +430,7 @@ class MainWindow(QMainWindow):
         """The theme changed while the window is open: icons are drawn in its colours."""
         for item, icon, colour in self._action_icons:
             item.setIcon(style.icon(icon + "-symbolic", icon, colour=colour))
+        self._private_button.setIcon(self._private.icon())
         for index in range(self._tab_bar.count()):
             button = self._tab_bar.tabButton(index, QTabBar.ButtonPosition.RightSide)
             button.setIcon(style.icon("window-close-symbolic", "window-close"))
@@ -967,6 +982,15 @@ class MainWindow(QMainWindow):
 
     def _set_remember_opened(self, forget):
         settings.set_remember_opened(not forget)
+        self.statusBar().showMessage(
+            "Opened files are not remembered" if forget else "Opened files are remembered again",
+            _COPIED_MS,
+        )
+
+    def _on_remember_opened_changed(self, remember):
+        """Changed here or in another window: it is one setting."""
+        self._private.setChecked(not remember)
+        self._private_button.setVisible(not remember)
 
     def _open_selected(self):
         infos = self._view.selected_infos()

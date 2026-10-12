@@ -1,6 +1,7 @@
 """What the window tells the lists of recent files, and the switch that stops it."""
 
 import pytest
+from PySide6.QtCore import Qt
 from ui_helpers import TIMEOUT, gfile
 
 from filehouse.integration import desktop
@@ -120,3 +121,64 @@ def test_the_switch_keeps_the_file_out_of_the_lists(qtbot, tmp_path, jobs, opene
     window._private.trigger()
     window._on_item_activated(report)
     assert len(written) == 1
+
+
+# Feedback
+
+
+def test_turning_it_on_says_so_and_shows_a_sign(qtbot, window):
+    assert not window._private_button.isVisibleTo(window)
+
+    window._private.trigger()
+
+    assert "not remembered" in window.statusBar().currentMessage()
+    assert window._private_button.isVisibleTo(window)
+    assert window._private.isChecked()
+
+    window._private.trigger()
+
+    assert "remembered again" in window.statusBar().currentMessage()
+    assert not window._private_button.isVisibleTo(window)
+
+
+def test_the_sign_ends_it_when_clicked(qtbot, window):
+    window._private.trigger()
+
+    qtbot.mouseClick(window._private_button, Qt.MouseButton.LeftButton)
+
+    assert settings.remember_opened()
+    assert not window._private.isChecked()
+    assert not window._private_button.isVisibleTo(window)
+
+
+def test_every_window_follows_the_one_setting(qtbot, window, tmp_path, jobs):
+    other = MainWindow(gfile(tmp_path), jobs=jobs)
+    qtbot.addWidget(other)
+    other.show()
+
+    window._private.trigger()
+
+    assert other._private.isChecked()
+    assert other._private_button.isVisibleTo(other)
+
+    other._private_button.click()
+
+    assert not window._private.isChecked()
+    assert not window._private_button.isVisibleTo(window)
+
+
+def test_a_window_opened_in_private_mode_shows_the_sign(qtbot, tmp_path, jobs):
+    settings.set_remember_opened(False)
+
+    window = MainWindow(gfile(tmp_path), jobs=jobs)
+    qtbot.addWidget(window)
+    window.show()
+
+    assert window._private.isChecked()
+    assert window._private_button.isVisibleTo(window)
+
+
+def test_what_is_switched_on_shows_in_the_menus():
+    from filehouse.integration import style
+
+    assert "QMenu::item:checked" in style._stylesheet()

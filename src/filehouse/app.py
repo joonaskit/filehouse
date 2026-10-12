@@ -1,9 +1,11 @@
 """Entry point: arguments, application setup and the first windows."""
 
 import argparse
+import gc
 import signal
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
 from shiboken6 import isValid
@@ -20,6 +22,9 @@ from filehouse.ui import clipboard, settings
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.main_window import MainWindow
 
+# How often the garbage is collected, in milliseconds
+_COLLECT_MS = 5000
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog=APP_ID, description="A small file browser.")
@@ -31,6 +36,14 @@ def main(argv=None):
     app.setApplicationName(APP_ID)
     # On Wayland this is the app id the shell's dock matches against StartupWMClass
     QGuiApplication.setDesktopFileName(APP_ID)
+    # Python's garbage collector runs in whichever thread allocates enough, and a Qt
+    # object whose wrapper it collects in a worker thread (a listing, a thumbnail)
+    # aborts the process. It is for the main thread: off, and run from here
+    gc.disable()
+    collector = QTimer(app)
+    collector.setInterval(_COLLECT_MS)
+    collector.timeout.connect(gc.collect)
+    collector.start()
     # Let Ctrl+C in a terminal end the app
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 

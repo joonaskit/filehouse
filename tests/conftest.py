@@ -1,4 +1,5 @@
 import atexit
+import gc
 import os
 import shutil
 import tempfile
@@ -38,3 +39,15 @@ def fresh_thumbnail_cache(monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", path)
     yield
     shutil.rmtree(path, ignore_errors=True)
+
+
+# Python's garbage collector runs in whichever thread allocates enough, and a Qt object
+# whose wrapper it collects in a worker thread (a thumbnail task, a listing) aborts the
+# process. Collecting is for the main thread, after each test.
+gc.disable()
+
+
+@pytest.fixture(autouse=True)
+def collect_garbage_on_the_main_thread():
+    yield
+    gc.collect()
