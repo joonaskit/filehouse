@@ -26,6 +26,10 @@ CONTROL_HEIGHT = 36
 GROUP_PADDING = 4
 # Height of a button that stands alone, like Open in the details card, unscaled
 BUTTON_HEIGHT = 40
+# The space a tab leaves to its right and below, unscaled, and the close button's
+# distance from the tab's right edge
+TAB_GAP = 4
+TAB_CLOSE_INSET = 8
 
 # How much of a tile its glyph fills, and how strong the tile's own colour is
 _GLYPH_SHARE = 0.56
@@ -305,7 +309,7 @@ def _stylesheet():
 
         QTabBar {{ background: transparent; }}
         QTabBar::tab {{
-            padding: {px(6)}px {px(12)}px; margin: 0 {px(4)}px {px(4)}px 0;
+            padding: {px(6)}px {px(12)}px; margin: 0 {px(TAB_GAP)}px {px(TAB_GAP)}px 0;
             border: 1px solid transparent; background: transparent;
             border-radius: {radius_within("medium", CONTROL_HEIGHT)}px;
             color: {colors["textSecondary"]};

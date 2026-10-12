@@ -3,6 +3,7 @@
 from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import QTabBar
 
+from filehouse.integration import style
 from filehouse.ui import clipboard
 
 
@@ -18,6 +19,28 @@ class TabBar(QTabBar):
         self.setDrawBase(False)
         self.setElideMode(Qt.TextElideMode.ElideRight)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def tabLayoutChange(self):
+        self._place_close_buttons()
+
+    def paintEvent(self, event):
+        # The style moves them again when a name changes: no later than the next paint
+        self._place_close_buttons()
+        super().paintEvent(event)
+
+    def _place_close_buttons(self):
+        # The style puts the button by the tab's whole rectangle, which includes the
+        # gap that is not drawn: put it in the middle of the tab as it looks instead
+        gap = style.px(style.TAB_GAP)
+        for index in range(self.count()):
+            button = self.tabButton(index, QTabBar.ButtonPosition.RightSide)
+            if button is None:
+                continue
+            rect = self.tabRect(index)
+            button.move(
+                rect.right() + 1 - gap - style.px(style.TAB_CLOSE_INSET) - button.width(),
+                rect.top() + (rect.height() - gap - button.height()) // 2,
+            )
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():

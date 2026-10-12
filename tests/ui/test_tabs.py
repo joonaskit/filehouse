@@ -257,3 +257,19 @@ def test_tabs_can_be_reordered(qtbot, tree, window):
     assert window._tab is second
     window._tab_bar.setCurrentIndex(1)
     assert window._tab is first
+
+
+def test_the_close_button_sits_in_the_middle_of_the_drawn_tab(qtbot, tree, window):
+    open_tab(qtbot, window, tree / "two")
+    window._tab_bar.repaint()
+    bar = window._tab_bar
+    gap = style.px(style.TAB_GAP)
+
+    for index in range(bar.count()):
+        button = bar.tabButton(index, bar.ButtonPosition.RightSide)
+        tab = bar.tabRect(index)
+        # The gap is not part of the drawn tab
+        assert button.geometry().center().y() == pytest.approx(
+            tab.top() + (tab.height() - gap) / 2, abs=1
+        )
+        assert button.geometry().right() < tab.right() - gap
