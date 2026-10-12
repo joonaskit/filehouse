@@ -285,6 +285,10 @@ def _stylesheet():
             background: {window};
         }}
 
+        /* The favourites under it: flat buttons on the window, as a bookmarks bar */
+        QToolBar#favourites {{ padding: 0 {px(8)}px {px(4)}px {px(8)}px; spacing: {px(2)}px; }}
+        QToolBar#favourites QToolButton {{ padding: {px(4)}px {px(10)}px {px(4)}px {px(6)}px; }}
+
         /* The rounded groups in the toolbar, the sidebar and the details card */
         #group, #card {{
             background: {card}; border: 1px solid {card_border}; border-radius: {large}px;

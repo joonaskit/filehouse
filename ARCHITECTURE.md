@@ -115,6 +115,7 @@ filehouse/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
 │   │   ├── icons.py             icon tile per kind of file
 │   │   ├── dates.py             "Today, 10:42", "Yesterday", a weekday, a date
+│   │   ├── favourites.py        the favourite folders: one list for the process, followed when the file changes
 │   │   ├── previews.py          loads a picture for the preview window on a worker thread
 │   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
 │   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
@@ -128,11 +129,13 @@ filehouse/
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
 │   │   ├── theme_watcher.py     follows the theme file while the app runs
+│   │   ├── places.py            the places file Dolphin keeps (user-places.xbel), edited in place
 │   │   ├── recent.py            tells the desktop's lists of recent files what was opened
 │   │   ├── notifications.py     a desktop notification for a job that ends with no window visible
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
 │       ├── main_window.py
+│       ├── favourites_bar.py    the bar of favourite folders under the toolbar
 │       ├── pane.py              one folder: model, sort proxy, list, history, selection
 │       ├── preview.py           the window Space opens: a larger look at the selection
 │       ├── tab.py               one or two panes and the active one
@@ -276,6 +279,17 @@ Rules from the API spec that the client must follow:
 - **Errors from the island** are logged and never stop a job. `NotFound` means the activity is gone (dismissed or timed out): stop updating it. `LimitExceeded` means too many failed activities are still showing: dismiss the oldest failed one this app owns from the island (it stays in the app's own panel) and try once more. `RateLimited` means drop this update; the next one carries newer values anyway. A refused `Show`, and a refused final state, are tried again a few times, because nothing newer will follow them.
 - **All D-Bus calls are asynchronous** and made from the UI thread, so a slow or hung island never blocks the app.
 - **Crashes need no code.** If the app dies, the island turns its running activities into failures because the connection closed. That is why every job must hold its activity under the app's long-lived connection, not a short-lived one.
+
+### Favourites (`integration/places.py`, `qt_models/favourites.py`, `ui/favourites_bar.py`, #26)
+
+A bar of the user's favourite folders under the toolbar, as the bookmarks bar of a browser: a click goes there, a middle click opens it in a tab, and files dropped on one are moved or copied into it (a job, by the rules of any drop: `MainWindow._drop_into`). It is shown when there is at least one favourite and the window is not narrow; the window holds no bar without a `Favourites` (tests, a window made without one).
+
+- **They are Dolphin's places.** The list is `$XDG_DATA_HOME/user-places.xbel`, shared with Dolphin and the file dialogs of KDE both ways: a place added here is in Dolphin's Places panel and the other way round, and the file is watched, so a change made there shows here a moment later. The favourites are the bookmarks that are not **system items** (Home, Desktop, the trash, the network, the recent files: this app has its own for those) and not **hidden**.
+- **The file is edited as XML, not with `GBookmarkFile`.** It holds KDE's own notes on every entry (`ID`, `isSystemItem`, `IsHidden`, the group states, and `<separator>` entries that keep the place of a drive); a reader that knows only bookmarks would drop them when writing and break Dolphin's list. `PlacesFile` parses the file with `ElementTree`, changes only what it means to, and writes it back with the header, the `<!DOCTYPE xbel>`, the namespaces and the permissions it had, under another name and moved into place. A file it cannot read is left as it is. The one difference from what KDE writes is the order of the namespace declarations. A new place is made as KDE makes one (an `ID` of the time and a number one above the highest) and goes after the last bookmark, before the separators.
+- **No file, no favourites.** If `user-places.xbel` is not there nothing is written: Dolphin makes it with the system items, and a file made here would be taken for a finished one. Adding then says "Open Dolphin once".
+- **Adding:** Ctrl+D (also the menu of the folder and of a folder in the list) puts the open folder in, and takes it out when it is there; a folder dropped on the empty part of the bar is added, a file is not. Not the trash and not the recent files.
+- **A favourite's menu:** Open, Open in new tab, Rename…, Move left and right, Remove from favourites.
+- **Decided on the issue's questions:** the file is KDE's (shared with Dolphin); a bar, and the sidebar's Places do not show the list yet; the bar is shown only when there is a favourite; in the narrow layout it is hidden (the favourites can still be added and removed there with Ctrl+D). Not done: reordering by dragging (Move left and right instead), a keyboard way to jump to one, and showing the same list in the sidebar.
 
 ### Recent files (`integration/recent.py`, #14)
 

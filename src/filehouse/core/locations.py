@@ -222,6 +222,15 @@ def from_path(path):
     return Gio.File.new_for_path(path)
 
 
+def is_folder(location):
+    """Whether `location` is a folder, or a link to one."""
+    try:
+        info = location.query_info("standard::type", Gio.FileQueryInfoFlags.NONE, None)
+    except GLib.Error:
+        return False
+    return info.get_file_type() == Gio.FileType.DIRECTORY
+
+
 def from_uri(uri):
     return Gio.File.new_for_uri(uri)
 
