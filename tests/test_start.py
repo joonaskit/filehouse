@@ -80,3 +80,33 @@ def test_quit_asks_the_process_that_runs_and_starts_no_application():
 def test_quit_with_none_running_gives_the_name_back_and_starts_no_application():
     assert quit_with(True) == ["close"]
     assert quit_with(None) == ["close"]
+
+
+_SEARCH = """
+import sys
+from filehouse import app
+
+class Instance:
+    def __init__(self):
+        raise AssertionError("a search is not the one process of the session")
+
+app.Instance = Instance
+assert app.main(["--search", "needle", "--root", {root!r}, "--limit", "5"]) == 0
+print("HEAVY", *sorted(name for name in sys.modules if name.startswith({heavy!r})))
+"""
+
+
+def test_a_search_prints_and_ends_without_the_application_or_the_instance(tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "a needle.txt").write_text("")
+    done = subprocess.run(
+        [sys.executable, "-c", _SEARCH.format(root=str(tmp_path), heavy=_HEAVY)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    assert lines[-1] == "HEAVY"
+    assert '"a needle.txt"' in lines[0] and '"done": true' in lines[1]

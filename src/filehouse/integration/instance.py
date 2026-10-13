@@ -84,6 +84,11 @@ class Instance:
         # Asked to end, by `filehouse --quit`: takes nothing
         self.on_quit = lambda: None
 
+    @property
+    def connection(self):
+        """The session bus, once `claim` has found one: for what else the process serves."""
+        return self._connection
+
     def claim(self):
         """Try to be the one process. True when this is it, False when another is and
         can be handed work with `send`, None when there is no bus to tell."""

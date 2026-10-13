@@ -8,6 +8,8 @@ from ui_helpers import TIMEOUT, gfile
 from filehouse import application
 from filehouse.application import Windows
 from filehouse.core import locations
+from filehouse.integration import portal
+from filehouse.integration.portal import Request
 from filehouse.ui import main_window, settings
 from filehouse.ui.tray import Tray
 
@@ -226,4 +228,23 @@ def test_a_process_started_for_a_call_may_end_only_with_nothing_open(qtbot, made
     assert not made.nothing_to_stay_for()
 
     close_all(qtbot, made)
+    assert made.nothing_to_stay_for()
+
+
+def test_a_dialog_for_another_app_is_kept_until_it_is_closed(qtbot, made, tree):
+    answers = []
+    request = Request(
+        portal.OPEN, "org.example.App", "", "Pick", lambda *answer: answers.append(answer)
+    )
+    request.folder = gfile(tree)
+
+    dialog = made.choose(request)
+
+    assert made.dialogs == [dialog] and dialog.isVisible()
+    # A process started for it has something to stay for
+    assert not made.nothing_to_stay_for()
+
+    dialog.close()
+    qtbot.waitUntil(lambda: not made.dialogs, timeout=TIMEOUT)
+    assert answers == [(portal.CANCELLED, {})]
     assert made.nothing_to_stay_for()

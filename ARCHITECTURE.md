@@ -93,6 +93,7 @@ filehouse/
 ├── pyproject.toml               entry point: filehouse = filehouse.app:main
 ├── data/
 │   ├── filehouse.desktop     Exec=filehouse %U, StartupWMClass=filehouse
+│   ├── filehouse.portal      the backend the file chooser portal can be told to ask
 │   └── icons/
 ├── src/filehouse/
 │   ├── app.py                   argument parsing, and whether this process is to be the application
@@ -101,6 +102,8 @@ filehouse/
 │   │   ├── locations.py         path/URI handling, places (home, Downloads, …), display names
 │   │   ├── listing.py           batched directory enumeration, file info records
 │   │   ├── search.py            finding files by name in the folders below one
+│   │   ├── find.py              `filehouse --search`: that search as JSON lines for another program
+│   │   ├── filters.py           the file types a file dialog is asked to offer: globs and MIME types
 │   │   ├── history.py           back and forward history for one window
 │   │   ├── properties.py        details of a file, size of a folder all the way down
 │   │   ├── errors.py            OperationError: which file, which step, readable message
@@ -136,6 +139,8 @@ filehouse/
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
 │   │   ├── instance.py          one process per session, and org.freedesktop.FileManager1
+│   │   ├── portal.py            the file chooser portal's backend: other apps' Open and Save
+│   │   ├── parent_window.py     a dialog as the child of another app's window
 │   │   ├── theme_watcher.py     follows the theme file while the app runs
 │   │   ├── motion.py            how long things take to move, at the desktop's animation speed
 │   │   ├── autostart.py         the entry that starts the app with the session
@@ -146,6 +151,8 @@ filehouse/
 │   └── ui/
 │       ├── main_window.py
 │       ├── pane.py              one folder: model, sort proxy, list, history, selection
+│       ├── chooser.py           the dialog other apps open and save with
+│       ├── groups.py            the rounded groups of a toolbar
 │       ├── preview.py           the window Space opens: a larger look at the selection
 │       ├── tab.py               one or two panes and the active one
 │       ├── tab_bar.py           the row of tabs, a drop target
@@ -202,6 +209,27 @@ The app is meant to stand where Dolphin stood, so the desktop has to be able to 
   - **The app's icon** is the lighthouse of `icons/filehouse-d.svg`. `install.sh` puts it in the user's icons as `filehouse` (hicolor, scalable), the name the launcher entry asks for, and `style.app_icon()` gives it to the windows and the tray, or the icon theme's `system-file-manager` where it is not installed. `icons/filehouse-f.svg` is the design that was not chosen.
   - **In `application.py`** all of this is the class `Windows`: the windows and dialogs that are open, opening them, and whether the process goes on. `run()` makes the application and the services around it (the island, the notifications, the theme) and hands the rest to it, which is what lets `tests/ui/test_application.py` hold it to the above without a process of its own.
 - No Qt in the module, so it can be asked before there is an application, and every call the app serves is answered before its handler runs: the caller waits for the reply, not for a window. The two calls a start makes itself (`RequestName`, and `Open` from a later start) are blocking, with timeouts: they decide whether there is to be an application at all.
+
+### The Open and Save dialog of other apps (`integration/portal.py`, `ui/chooser.py`, #39)
+
+Apps that use the desktop portal (every Flatpak, and Qt and GTK apps set up for it) ask `org.freedesktop.portal.FileChooser` for a file, and the portal hands the question to a backend. This app is one, so the dialog those apps open and save with can be this app's list, sidebar, favourites, search and preview.
+
+- **The backend** (`integration/portal.py`, Gio and no Qt) serves `org.freedesktop.impl.portal.FileChooser` at `/org/freedesktop/portal/desktop` and owns `org.freedesktop.impl.portal.desktop.filehouse`. It is the one process of the session that does (`application.py` starts it only for `instance.primary`), and the name is asked for asynchronously after the windows are set up: a start is not held up for it. `OpenFile`, `SaveFile` and `SaveFiles` each become a `Request` (what was asked, read from the options one by one, so that one that is not as it should be is left out and not the call), given to `on_request`, and answered through `respond`, `cancel` or `fail`. Only the first answer counts.
+- **A call is always answered.** An app's Open waits for it, so a call that nothing takes, a dialog that fails to open, and what is still open when the process ends are all answered as "ended" (2), and the answer is flushed to the bus before the process goes. The portal's `Request.Close` (the app went away) closes the dialog.
+- **Only files of this computer are an answer** (`file://`), as the portal requires. What is selected in the recent files is the file it stands for; something that has no path (a remote place) is not chosen, and the dialog says so.
+- **The dialog** (`ui/chooser.py`, `Chooser`) is a window of its own kind, not a mode of the browser window: a `Pane`, the `Sidebar`, the `PathBar`, the `SearchField` and the `PreviewWindow` (Space), put together again with a name field for saving, the app's filters and its own questions ("choices": a few options, or a yes or no) under the list. That is the answer to how much it shares with the main window (the issue's second question): the parts, and none of `MainWindow`, whose actions are all about doing things to files. The only thing the dialog makes is a new folder. The toolbar's rounded groups moved to `ui/groups.py` for both.
+  - **Opening:** a double click or the button on a file chooses it; on a folder both go into it. One file at a time unless the app asked for several (`FolderView.set_for_choosing`), and of a selection of several only the files are the answer.
+  - **Folders** (`directory`, and `SaveFiles`, which asks for the folder to save several named files in): only folders are listed, the button chooses the selected one, or the one that is open when none is, and a line beside the buttons says which.
+  - **Saving:** the name is offered with the part before the extension selected. A file clicked in the list gives its name. A name that is a folder is gone into; a path ("sub/a.txt", "/tmp/a.txt", "~/a.txt") is that file, when its folder is there. **Saving over a file asks first** (the third question), with Cancel as the default; for `SaveFiles` the question offers "Keep both" too, which gives the taken names the first free one (`conflicts.free_name`), as the portal allows. The dialog writes nothing: the app does.
+  - **Filters** (`core/filters.py`): a name and patterns, each a glob or a MIME type, and a file passes when any fits. Globs are matched whatever the case ("*.jpg" is asked for by apps that mean PHOTO.JPG too), a MIME type also for its subtypes (`Gio.content_type_is_a`) and as a family ("image/*"). Folders always show (`DirectorySortProxy.set_wanted`). The filter in use is told to the app with the answer.
+  - **Return** is the list's and the name field's: the buttons are not the dialog's default, or Return on a folder would both go into it and choose it.
+  - **Its own:** hidden files are shown for this dialog only, its size is remembered apart from the window's (`chooser/size`), and it starts where the app says, or where a file was last chosen (`chooser/folder`), or at home. The sidebar has no trash, and the recent files only for opening files. How a folder is shown (details or icons, the sort order) is shared with the browser, as it goes with the folder (#43).
+- **Over the window that asked** (`integration/parent_window.py`). The portal names that window: `x11:<id>` or `wayland:<handle>`. On X11 Qt makes the dialog its child. On Wayland the handle is one of the xdg-foreign protocol, which Qt does not speak; KDE's KWindowSystem does, and has no Python binding (Fedora's `python3-kf6-*` leave it out), so its `KWindowSystem::setMainWindow(QWindow *, const QString &)` is called through `ctypes`, with a QString made by hand that points at text the module keeps. That depends on the layout of a QString in Qt 6 (checked: the call is made only on Qt 6) and on the library's symbol; without the library, or anywhere else, the dialog is a window of its own. When the app asked for a modal dialog and it could be attached, it is window-modal. Checked in a headless KWin with a GTK window's exported handle: the call goes through and nothing crashes, also for a handle that means nothing. On a real session (Plasma 6, Wayland) the dialog stays above the window that asked and gets the focus.
+- **Whether the portal asks this backend is the user's choice** (the first question: worth it before the app is packaged, with a switch). `install.sh` always installs `data/filehouse.portal` (in the user's `xdg-desktop-portal/portals`, which the portal reads: seen with 1.22) and a service file for the bus name, which runs `filehouse --service`; neither changes anything by being there, since the portal file names no desktop to be used in. `./install.sh --portal` writes the user's `xdg-desktop-portal/<desktop>-portals.conf`: the desktop's own configuration with `org.freedesktop.impl.portal.FileChooser=filehouse;<desktop>` added, because the first configuration file found is the whole of it. `--no-portal` removes it. A configuration file the script did not write is left alone, and the line to add is printed. The portal reads both when it starts, so the script restarts it.
+- **The portal asks for its backend when it starts**, not at the first dialog, and waits 25 seconds for one that does not come; after that it offers no file chooser at all until it is started again. Found on the first real install: a Filehouse from before the install was still running (its windows keep it past `--quit`), it held the app's name without being the backend, and the `filehouse --service` the bus started for the portal saw the name taken and ended. And with nothing of the app running the bus did not start it either, in the same second in which it was reading the service files the script had just written again. So `install.sh --portal` restarts the portal only once the backend's name is owned: it starts `filehouse --service` itself when nothing of the app runs, and with an old process in the way it says to close the windows and run it again. It also means that with the portal on, the app is started in the background at login.
+- **What a broken backend costs:** the portal does not fall back to the next backend when the one it chose fails to answer, so a `filehouse` that cannot start means no Open dialog in the apps that use the portal, until `--no-portal`. A process started by the bus for a dialog takes about as long as any first start; with the app staying in the background (the default) the dialog is a call to a running process.
+- **Checked** against the real `xdg-desktop-portal` (1.22) on a private bus with a temporary home: it finds the portal file in the user's data folder, picks the backend from the configuration, and `OpenFile`, `SaveFile` and `SaveFiles` asked of `org.freedesktop.portal.FileChooser` come back with what the dialog chose. And on a real session: VS Code, Firefox and a Flatpak app open and save with it.
+- **Not done:** the dialog does not tell the recent files what was opened (the app that opens it does or does not), there is no narrow layout, and an app's `current_filter` is used but a filter is never guessed from the name being saved.
 
 ### Window title
 
@@ -302,6 +330,14 @@ A field in the toolbar, reached with Ctrl+F. What is typed is a list of words; a
 - **Nothing watches the folders below**, so results are a snapshot: the search runs again when the jobs of the process have ended and after a rename, and reloading keeps it.
 - **A search belongs to the folder it was typed in.** Each pane has its own, the field shows the active pane's, going to another folder ends it, and it is not a place in the history. Escape in the field ends it and returns to the list; Down or Return go to the list with the results kept.
 - **In a narrow window** a button in the toolbar opens the field, which takes the place of the path for as long as it has the keyboard or a text.
+- **For other programs: `filehouse --search TEXT`** (`core/find.py`, called from `app.py`). The shell's launcher has a file search and asks this app, so the walk and the rules of a match are in one place. It is not the application: it is answered before the claim to be the one process of the session, imports no Qt and no window (`tests/test_start.py` holds it to that), runs beside a running app and ends when it has answered, in about 0.4 s for a few results near the top of a home. `--root FOLDER` says where to look (home without it; a path, a `~` or a URI), `--limit N` when to stop (50 without it), `--hidden` includes hidden files and folders. What is in the root itself is a result too (`search_below(include_root=True)`): the app's list filters those, and a caller without a list has nothing that would. Output is one JSON object to a line, written and flushed as results are found, nearest first:
+
+  ```
+  {"path": "/home/me/docs/Report 2024.pdf", "name": "Report 2024.pdf", "folder": "/home/me/docs", "dir": false, "type": "application/pdf"}
+  {"done": true, "more": false}
+  ```
+
+  `path` and `folder` are local paths, or URIs where there is none; `type` is the content type Gio guessed from the name. The last line comes when the walk has ended, and `more` says it stopped at the limit. A root that is no folder is one line, `{"error": "..."}`, and exit status 1. The one who asked may end the process at any time (the launcher does, on the next key), and a closed pipe is not an error. **The lines are an interface**: the shell reads them (`services/FileSearchService.qml` there), so a field is added and never renamed or taken away.
 - **Not done:** searching contents or by type, asking an index (Baloo), results as a place in the history, and a wider Folder column (it has the width of the Permissions column, and cuts long paths).
 
 ### Duplicate and Create link (#41)
@@ -818,6 +854,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Search: #18, built; see "Search".
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19, built; see "Archives".
 - Video and PDF thumbnails: #20, built; see below.
+- The file chooser portal, to be the Open and Save dialog of other apps: #39, built; see "The Open and Save dialog of other apps".
 - Duplicate and Create link (#41), selecting by pattern (#42), renaming several at once (#40), the view of each folder (#43) and the tabs of last time (#49): built; each has a section above.
 
 Also open, though never on this list: packaging as a Flatpak (#7), localization (#10) and tabs (#22). The split view (#12) and tabs are built; see below.

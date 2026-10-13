@@ -7,8 +7,6 @@ from PySide6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeyEvent, QKey
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
-    QFrame,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -32,7 +30,7 @@ from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE
 from filehouse.qt_models.job_model import JobModel
 from filehouse.qt_models.permissions import PermissionChange
 from filehouse.qt_models.volumes import Volumes
-from filehouse.ui import clipboard, menus, settings
+from filehouse.ui import clipboard, groups, menus, settings
 from filehouse.ui.details_pane import DetailsPane
 from filehouse.ui.dialogs.compress import CompressDialog
 from filehouse.ui.dialogs.details import ErrorDetails
@@ -614,23 +612,8 @@ class MainWindow(QMainWindow):
 
     def _group(self, *actions):
         """A rounded group for the toolbar, holding an icon button per action."""
-        group = QFrame()
-        group.setObjectName("group")
-        layout = QHBoxLayout(group)
-        padding = style.px(style.dense("group_padding"))
-        layout.setContentsMargins(padding, padding, padding, padding)
-        layout.setSpacing(style.px(2))
-        for item in actions:
-            button = QToolButton()
-            button.setDefaultAction(item)
-            self._button_actions.append(item)
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            button.setIconSize(QSize(style.px(18), style.px(18)))
-            side = style.px(style.dense("control_height"))
-            button.setFixedSize(side, side)
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            layout.addWidget(button)
-        return group
+        self._button_actions.extend(actions)
+        return groups.group(*actions)
 
     def eventFilter(self, watched, event):
         if watched in (self._sidebar, self._details) and event.type() in (

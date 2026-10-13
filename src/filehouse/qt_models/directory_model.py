@@ -656,6 +656,7 @@ class DirectorySortProxy(QSortFilterProxyModel):
         super().__init__(parent)
         self._show_hidden = False
         self._filter = []
+        self._wanted = None
 
     @property
     def show_hidden(self):
@@ -670,6 +671,13 @@ class DirectorySortProxy(QSortFilterProxyModel):
         self._filter = wanted
         self.endFilterChange()
 
+    def set_wanted(self, wanted):
+        """Show only the files `wanted(info)` is true for, as a file dialog does with
+        the types an app asked for. Folders are shown all the same. None shows all."""
+        self.beginFilterChange()
+        self._wanted = wanted
+        self.endFilterChange()
+
     def set_show_hidden(self, show):
         if show == self._show_hidden:
             return
@@ -682,6 +690,8 @@ class DirectorySortProxy(QSortFilterProxyModel):
     def filterAcceptsRow(self, source_row, source_parent):
         info = self.sourceModel().info(source_row)
         if info.is_hidden and not self._show_hidden:
+            return False
+        if self._wanted is not None and not info.is_dir and not self._wanted(info):
             return False
         return not self._filter or search.matches(self._filter, info.display_name)
 

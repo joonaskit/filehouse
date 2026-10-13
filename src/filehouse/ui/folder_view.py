@@ -254,6 +254,16 @@ class FolderView(QWidget):
         # and has a context menu too
         self.setAcceptDrops(True)
 
+    def set_for_choosing(self, several):
+        """As the list of a file dialog: nothing can be dropped on it, and one entry is
+        selected at a time unless `several` may be chosen."""
+        mode = QAbstractItemView.SelectionMode
+        for view in (self._tree, self._grid):
+            view.setAcceptDrops(False)
+            view.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+            view.setSelectionMode(mode.ExtendedSelection if several else mode.SingleSelection)
+        self.setAcceptDrops(False)
+
     def set_split(self, split, active):
         """Beside another list: framed, and in the accent colour while it is the active one."""
         self.setProperty("split", split)
