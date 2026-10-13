@@ -102,6 +102,7 @@ filehouse/
 │   │   ├── locations.py         path/URI handling, places (home, Downloads, …), display names
 │   │   ├── listing.py           batched directory enumeration, file info records
 │   │   ├── search.py            finding files by name in the folders below one
+│   │   ├── find.py              `filehouse --search`: that search as JSON lines for another program
 │   │   ├── filters.py           the file types a file dialog is asked to offer: globs and MIME types
 │   │   ├── history.py           back and forward history for one window
 │   │   ├── properties.py        details of a file, size of a folder all the way down
@@ -329,6 +330,14 @@ A field in the toolbar, reached with Ctrl+F. What is typed is a list of words; a
 - **Nothing watches the folders below**, so results are a snapshot: the search runs again when the jobs of the process have ended and after a rename, and reloading keeps it.
 - **A search belongs to the folder it was typed in.** Each pane has its own, the field shows the active pane's, going to another folder ends it, and it is not a place in the history. Escape in the field ends it and returns to the list; Down or Return go to the list with the results kept.
 - **In a narrow window** a button in the toolbar opens the field, which takes the place of the path for as long as it has the keyboard or a text.
+- **For other programs: `filehouse --search TEXT`** (`core/find.py`, called from `app.py`). The shell's launcher has a file search and asks this app, so the walk and the rules of a match are in one place. It is not the application: it is answered before the claim to be the one process of the session, imports no Qt and no window (`tests/test_start.py` holds it to that), runs beside a running app and ends when it has answered, in about 0.4 s for a few results near the top of a home. `--root FOLDER` says where to look (home without it; a path, a `~` or a URI), `--limit N` when to stop (50 without it), `--hidden` includes hidden files and folders. What is in the root itself is a result too (`search_below(include_root=True)`): the app's list filters those, and a caller without a list has nothing that would. Output is one JSON object to a line, written and flushed as results are found, nearest first:
+
+  ```
+  {"path": "/home/me/docs/Report 2024.pdf", "name": "Report 2024.pdf", "folder": "/home/me/docs", "dir": false, "type": "application/pdf"}
+  {"done": true, "more": false}
+  ```
+
+  `path` and `folder` are local paths, or URIs where there is none; `type` is the content type Gio guessed from the name. The last line comes when the walk has ended, and `more` says it stopped at the limit. A root that is no folder is one line, `{"error": "..."}`, and exit status 1. The one who asked may end the process at any time (the launcher does, on the next key), and a closed pipe is not an error. **The lines are an interface**: the shell reads them (`services/FileSearchService.qml` there), so a field is added and never renamed or taken away.
 - **Not done:** searching contents or by type, asking an index (Baloo), results as a place in the history, and a wider Folder column (it has the width of the Permissions column, and cuts long paths).
 
 ### Duplicate and Create link (#41)

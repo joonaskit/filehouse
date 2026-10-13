@@ -70,6 +70,15 @@ filehouse ~/Downloads     # opens a folder
 filehouse ~/notes.txt     # opens the file's folder with the file selected
 ```
 
+Other programs can ask it to find files by name, without a window (the launcher of Quickshell Island does):
+
+```sh
+filehouse --search "report 2024"                      # below home, 50 results at most
+filehouse --search report --root ~/Documents --limit 10 --hidden
+```
+
+It prints one JSON object to a line as results are found (`path`, `name`, `folder`, `dir`, `type`), then `{"done": true, "more": false}`, where `more` says it stopped at the limit. The format is in [ARCHITECTURE.md](ARCHITECTURE.md), under Search.
+
 There is one process per session: a second `filehouse` hands its folder to the one that runs, which opens a window for it. Other apps' "Show in folder" comes to it too (`org.freedesktop.FileManager1`). To open folders with it by default:
 
 ```sh

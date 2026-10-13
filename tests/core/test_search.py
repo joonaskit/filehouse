@@ -49,6 +49,19 @@ def test_it_finds_what_is_below_and_not_what_is_in_the_folder_itself(tmp_path):
     assert not truncated
 
 
+def test_the_folder_itself_is_searched_too_when_asked(tmp_path):
+    root = make_tree(tmp_path / "root", TREE)
+
+    names, _ = find(root, "report", include_root=True)
+
+    assert names == [
+        "docs/Report 2024.pdf",
+        "docs/old/report-draft.txt",
+        "pictures/reports",
+        "report.txt",
+    ]
+
+
 def test_a_result_is_an_entry_of_the_folder_that_was_searched(tmp_path):
     root = make_tree(tmp_path / "root", TREE)
     found = []

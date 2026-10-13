@@ -62,10 +62,13 @@ def search_below(
     show_hidden=False,
     limit=MAX_RESULTS,
     batch_seconds=_BATCH_SECONDS,
+    include_root=False,
 ):
     """Find what matches `text` in the folders below `root`, calling
     `on_batch(list[FileInfo])` as results arrive. The entries of `root` itself are not
-    results. Hidden files and folders are searched only with `show_hidden`.
+    results, unless `include_root` asks for them: a list of the folder filters those
+    itself, and a caller without one has nothing that would. Hidden files and folders
+    are searched only with `show_hidden`.
 
     Blocks, so call it from a worker thread. Links are never followed, so it ends. A
     folder that can't be read is passed over. Returns whether it stopped at `limit`,
@@ -98,7 +101,7 @@ def search_below(
                 # A link to a folder is listed, and not gone into: it may lead back here
                 if is_folder and not raw.get_is_symlink() and not _not_searched(folder, name):
                     folders.append((folder.get_child(name), f"{path}/"))
-                if prefix and matches(wanted, raw.get_display_name()):
+                if (prefix or include_root) and matches(wanted, raw.get_display_name()):
                     batch.append(replace(info_from_gio(raw), name=path))
                     found += 1
                     if found >= limit:

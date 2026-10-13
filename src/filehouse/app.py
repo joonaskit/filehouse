@@ -23,7 +23,33 @@ def main(argv=None):
         action="store_true",
         help="end the process that stays in the background, once it has nothing open",
     )
+    # For other programs (the shell's launcher): find by name, print, end. See core/find.py
+    parser.add_argument(
+        "--search",
+        metavar="TEXT",
+        help="print the files and folders whose names have these words, as JSON lines, and exit",
+    )
+    parser.add_argument(
+        "--root", metavar="FOLDER", help="with --search: where to look (default: home)"
+    )
+    parser.add_argument(
+        "--limit", type=int, metavar="N", help="with --search: stop after N results (default: 50)"
+    )
+    parser.add_argument(
+        "--hidden", action="store_true", help="with --search: hidden files and folders too"
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+
+    if args.search is not None:
+        # Not the application, and not the one process of the session: it only reads
+        from filehouse.core import find
+
+        return find.run(
+            args.search,
+            root=args.root,
+            limit=find.DEFAULT_LIMIT if args.limit is None else args.limit,
+            show_hidden=args.hidden,
+        )
 
     # One process for the session. When one runs already it opens the windows, and this
     # one is done: before anything of the application is set up
