@@ -24,17 +24,39 @@ from filehouse.core.listing import (
     ATTRIBUTES,
     ListingError,
     count_children,
+    folder_text,
     info_from_gio,
     list_directory,
     mode_text,
     natural_key,
+    type_description,
 )
 from filehouse.integration import style
-from filehouse.qt_models import dates, thumbnails
+from filehouse.qt_models import columns, dates, thumbnails
 from filehouse.qt_models.icons import icon_for_content_type
 
-NAME, PERMISSIONS, MODIFIED, SIZE = range(4)
-_HEADERS = ["Name", "Permissions", "Modified", "Size"]
+# One column for each of `columns.KEYS`, in that order
+NAME, PERMISSIONS, MODIFIED, SIZE, TYPE, CREATED, ACCESSED, OWNER, GROUP, ORIGINAL, DELETED = range(
+    len(columns.KEYS)
+)
+_HEADERS = [columns.TITLES[key] for key in columns.KEYS]
+
+# Every column's text starts at its left edge, so the columns read as one grid
+_ALIGNMENT = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+
+# What a column shows of an entry: a date as seconds since the epoch, or a text
+_DATES = {
+    MODIFIED: lambda info: info.shown_date,
+    CREATED: lambda info: info.created,
+    ACCESSED: lambda info: info.accessed,
+    DELETED: lambda info: info.deleted,
+}
+_TEXTS = {
+    TYPE: lambda info: type_description(info.content_type),
+    OWNER: lambda info: info.owner,
+    GROUP: lambda info: info.group,
+    ORIGINAL: lambda info: folder_text(info.original_path) if info.original_path else "",
+}
 
 # Folders that changed are counted again together, this long after the first of them
 _COUNT_DELAY_MS = 300
@@ -561,8 +583,8 @@ class DirectoryModel(QAbstractTableModel):
                 # Results come from many folders: where each is matters more
                 return "Folder"
             return _HEADERS[section]
-        if role == Qt.ItemDataRole.TextAlignmentRole and section == SIZE:
-            return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            return _ALIGNMENT
         return None
 
     # Dragging out: the rows as `text/uri-list`
@@ -603,8 +625,10 @@ class DirectoryModel(QAbstractTableModel):
                 return info.display_name
             if column == PERMISSIONS:
                 return info.folder if self._search_text else mode_text(info.mode)
-            if column == MODIFIED:
-                return dates.friendly(info.shown_date, self._locale)
+            if column in _TEXTS:
+                return _TEXTS[column](info)
+            if column in _DATES:
+                return dates.friendly(_DATES[column](info), self._locale)
             if not info.is_dir:
                 return self._locale.formattedDataSize(info.size)
             count = self.item_count(info.name)
@@ -614,8 +638,8 @@ class DirectoryModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DecorationRole and column == NAME:
             thumbnail = self._thumbnail(info) if self._thumbnails_on else None
             return thumbnail or icon_for_content_type(info.content_type)
-        if role == Qt.ItemDataRole.TextAlignmentRole and column == SIZE:
-            return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            return _ALIGNMENT
         if role == Qt.ItemDataRole.ForegroundRole and column != NAME:
             return style.color("textSecondary")
         if role == Qt.ItemDataRole.FontRole and column == PERMISSIONS and not self._search_text:
@@ -677,8 +701,14 @@ class DirectorySortProxy(QSortFilterProxyModel):
                 size_a, size_b = a.size, b.size
             if size_a != size_b:
                 return size_a < size_b
-        if column == MODIFIED and a.shown_date != b.shown_date:
-            return a.shown_date < b.shown_date
+        if column in _DATES:
+            when_a, when_b = _DATES[column](a), _DATES[column](b)
+            if when_a != when_b:
+                return when_a < when_b
+        if column in _TEXTS:
+            text_a, text_b = natural_key(_TEXTS[column](a)), natural_key(_TEXTS[column](b))
+            if text_a != text_b:
+                return text_a < text_b
         if column == PERMISSIONS and model.search_text:
             if a.folder != b.folder:
                 return natural_key(a.folder) < natural_key(b.folder)

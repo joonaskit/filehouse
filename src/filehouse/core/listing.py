@@ -1,8 +1,10 @@
 """Directory enumeration and the file records the views show."""
 
+import os
 import re
 import stat
 from dataclasses import dataclass
+from functools import lru_cache
 
 from gi.repository import Gio, GLib
 
@@ -21,9 +23,14 @@ ATTRIBUTES = ",".join(
         "standard::size",
         "standard::fast-content-type",
         "time::modified",
+        "time::created",
+        "time::access",
         "unix::mode",
-        # Only set for what is in the trash
+        "owner::user",
+        "owner::group",
+        # Only set for what is in the trash: where it was, and when it was deleted
         "trash::orig-path",
+        "trash::deletion-date",
         # Only set for what is in the list of recent files: the file it stands for, and
         # when it was last used
         "standard::target-uri",
@@ -58,6 +65,11 @@ class FileInfo:
     mode: int | None = None  # permission bits, None where there are none
     target_uri: str | None = None  # the file an entry of the recent files stands for
     used: int = 0  # when an entry of the recent files was last used, 0 elsewhere
+    created: int = 0  # seconds since the epoch, 0 where the file system has no birth time
+    accessed: int = 0
+    owner: str = ""
+    group: str = ""
+    deleted: int = 0  # when an entry of the trash was put there, 0 elsewhere
 
     @property
     def folder(self):
@@ -119,7 +131,36 @@ def info_from_gio(info):
         ),
         target_uri=info.get_attribute_string("standard::target-uri"),
         used=max(0, info.get_attribute_int64("recent::modified")),
+        created=info.get_attribute_uint64("time::created"),
+        accessed=info.get_attribute_uint64("time::access"),
+        owner=info.get_attribute_string("owner::user") or "",
+        group=info.get_attribute_string("owner::group") or "",
+        deleted=_deletion_time(info),
     )
+
+
+def _deletion_time(info):
+    date = info.get_deletion_date()
+    return max(0, date.to_unix()) if date is not None else 0
+
+
+@lru_cache(maxsize=None)
+def type_description(content_type):
+    """What a content type is called for people: "PDF document". Empty when it has no name."""
+    text = Gio.content_type_get_description(content_type) or ""
+    return text[:1].upper() + text[1:]
+
+
+def folder_text(path):
+    """The folder a path is in, as people write it: the home folder as "~". For where
+    something in the trash was."""
+    folder = os.path.dirname(path)
+    home = os.path.expanduser("~")
+    if folder == home:
+        return "~"
+    if folder.startswith(home + os.sep):
+        return "~" + folder[len(home) :]
+    return folder
 
 
 def mode_text(mode):
