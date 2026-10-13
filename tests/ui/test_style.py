@@ -2,7 +2,8 @@
 
 import pytest
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtWidgets import QStyle
 
 from filehouse.integration import style, theme
 from filehouse.qt_models import icons
@@ -107,6 +108,61 @@ def test_a_disabled_icon_is_drawn_in_the_faint_text_colour(qtbot):
 
     assert same_colour(disabled, faint)
     assert not same_colour(disabled, style.palette_color("red"))
+
+
+def sides(icon):
+    return sorted({size.width() for size in icon.availableSizes()})
+
+
+def test_an_icon_for_a_button_is_made_in_the_small_sizes_only(qtbot, monkeypatch):
+    # Whatever the icon theme of the machine has: a source that draws at any size
+    source = QPixmap(256, 256)
+    source.fill(QColor("white"))
+    monkeypatch.setattr(style, "_theme_icon", lambda names: QIcon(source))
+
+    made = style.icon("anything")
+
+    assert sides(made) == [16, 20, 24]
+    # Asked for a size between two, it is the larger one made smaller
+    assert same_colour(pixel(made, 9, 9, size=18), style.color("textPrimary"))
+    assert sides(style.tile("anything", colour="green")) == list(style._ICON_SIZES)
+
+
+def test_the_sizes_of_a_button_icon_follow_the_scale(qtbot, qapp, monkeypatch):
+    source = QPixmap(256, 256)
+    source.fill(QColor("white"))
+    monkeypatch.setattr(style, "_theme_icon", lambda names: QIcon(source))
+    try:
+        style.apply(qapp, theme.merge(theme.DEFAULTS, {"scale": {"ui": 1.5}}))
+        # 24 is 36 at this scale: up to the first size that is not smaller
+        assert sides(style.icon("anything")) == [16, 20, 24, 28, 32, 48]
+    finally:
+        style.apply(qapp, theme.merge(theme.DEFAULTS, {}))
+
+
+def test_a_tile_shown_at_one_size_is_made_for_a_dense_screen_too(qtbot, monkeypatch):
+    # Shown at 28 on a screen with twice the pixels, the tile of 28 would be stretched
+    monkeypatch.setattr(style, "_pixel_ratio", lambda: 2.0)
+
+    tile = style.tile("no-such-icon-anywhere", colour="green", side=28)
+
+    assert sides(tile) == [28, 56]
+    assert sides(style.tile("no-such-icon-anywhere", colour="green", side=20)) == [20, 40]
+    monkeypatch.setattr(style, "_pixel_ratio", lambda: 1.5)
+    assert sides(style.tile("no-such-icon-anywhere", colour="green", side=28)) == [28, 42]
+
+
+def test_a_tile_shown_at_one_size_is_made_in_that_size(qtbot, qapp):
+    try:
+        style.apply(qapp, theme.merge(theme.DEFAULTS, {"scale": {"ui": 1.5}}))
+        tile = style.tile("no-such-icon-anywhere", colour="green", side=28)
+    finally:
+        style.apply(qapp, theme.merge(theme.DEFAULTS, {}))
+
+    assert sides(tile) == [42]
+    assert same_colour(pixel(tile, 21, 6, size=42), style.palette_color("green"))
+    disabled = pixel(tile, 21, 6, size=42, mode=QIcon.Mode.Disabled)
+    assert not same_colour(disabled, style.palette_color("green"))
 
 
 @pytest.mark.parametrize("large", [14, 21, 60])
@@ -220,3 +276,15 @@ def test_density_is_remembered(home_dir):
     assert settings.density() == "compact"
     settings.set_density("cramped")
     assert settings.density() == "comfortable"
+
+
+def test_an_icon_for_a_menu_is_made_in_the_size_a_menu_shows(qtbot, qapp, monkeypatch):
+    source = QPixmap(256, 256)
+    source.fill(QColor("white"))
+    monkeypatch.setattr(style, "_theme_icon", lambda names: QIcon(source))
+    side = qapp.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize)
+
+    made = style.icon("anything", colour="danger", menu=True)
+
+    assert sides(made) == [side]
+    assert same_colour(pixel(made, 2, 2, size=side), style.color("danger"))

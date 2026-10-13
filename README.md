@@ -40,6 +40,7 @@ Everyday browsing and file operations work, and operations show in the shell's i
 - **Archives**: Extract here, Extract to… and Compress… (zip or tar.gz), each a background operation. Reads zip, tar, 7z, rar and more through libarchive, asks for the password of a protected zip, and never writes outside the folder it extracts into or over what is there
 - Operations run in the background, with progress, cancel, retry and error details. A cancel reports how far the job got, and a move never removes a file before its copy is complete
 - Closing the last window while jobs run offers to let them finish in the background; a desktop notification tells how it went when no window is left to show it
+- With its last window closed the app keeps running in the background, so the next window opens in about a third of the time. A setting turns that off, and `filehouse --quit` ends it. While it runs it has an icon in the system tray (the shell's row of running apps): a click opens a window, and its menu has Quit
 
 **With the shell**
 

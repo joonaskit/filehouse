@@ -21,6 +21,7 @@ class _Changes(QObject):
     # A setting that is shown in every window changed
     remember_opened_changed = Signal(bool)
     details_pane_changed = Signal(bool)
+    stay_running_changed = Signal(bool)
     # How folders are shown changed: the app's choice, or the one of some folder
     views_changed = Signal()
 
@@ -234,6 +235,17 @@ def restore_tabs():
 
 def set_restore_tabs(on):
     _store().setValue("window/restore_tabs", bool(on))
+
+
+def stay_running():
+    """Whether the process goes on without a window when the last one is closed, so
+    the next one is there sooner: it is opened by a process that is running already."""
+    return _store().value("window/stay_running", True, type=bool)
+
+
+def set_stay_running(on):
+    _store().setValue("window/stay_running", bool(on))
+    changes.stay_running_changed.emit(bool(on))
 
 
 def session():

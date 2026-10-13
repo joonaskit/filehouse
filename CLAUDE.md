@@ -19,6 +19,7 @@ source .venv/bin/activate
 pip install -e '.[dev]'
 
 filehouse ~/Downloads       # run the app
+filehouse --quit            # end the process that stays without a window: it runs the old code until then
 ruff check . && ruff format --check .
 
 pytest                     # all tests

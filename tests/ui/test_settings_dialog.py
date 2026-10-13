@@ -82,6 +82,20 @@ def test_starting_with_the_tabs_of_last_time_is_stored(dialog):
     assert not settings.restore_tabs()
 
 
+def test_staying_without_a_window_is_stored_and_told(dialog):
+    told = []
+    settings.changes.stay_running_changed.connect(told.append)
+    try:
+        assert dialog.stay.isChecked()
+
+        dialog.stay.setChecked(False)
+    finally:
+        settings.changes.stay_running_changed.disconnect(told.append)
+
+    assert not settings.stay_running()
+    assert told == [False]
+
+
 def test_privacy_is_stored_and_followed(dialog):
     dialog.private.setChecked(True)
     assert not settings.remember_opened()

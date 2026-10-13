@@ -48,6 +48,10 @@ if command -v busctl >/dev/null; then
         org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
 fi
 
+# A process of the version before may be staying in the background: the new one runs
+# only after it has ended, which it does now, or when its windows are closed
+"$bin_dir/filehouse" --quit >/dev/null 2>&1 || true
+
 echo "Installed. Run: filehouse ~/Downloads"
 echo "To open folders with it by default: gio mime inode/directory filehouse.desktop"
 if pgrep -x dolphin >/dev/null; then

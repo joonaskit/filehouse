@@ -63,7 +63,14 @@ _RAIL_PADDING = 2 * (8 + 6) + 2
 
 def _tile(entry, is_device):
     colour = _DEVICE_COLOUR if is_device else _PLACE_COLOURS.get(entry.icon, _FOLDER_COLOUR)
-    return style.tile(entry.icon + "-symbolic", entry.icon, "folder-symbolic", colour=colour)
+    # In the one size the list shows it at
+    return style.tile(
+        entry.icon + "-symbolic",
+        entry.icon,
+        "folder-symbolic",
+        colour=colour,
+        side=style.dense("sidebar_icon"),
+    )
 
 
 class _ListDelegate(QStyledItemDelegate):
@@ -572,7 +579,7 @@ class Sidebar(QListWidget):
             return
         menu = menus.menu(self)
         menu.addAction(
-            style.icon("media-eject-symbolic", "media-eject"),
+            style.icon("media-eject-symbolic", "media-eject", menu=True),
             entry.eject_label,
             lambda: self._volumes.eject(entry),
         )
