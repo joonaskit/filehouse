@@ -4,22 +4,15 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from filehouse.core import locations
 from filehouse.core.history import History
-from filehouse.qt_models.directory_model import (
-    MODIFIED,
-    NAME,
-    PERMISSIONS,
-    SIZE,
-    DirectoryModel,
-    DirectorySortProxy,
-)
+from filehouse.qt_models import columns
+from filehouse.qt_models.directory_model import DirectoryModel, DirectorySortProxy
 from filehouse.ui import settings
 from filehouse.ui.folder_view import FolderView
 
 # The folders below are searched this long after the last key: the list is filtered at once
 _SEARCH_DELAY_MS = 250
 # The columns a list is sorted by, as the settings name them
-_COLUMNS = {"name": NAME, "permissions": PERMISSIONS, "modified": MODIFIED, "size": SIZE}
-_SORTS = {column: key for key, column in _COLUMNS.items()}
+_SORTS = dict(enumerate(columns.KEYS))
 
 
 class Pane(QObject):
@@ -54,7 +47,10 @@ class Pane(QObject):
         self.view = FolderView(self.proxy)
         self.view.selection_model().selectionChanged.connect(self.changed)
         self.view.sort_changed.connect(self._on_sort_chosen)
+        self.view.columns_chosen.connect(self._on_columns_chosen)
+        self.model.search_changed.connect(self._use_columns)
         settings.changes.views_changed.connect(self._use_view)
+        settings.changes.columns_changed.connect(self._use_columns)
 
         for signal in (
             self.proxy.rowsInserted,
@@ -108,6 +104,7 @@ class Pane(QObject):
         self._pending_names = set()
         self.error = None
         self.model.set_location(location)
+        self._use_columns()
         self.location_changed.emit(location)
 
     # How the folder is shown
@@ -120,16 +117,45 @@ class Pane(QObject):
         mode, key, descending = settings.view_for(locations.uri(self.location))
         if self.in_recent:
             key, descending = "modified", True
+        if key not in columns.offered(self._columns_kind):
+            # A column of the trash, chosen there, in a folder that has no such column
+            key = "name"
         order = Qt.SortOrder.DescendingOrder if descending else Qt.SortOrder.AscendingOrder
         changed = mode != self.view.mode
         self._applying = True
         try:
             self.view.set_mode(mode)
-            self.view.sort(_COLUMNS[key], order)
+            self.view.sort(columns.column(key), order)
         finally:
             self._applying = False
         if changed:
             self.changed.emit()
+
+    @property
+    def _columns_kind(self):
+        return columns.TRASH if self.in_trash else columns.FILES
+
+    def _use_columns(self):
+        """Show the columns that were chosen for this kind of folder."""
+        if self.location is None:
+            return
+        kind = self._columns_kind
+        keys = columns.choose(settings.stored_columns(kind), kind)
+        if self.model.search_text and "permissions" not in keys:
+            # The results come from many folders, and the column says which
+            keys.insert(1, "permissions")
+        self.view.set_columns(columns.offered(kind), keys)
+
+    def _on_columns_chosen(self, keys):
+        kind = self._columns_kind
+        if not keys:
+            settings.set_columns(kind, None)
+            return
+        chosen = columns.choose(settings.stored_columns(kind), kind)
+        if self.model.search_text and "permissions" not in chosen:
+            # Put there by the search, not chosen
+            keys = [key for key in keys if key != "permissions"]
+        settings.set_columns(kind, keys)
 
     def choose_mode(self, mode):
         """The user wants this folder as details or as icons."""
@@ -282,4 +308,5 @@ class Pane(QObject):
             self._closed = True
             # The view may be gone before this is: nothing more is to be shown in it
             settings.changes.views_changed.disconnect(self._use_view)
+            settings.changes.columns_changed.disconnect(self._use_columns)
         self.model.close()

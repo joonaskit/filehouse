@@ -9,10 +9,11 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QSettings, QSize, Signal
 
 from filehouse import APP_ID
+from filehouse.qt_models import columns
 
 DETAILS, ICONS = "details", "icons"
 # What a list can be sorted by, as it is written down
-SORTS = ("name", "permissions", "modified", "size")
+SORTS = columns.KEYS
 # A folder whose view was not changed for longest is forgotten past this many
 MAX_FOLDERS = 500
 
@@ -24,6 +25,8 @@ class _Changes(QObject):
     stay_running_changed = Signal(bool)
     # How folders are shown changed: the app's choice, or the one of some folder
     views_changed = Signal()
+    # The columns of the details view changed
+    columns_changed = Signal()
 
 
 changes = _Changes()
@@ -64,6 +67,25 @@ def set_sort(key, descending):
     _store().setValue("view/sort", key)
     _store().setValue("view/sort_descending", bool(descending))
     changes.views_changed.emit()
+
+
+def stored_columns(kind):
+    """The columns that were chosen for the folders of this kind (`columns.FILES` or
+    `columns.TRASH`), in order, or None while none were."""
+    try:
+        stored = json.loads(_store().value(f"view/columns_{kind}", "null"))
+    except (TypeError, ValueError):
+        return None
+    return stored if isinstance(stored, list) else None
+
+
+def set_columns(kind, keys):
+    """The user chose which columns show, and in which order. None goes back to the default."""
+    if keys is None:
+        _store().remove(f"view/columns_{kind}")
+    else:
+        _store().setValue(f"view/columns_{kind}", json.dumps(list(keys)))
+    changes.columns_changed.emit()
 
 
 def per_folder():

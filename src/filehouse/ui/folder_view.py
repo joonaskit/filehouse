@@ -17,8 +17,9 @@ from PySide6.QtWidgets import (
 )
 
 from filehouse.integration import style
-from filehouse.qt_models.directory_model import MODIFIED, NAME, PERMISSIONS, SIZE, InfoRole
-from filehouse.ui import clipboard, settings
+from filehouse.qt_models import columns
+from filehouse.qt_models.directory_model import NAME, InfoRole
+from filehouse.ui import clipboard, menus, settings
 
 
 def history_step(event):
@@ -110,6 +111,19 @@ class _Rows(QStyledItemDelegate):
         option.state &= ~QStyle.StateFlag.State_HasFocus
 
 
+class _Cells(_Rows):
+    """The rows of the table: a line at the right edge of each cell, which with the header's
+    makes the lines between the columns."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        painter.save()
+        painter.setPen(style.divider_color())
+        x = option.rect.right()
+        painter.drawLine(x, option.rect.top(), x, option.rect.bottom())
+        painter.restore()
+
+
 class _Tree(_TakesDrops, QTreeView):
     dropped = Signal(list, object, object, QPoint)
     focused = Signal()
@@ -136,6 +150,8 @@ class FolderView(QWidget):
     history_requested = Signal(int)
     # The column and the order the list is sorted by changed, by a click or by `sort`
     sort_changed = Signal(int, Qt.SortOrder)
+    # The user changed which columns show or their order: the keys, in order, as for `set_columns`
+    columns_chosen = Signal(list)
 
     def __init__(self, proxy, parent=None):
         super().__init__(parent)
@@ -146,6 +162,10 @@ class FolderView(QWidget):
         self._proxy = proxy
         self._mode = settings.DETAILS
         self._typed_at = None  # when a name was last typed at the list, to jump to it
+        self._offered = list(columns.offered(columns.FILES))
+        self._keys = list(columns.choose(None, columns.FILES))  # the columns, in order
+        self._compact = False
+        self._arranging = False
 
         self._tree = _Tree()
         self._tree.setModel(proxy)
@@ -163,10 +183,17 @@ class FolderView(QWidget):
         header = self._tree.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(NAME, QHeaderView.ResizeMode.Stretch)
-        for column, width in ((PERMISSIONS, 100), (MODIFIED, 120), (SIZE, 90)):
-            header.resizeSection(column, style.px(width))
+        for key, width in columns.WIDTHS.items():
+            header.resizeSection(columns.column(key), style.px(width))
         header.setSortIndicatorClearable(False)
         header.sortIndicatorChanged.connect(self.sort_changed)
+        # The name stays first; the others can be moved, and hidden from the menu
+        header.setSectionsMovable(True)
+        header.setFirstSectionMovable(False)
+        header.sectionMoved.connect(self._on_section_moved)
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._on_header_menu)
+        self._arrange()
 
         self._grid = _Grid()
         self._grid.setModel(proxy)
@@ -189,8 +216,9 @@ class FolderView(QWidget):
         )
         self._grid.setSpacing(style.px(4))
 
+        self._tree.setItemDelegate(_Cells(self._tree))
+        self._grid.setItemDelegate(_Rows(self._grid))
         for view in (self._tree, self._grid):
-            view.setItemDelegate(_Rows(view))
             view.installEventFilter(self)
             view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
             view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -347,8 +375,68 @@ class FolderView(QWidget):
         return self._tree.selectionModel()
 
     def set_compact(self, on):
-        """For a narrow window: the table without its Modified column."""
-        self._tree.setColumnHidden(MODIFIED, on)
+        """For a narrow window: the table with the name and two columns, and no dates."""
+        if on != self._compact:
+            self._compact = on
+            self._arrange()
+
+    # The columns
+
+    def set_columns(self, offered, keys):
+        """Show these columns, in this order: `keys` of what the folder `offered`, which the
+        menu on the header lists. The name is always there, and first."""
+        self._offered = list(offered)
+        self._keys = [key for key in keys if key in self._offered and key != "name"]
+        self._keys.insert(0, "name")
+        self._arrange()
+
+    def _arrange(self):
+        """Hide, show and order the sections to match the columns."""
+        shown = columns.narrow(self._keys) if self._compact else self._keys
+        header = self._tree.header()
+        self._arranging = True
+        try:
+            # Not by dragging while some are put away: what is saved is the whole choice
+            header.setSectionsMovable(not self._compact)
+            hidden = [key for key in columns.KEYS if key not in shown]
+            for position, key in enumerate([*shown, *hidden]):
+                header.moveSection(header.visualIndex(columns.column(key)), position)
+                header.setSectionHidden(columns.column(key), key not in shown)
+        finally:
+            self._arranging = False
+
+    def _on_section_moved(self, _logical, _old, _new):
+        if self._arranging or self._compact:
+            return
+        header = self._tree.header()
+        self._keys = [
+            columns.KEYS[header.logicalIndex(visual)]
+            for visual in range(header.count())
+            if not header.isSectionHidden(header.logicalIndex(visual))
+        ]
+        self.columns_chosen.emit(list(self._keys))
+
+    def _on_header_menu(self, position):
+        menu = menus.menu(self)
+        for key in self._offered:
+            action = menu.addAction(columns.TITLES[key])
+            action.setCheckable(True)
+            action.setChecked(key in self._keys)
+            # The name is what the rows are
+            action.setEnabled(key != "name")
+            action.toggled.connect(lambda on, key=key: self._show_column(key, on))
+        menu.addSeparator()
+        menu.addAction("Default columns", lambda: self.columns_chosen.emit([]))
+        menu.popup(self._tree.header().mapToGlobal(position))
+        menu.aboutToHide.connect(menu.deleteLater)
+
+    def _show_column(self, key, on):
+        keys = [other for other in self._keys if other != key]
+        if on:
+            keys.append(key)
+        self._keys = keys
+        self._arrange()
+        self.columns_chosen.emit(list(keys))
 
     def show_current(self):
         """Scroll as little as it takes to have the current entry in view."""

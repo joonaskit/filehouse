@@ -7,9 +7,12 @@ from filehouse.core.listing import (
     Count,
     ListingError,
     count_children,
+    folder_text,
+    info_from_gio,
     list_directory,
     mode_text,
     natural_key,
+    type_description,
 )
 
 
@@ -158,3 +161,53 @@ def test_count_children_stops_when_cancelled(tmp_path):
     cancellable.cancel()
 
     assert count_children(Gio.File.new_for_path(str(tmp_path)), cancellable) is None
+
+
+def test_lists_who_owns_a_file_and_when_it_was_made_and_read(tmp_path):
+    (tmp_path / "a.txt").write_text("x")
+
+    info = by_name(listed(tmp_path))["a.txt"]
+
+    assert info.owner == Gio.File.new_for_path(str(tmp_path / "a.txt")).query_info(
+        "owner::user", Gio.FileQueryInfoFlags.NONE, None
+    ).get_attribute_string("owner::user")
+    assert info.owner and info.group
+    assert info.accessed == int((tmp_path / "a.txt").stat().st_atime)
+    # Not every file system keeps when a file was made: 0 is "unknown", never a wrong date
+    assert info.created in (0, *range(info.modified - 5, info.modified + 5))
+
+
+def plain_info():
+    info = Gio.FileInfo()
+    info.set_name("report.pdf")
+    info.set_display_name("report.pdf")
+    info.set_file_type(Gio.FileType.REGULAR)
+    info.set_size(10)
+    info.set_is_symlink(False)
+    return info
+
+
+def test_an_entry_of_the_trash_says_where_it_was_and_when_it_was_deleted():
+    gio_info = plain_info()
+    gio_info.set_attribute_byte_string("trash::orig-path", "/home/me/Documents/report.pdf")
+    gio_info.set_attribute_string("trash::deletion-date", "2026-10-12T17:50:23")
+
+    info = info_from_gio(gio_info)
+
+    assert info.original_path == "/home/me/Documents/report.pdf"
+    assert info.deleted > 0
+    assert info_from_gio(plain_info()).deleted == 0
+
+
+def test_a_type_is_named_for_people():
+    assert type_description("application/pdf") == "PDF document"
+    assert type_description("inode/directory") == "Folder"
+    assert type_description("text/plain")[0].isupper()
+
+
+def test_the_folder_something_was_in_is_written_with_the_home_folder_as_a_tilde():
+    home = os.path.expanduser("~")
+
+    assert folder_text(f"{home}/Documents/report.pdf") == "~/Documents"
+    assert folder_text(f"{home}/report.pdf") == "~"
+    assert folder_text("/srv/data/report.pdf") == "/srv/data"

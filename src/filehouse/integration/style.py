@@ -189,6 +189,19 @@ def overlay(alpha):
     return _rgba(color("textPrimary"), alpha)
 
 
+_DIVIDER = 0.10
+# From the left edge of a toolbar group to the text of its first breadcrumb, besides the
+# group's padding: the group's border, the button's padding and the style's own margin
+_CRUMB_TEXT_INSET = 12
+
+
+def divider_color():
+    """The line between columns, as a colour to paint with: `overlay` for a stylesheet."""
+    colour = color("textPrimary")
+    colour.setAlphaF(_DIVIDER)
+    return colour
+
+
 def tint(name, alpha):
     """A theme colour at `alpha`, for a stylesheet."""
     return _rgba(color(name), alpha)
@@ -404,7 +417,7 @@ def _fixed_font(_theme_generation):
 def _stylesheet():
     colors = _theme["colors"]
     small, medium, large = radius("small"), radius("medium"), radius("large")
-    hover, pressed, divider = overlay(0.08), overlay(0.14), overlay(0.10)
+    hover, pressed, divider = overlay(0.08), overlay(0.14), overlay(_DIVIDER)
     selected = tint("accent", 0.22)
     window, card, raised = (layer(name).name() for name in ("window", "card", "raised"))
     card_border = overlay(_CARD_BORDER)
@@ -481,9 +494,18 @@ def _stylesheet():
 
         QHeaderView {{ background: transparent; }}
         QHeaderView::section {{
-            border: none; padding: {px(6)}px {px(6)}px; background: transparent;
+            border: none; border-right: 1px solid {divider};
+            padding: {px(6)}px {px(6)}px; background: {overlay(0.05)};
             color: {colors["textSecondary"]}; font-size: {small_font}px;
         }}
+        /* The ends of the header follow the corners of the list's card, and its first text
+           is in line with the first text of the path bar above it */
+        QHeaderView::section:first {{
+            border-top-left-radius: {large}px; padding-left: {px(group + _CRUMB_TEXT_INSET)}px;
+        }}
+        QHeaderView::section:last {{ border-top-right-radius: {large}px; }}
+        QHeaderView::section:hover {{ background: {hover}; }}
+        QHeaderView::section:pressed {{ background: {pressed}; }}
         QSplitter::handle {{ background: transparent; }}
 
         /* The details card */

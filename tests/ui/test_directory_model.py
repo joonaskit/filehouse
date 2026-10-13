@@ -43,6 +43,13 @@ def test_lists_a_folder(qtbot, model, tmp_path):
         "Permissions",
         "Modified",
         "Size",
+        "Type",
+        "Created",
+        "Accessed",
+        "Owner",
+        "Group",
+        "Original location",
+        "Deleted",
     ]
     assert not model.loading
     row = model.row_for_name("a.txt")

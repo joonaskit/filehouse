@@ -331,6 +331,18 @@ F2 with several entries selected opens `ui/dialogs/rename_many.py` in place of t
 - Afterwards the renamed entries are selected.
 - Not done: a job for a slow drive, trading names through a temporary name, and regular expressions.
 
+### Columns (#44, `qt_models/columns.py`)
+
+The details view has eleven columns, one for each of `columns.KEYS` (a key's place there is its model column): Name, Permissions, Modified, Size, and Type, Created, Accessed, Owner, Group, and for what is in the trash, Original location and Deleted.
+
+- **Which columns, and the cost** (the issue's first question). Every listing asks for `time::created`, `time::access`, `owner::user`, `owner::group` and `trash::deletion-date` as well. The times come from the one `stat` the listing makes anyway, and the names from the user database, which the C library keeps. Type is the content type already known, described by `Gio.content_type_get_description` (cached by type). A file system with no birth time gives a Created of 0, which is empty, never a wrong date.
+- **Two sets.** The trash is chosen apart from other folders (`columns.TRASH` and `columns.FILES`; `view/columns_trash` and `view/columns_files`, a JSON list in the settings): the two columns that exist only there are on by default there, and not offered anywhere else. One choice for all folders of a kind, not one for each folder: the folders' own views (#43) keep the mode and the sort order.
+- **The menu and the order.** A right click on the header lists the columns the folder offers, with a check on those shown, and "Default columns". Dragging a header moves the column. The name is always there and first (`setFirstSectionMovable(False)`; its item in the menu is disabled). Either way `FolderView.columns_chosen` carries the keys in order, `Pane` writes them with `settings.set_columns`, and every pane follows `settings.changes.columns_changed`. What is read is checked by `columns.choose`: an unknown or repeated key is dropped, so a file edited by hand cannot break the view.
+- **Sorting** is by any column (`settings.SORTS` is `columns.KEYS`). A folder that does not offer the column that was chosen as the sort (Deleted, chosen in the trash) is sorted by name there.
+- **A search** shows the Permissions column as "Folder", the folder a result is in. When the user put it away it is shown anyway for as long as the search lasts, and is not saved as a choice.
+- **The narrow layout** (the issue's third question) shows the name and the first two chosen columns that are not dates; Modified, Created, Accessed and Deleted are dropped, so the default still shows Permissions and Size as before. Columns cannot be dragged meanwhile, so that what is saved is always the whole choice, not what fits.
+- **Grouping** the list by type or date was split off into #54, and is not built.
+
 ### The view of each folder (#43)
 
 The view mode (details or icons) and the sort order belong to the folder that is shown, not to the window.
