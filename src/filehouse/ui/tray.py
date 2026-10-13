@@ -7,8 +7,9 @@ the shell shows. Without a tray nothing is shown and nothing is lost.
 """
 
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+
+from filehouse.integration import style
 
 _TITLE = "Filehouse"
 
@@ -22,7 +23,7 @@ class Tray(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         # The icon the windows have
-        self._icon = QSystemTrayIcon(QIcon.fromTheme("system-file-manager"), self)
+        self._icon = QSystemTrayIcon(style.app_icon(), self)
         self._icon.setToolTip(_TITLE)
         # Drawn by the tray and not by the app: no icons and no look of ours
         self._menu = QMenu()

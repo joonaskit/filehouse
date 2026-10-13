@@ -19,6 +19,11 @@ os.environ["XDG_DATA_HOME"] = os.path.join(_home, ".local", "share")
 os.environ["XDG_CONFIG_HOME"] = os.path.join(_home, ".config")
 os.environ["XDG_CACHE_HOME"] = os.path.join(_home, ".cache")
 
+# What the app says in the user's language (a size is "3 tavut" in Finnish) is tested
+# as it is said without one, on whatever machine the tests run
+os.environ["LC_ALL"] = "C.UTF-8"
+os.environ["LANGUAGE"] = "C"
+
 
 @pytest.fixture
 def home_dir():

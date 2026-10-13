@@ -288,3 +288,19 @@ def test_an_icon_for_a_menu_is_made_in_the_size_a_menu_shows(qtbot, qapp, monkey
 
     assert sides(made) == [side]
     assert same_colour(pixel(made, 2, 2, size=side), style.color("danger"))
+
+
+@pytest.mark.parametrize(
+    "installed, asked_for",
+    [({"filehouse", "system-file-manager"}, "filehouse"), (set(), "system-file-manager")],
+)
+def test_the_apps_icon_is_its_own_where_installed_and_the_file_managers_elsewhere(
+    monkeypatch, installed, asked_for
+):
+    class IconTheme:
+        hasThemeIcon = staticmethod(lambda name: name in installed)
+        fromTheme = staticmethod(lambda name: name)
+
+    monkeypatch.setattr(style, "QIcon", IconTheme)
+
+    assert style.app_icon() == asked_for

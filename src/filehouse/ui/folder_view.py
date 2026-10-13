@@ -21,14 +21,41 @@ from filehouse.qt_models.directory_model import MODIFIED, NAME, PERMISSIONS, SIZ
 from filehouse.ui import clipboard, settings
 
 
+def history_step(event):
+    """-1 for the back button of a mouse, 1 for its forward button, 0 for any other."""
+    return {Qt.MouseButton.BackButton: -1, Qt.MouseButton.ForwardButton: 1}.get(event.button(), 0)
+
+
 class _TakesDrops:
     """For an item view: takes drops of files. What a drop does is decided by the window.
 
     The view declares `dropped`: URIs, the FileInfo of the folder dropped on (None for
-    the open folder), the keyboard modifiers and a global position, `focused`, and
-    `open_in_tab`: the FileInfo of a folder that was middle-clicked."""
+    the open folder), the keyboard modifiers and a global position, `focused`,
+    `open_in_tab`: the FileInfo of a folder that was middle-clicked, and `history`:
+    -1 or 1 for the mouse's back or forward button."""
+
+    def mousePressEvent(self, event):
+        step = history_step(event)
+        if step:
+            # Not the list's: it would take the press for a click on what is under it
+            self.history.emit(step)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        step = history_step(event)
+        if step:
+            # The second of two quick presses: one more step, and nothing is opened
+            self.history.emit(step)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if history_step(event):
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.MiddleButton:
             index = self.indexAt(event.position().toPoint())
             info = index.data(InfoRole) if index.isValid() else None
@@ -87,12 +114,14 @@ class _Tree(_TakesDrops, QTreeView):
     dropped = Signal(list, object, object, QPoint)
     focused = Signal()
     open_in_tab = Signal(object)
+    history = Signal(int)
 
 
 class _Grid(_TakesDrops, QListView):
     dropped = Signal(list, object, object, QPoint)
     focused = Signal()
     open_in_tab = Signal(object)
+    history = Signal(int)
 
 
 class FolderView(QWidget):
@@ -103,6 +132,8 @@ class FolderView(QWidget):
     # The list, or the empty folder in its place, was clicked or given the keyboard
     focused = Signal()
     open_in_tab = Signal(object)  # FileInfo of a folder
+    # The mouse's back (-1) or forward (1) button, pressed over this list
+    history_requested = Signal(int)
     # The column and the order the list is sorted by changed, by a click or by `sort`
     sort_changed = Signal(int, Qt.SortOrder)
 
@@ -170,6 +201,7 @@ class FolderView(QWidget):
             view.dropped.connect(self.dropped)
             view.focused.connect(self.focused)
             view.open_in_tab.connect(self.open_in_tab)
+            view.history.connect(self.history_requested)
             view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             view.customContextMenuRequested.connect(
                 lambda position, view=view: self._on_context_menu(view, position)
@@ -202,6 +234,11 @@ class FolderView(QWidget):
         self.style().polish(self)
 
     def mousePressEvent(self, event):
+        step = history_step(event)
+        if step:
+            self.history_requested.emit(step)
+            event.accept()
+            return
         # The message of an empty folder has nothing to take the click
         self.setFocus()
         self.focused.emit()

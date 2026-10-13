@@ -2,6 +2,7 @@
 
 import pytest
 
+from filehouse.integration import autostart
 from filehouse.ui import settings
 from filehouse.ui.dialogs.settings import SettingsDialog
 
@@ -94,6 +95,27 @@ def test_staying_without_a_window_is_stored_and_told(dialog):
 
     assert not settings.stay_running()
     assert told == [False]
+
+
+def test_starting_at_a_login_is_an_entry_in_the_autostart_folder(dialog):
+    assert not dialog.login.isChecked()
+
+    dialog.login.setChecked(True)
+    assert autostart.enabled()
+
+    dialog.login.setChecked(False)
+    assert not autostart.enabled()
+
+
+def test_only_a_process_that_stays_is_started_at_a_login(dialog):
+    dialog.login.setChecked(True)
+
+    dialog.stay.setChecked(False)
+
+    assert not dialog.login.isChecked() and not dialog.login.isEnabled()
+    assert not autostart.enabled()
+    dialog.stay.setChecked(True)
+    assert dialog.login.isEnabled() and not dialog.login.isChecked()
 
 
 def test_privacy_is_stored_and_followed(dialog):
