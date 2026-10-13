@@ -1,0 +1,57 @@
+name: Tests
+
+# A push to any branch of this repository, and a pull request from a fork: a pull request
+# from a branch here is checked by the push that made it, not twice
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    # PySide6 and PyGObject have to be the distribution's, so that they share one GLib
+    # event loop (see CLAUDE.md): the tests run on Fedora, not on the runner's Ubuntu
+    container: fedora:44
+    timeout-minutes: 20
+    steps:
+      # Besides Qt and GObject: libarchive for the archive tests, a bus for the tests
+      # that talk over one, and the MIME types, a font and an icon theme the UI tests
+      # look things up in
+      - name: Install what the app and its tests need
+        run: >
+          dnf install -y --setopt=install_weak_deps=False
+          git python3-pip
+          python3-pyside6 python3-gobject python3-libarchive-c
+          dbus-daemon shared-mime-info dejavu-sans-fonts breeze-icon-theme
+
+      - uses: actions/checkout@v5
+
+      # The steps of a container run as root, and root is refused nothing: the tests
+      # of what happens when a file cannot be read or written would all be skipped
+      - name: Hand the checkout to an ordinary user
+        run: |
+          useradd --create-home ci
+          chown -R ci "$GITHUB_WORKSPACE"
+
+      - name: Install the app
+        run: |
+          runuser -u ci -- env HOME=/home/ci bash -e -c "
+            python3 -m venv --system-site-packages /home/ci/venv
+            /home/ci/venv/bin/pip install --disable-pip-version-check -e '.[dev]'
+          "
+
+      - name: Lint
+        run: |
+          runuser -u ci -- env HOME=/home/ci bash -e -c "
+            /home/ci/venv/bin/ruff check .
+            /home/ci/venv/bin/ruff format --check .
+          "
+
+      # Offscreen, in a home of their own: tests/conftest.py sees to both
+      - name: Test
+        run: runuser -u ci -- env HOME=/home/ci /home/ci/venv/bin/pytest -rs
