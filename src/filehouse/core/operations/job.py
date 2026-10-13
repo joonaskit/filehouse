@@ -8,19 +8,23 @@ job cancelled while it is still queued, on the thread that cancelled it).
 import itertools
 import logging
 import threading
+import time
 from dataclasses import dataclass, replace
 from enum import Enum
 
 from gi.repository import Gio, GLib
 
 from filehouse.core.errors import OperationError, is_cancelled
-from filehouse.core.operations import conflicts, copy, delete, plan, trash
+from filehouse.core.operations import conflicts, copy, delete, plan, trash, undo
 from filehouse.core.operations.conflicts import Answer
 from filehouse.core.operations.plan import StepKind
 
 log = logging.getLogger(__name__)
 
 _ids = itertools.count(1)
+# The trash is told of a new item a moment after it has it: how long an undo that does
+# not find one waits before it looks once more
+_TRASH_SETTLES_SECONDS = 0.4
 
 
 class JobKind(Enum):
@@ -110,6 +114,14 @@ class Job:
         self.progress = JobProgress()
         self.errors = []  # every OperationError, in the order they happened
         self.summary = ""  # the final text, e.g. "Cancelled after 5 of 12 files"
+        # What this job did that can be taken back, once it has ended: see `undo`
+        self.undo = None
+        # A job that takes another back. It is not itself kept to be taken back
+        self.is_undo = False
+        self._since = 0.0
+        # For the undo of a trash: where the items were, to find them in the trash by
+        self._trashed_from = None
+        self._trashed_since = 0.0
 
         self._prompt = prompt
         self._state = JobState.QUEUED
@@ -157,6 +169,32 @@ class Job:
             self.summary = "Cancelled before it started"
         self._notify()
 
+    @classmethod
+    def undo_of(cls, record, *, prompt=None, on_change=None):
+        """The job that takes back a move or a trash: each item moved to where it was,
+        or restored from the trash. An ordinary job, which asks when something is in
+        the way now and names what it could not put back."""
+        if record.kind is undo.Kind.MOVE:
+            job = cls(
+                JobKind.MOVE,
+                [now for now, _was in record.pairs],
+                targets=[was for _now, was in record.pairs],
+                prompt=prompt,
+                on_change=on_change,
+            )
+        elif record.kind is undo.Kind.TRASH:
+            originals = [was for _now, was in record.pairs]
+            # Until they are found in the trash, the sources are where they go back to
+            job = cls(
+                JobKind.RESTORE, originals, targets=originals, prompt=prompt, on_change=on_change
+            )
+            job._trashed_from = originals
+            job._trashed_since = record.since
+        else:
+            raise ValueError(f"a {record.kind.value} is not taken back by a job")
+        job.is_undo = True
+        return job
+
     @property
     def can_retry(self):
         return self._state is JobState.FAILED and any(step.failed for step in self._steps)
@@ -176,6 +214,7 @@ class Job:
         job = Job(self.kind, [], self.destination, prompt=self._prompt, on_change=self.on_change)
         job.sources = [source for source, _folder, _name in items]
         job._items = items
+        job.is_undo = self.is_undo
         return job
 
     def run(self):
@@ -185,6 +224,7 @@ class Job:
                 return
             self._started = True
             self._state = JobState.PLANNING
+        self._since = time.time()
         self._notify()
 
         cancelled = False
@@ -209,6 +249,8 @@ class Job:
     def _work(self):
         if self.kind is JobKind.DELETE:
             self._confirm_delete()
+        if self._trashed_from is not None:
+            self._find_trashed()
         if self._is_transfer:
             for source, folder, _name in self._items:
                 plan.check_not_inside(source, folder, self.kind.value)
@@ -244,6 +286,29 @@ class Job:
                 self._bytes_finished += step.size
                 self._recount()
             index += 1
+
+    def _find_trashed(self):
+        """For the undo of a trash: the items in the trash that were where this job
+        puts them back. One that is not there any more is an error naming it."""
+        originals, self._trashed_from = self._trashed_from, None
+        found = trash.find(originals, self._trashed_since, self.cancellable)
+        if len(found) < len(originals):
+            time.sleep(_TRASH_SETTLES_SECONDS)
+            self._check_cancelled()
+            found = trash.find(originals, self._trashed_since, self.cancellable)
+        items, missing = [], []
+        for original in originals:
+            item = found.get(original.get_path())
+            if item is None:
+                missing.append(OperationError.at(original, "restore", "is no longer in the trash"))
+            else:
+                items.append((item, original.get_parent(), original.get_basename()))
+        self.sources = [item for item, _folder, _name in items]
+        self._items = items
+        if not items:
+            self.errors += missing[:-1]
+            raise missing[-1]
+        self.errors += missing
 
     @property
     def _is_transfer(self):
@@ -328,6 +393,9 @@ class Job:
             raise conflicts.Exists(step.existing)
 
         move = self.kind is JobKind.MOVE
+        if self.is_undo and move and step.parent is None and step.folder is not None:
+            # The folder an item was in may have gone with the move that is taken back
+            copy.ensure_folder(step.folder, self.cancellable)
         if kind is StepKind.MAKE_DIR:
             copy.make_folder(step, self.cancellable)
         elif kind is StepKind.COPY:
@@ -533,4 +601,18 @@ class Job:
             self.summary = f"{verb} {done} {noun}{'' if done == 1 else 's'}{where}"
 
         self.progress = replace(self.progress, current="", bytes_done=self._bytes_finished)
+        self.undo = self._undo_record()
         self._set_state(state)
+
+    def _undo_record(self):
+        """What this job finished that can be taken back, also when it did not finish
+        all of it. None for a job that takes another back: there is no redo."""
+        if self.is_undo:
+            return None
+        if self.kind is JobKind.MOVE:
+            kind, pairs = undo.Kind.MOVE, undo.moved(self._steps)
+        elif self.kind is JobKind.TRASH:
+            kind, pairs = undo.Kind.TRASH, undo.trashed(self._steps)
+        else:
+            return None
+        return undo.Record(kind, pairs, self._since) if pairs else None
