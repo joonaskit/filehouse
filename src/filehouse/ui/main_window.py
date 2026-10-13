@@ -193,6 +193,7 @@ class MainWindow(QMainWindow):
         # `_pane` its active pane: the toolbar, the title, the details, the status bar
         # and every action are about it
         self._action_icons = []  # (action, icon name, colour) to make them again
+        self._button_actions = []  # the ones a button shows, not only a menu
         self._unsplit_sizes = None
         self._tab_bar = TabBar()
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
@@ -280,6 +281,7 @@ class MainWindow(QMainWindow):
         # In a narrow window, in the corner under the rail: the details as a sheet
         self._details_button = QToolButton()
         self._details_button.setDefaultAction(self._show_details)
+        self._button_actions.append(self._show_details)
         self._details_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._details_button.setIconSize(QSize(style.px(18), style.px(18)))
         self._details_button.setFixedHeight(style.px(28))
@@ -291,7 +293,8 @@ class MainWindow(QMainWindow):
         self._job_status.clicked.connect(self._panel.toggle)
         # A sign that nothing is remembered, as long as it is so: a click ends it
         self._private_button = QToolButton()
-        self._private_button.setIcon(self._private.icon())
+        self._button_actions.append(self._private)
+        self._draw_action_icons()
         self._private_button.setText("Private")
         self._private_button.clicked.connect(self._private.trigger)
         self._private_button.setToolTip(
@@ -326,7 +329,8 @@ class MainWindow(QMainWindow):
 
     def _create_actions(self):
         def action(text, icon, shortcuts, slot, colour="textPrimary"):
-            item = QAction(style.icon(icon + "-symbolic", icon, colour=colour), text, self)
+            # Its icon comes with all the others, once it is known which are on buttons
+            item = QAction(text, self)
             item.setShortcuts(shortcuts)
             item.triggered.connect(slot)
             self.addAction(item)
@@ -573,11 +577,18 @@ class MainWindow(QMainWindow):
         if self._favourites is not None:
             self._favourites.changed.connect(self._update_favourite_action)
 
+    def _draw_action_icons(self):
+        """The icon of every action, in the colours of the theme in use. Most are shown
+        by menus only and are made in a menu's size: every size of every icon was most
+        of the time the window took to open."""
+        for item, icon, colour in self._action_icons:
+            menu = item not in self._button_actions
+            item.setIcon(style.icon(icon + "-symbolic", icon, colour=colour, menu=menu))
+        self._private_button.setIcon(self._private.icon())
+
     def _retheme(self):
         """The theme changed while the window is open: icons are drawn in its colours."""
-        for item, icon, colour in self._action_icons:
-            item.setIcon(style.icon(icon + "-symbolic", icon, colour=colour))
-        self._private_button.setIcon(self._private.icon())
+        self._draw_action_icons()
         for index in range(self._tab_bar.count()):
             button = self._tab_bar.tabButton(index, QTabBar.ButtonPosition.RightSide)
             button.setIcon(style.icon("window-close-symbolic", "window-close"))
@@ -604,6 +615,7 @@ class MainWindow(QMainWindow):
         for item in actions:
             button = QToolButton()
             button.setDefaultAction(item)
+            self._button_actions.append(item)
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             button.setIconSize(QSize(style.px(18), style.px(18)))
             side = style.px(style.dense("control_height"))
@@ -1457,12 +1469,12 @@ class MainWindow(QMainWindow):
     def _show_favourite_menu(self, favourite, position):
         menu = menus.menu(self)
         menu.addAction(
-            style.icon("document-open-symbolic", "document-open"),
+            style.icon("document-open-symbolic", "document-open", menu=True),
             "Open",
             lambda: self.navigate(favourite.location),
         )
         menu.addAction(
-            style.icon("tab-new-symbolic", "tab-new"),
+            style.icon("tab-new-symbolic", "tab-new", menu=True),
             "Open in new tab",
             lambda: self.new_tab(favourite.location, activate=False),
         )
@@ -1482,7 +1494,7 @@ class MainWindow(QMainWindow):
         down.setEnabled(0 <= index < len(items) - 1)
         menu.addSeparator()
         menu.addAction(
-            style.icon("edit-delete-symbolic", "edit-delete", colour="danger"),
+            style.icon("edit-delete-symbolic", "edit-delete", colour="danger", menu=True),
             "Remove from favourites",
             lambda: self._favourites.remove(favourite),
         )
@@ -1582,21 +1594,21 @@ class MainWindow(QMainWindow):
         target = locations.child(self._location, info.name)
         folder = self._location
         menu.addAction(
-            style.icon("document-open-symbolic", "document-open"),
+            style.icon("document-open-symbolic", "document-open", menu=True),
             "Open",
             lambda: self._on_item_activated(info),
         )
         if info.folder:
             # A result of a search, from a folder below this one
             menu.addAction(
-                style.icon("folder-open-symbolic", "folder-open"),
+                style.icon("folder-open-symbolic", "folder-open", menu=True),
                 "Show in folder",
                 lambda: self.show_in_folder(info),
             )
         if info.is_dir:
             folder = target
             menu.addAction(
-                style.icon("tab-new-symbolic", "tab-new"),
+                style.icon("tab-new-symbolic", "tab-new", menu=True),
                 "Open in new tab",
                 lambda: self._open_in_new_tab(info),
             )
@@ -1654,14 +1666,14 @@ class MainWindow(QMainWindow):
             return menu
         target = locations.entry_location(self._location, info)
         menu.addAction(
-            style.icon("document-open-symbolic", "document-open"),
+            style.icon("document-open-symbolic", "document-open", menu=True),
             "Open",
             lambda: self._on_item_activated(info),
         )
         if not info.is_dir:
             self._add_open_with(menu, info, target)
         menu.addAction(
-            style.icon("folder-open-symbolic", "folder-open"),
+            style.icon("folder-open-symbolic", "folder-open", menu=True),
             "Show in folder",
             lambda: self.show_in_folder(info),
         )
@@ -1689,7 +1701,7 @@ class MainWindow(QMainWindow):
         if not apps:
             return
         open_with = menus.menu(menu, "Open with")
-        open_with.setIcon(style.icon("view-grid-symbolic", "view-grid"))
+        open_with.setIcon(style.icon("view-grid-symbolic", "view-grid", menu=True))
         menu.addMenu(open_with)
         for app in apps:
             open_with.addAction(
@@ -1733,7 +1745,7 @@ class MainWindow(QMainWindow):
         manager = desktop.file_manager()
         if manager is not None:
             menu.addAction(
-                style.icon("folder-open-symbolic", "folder-open"),
+                style.icon("folder-open-symbolic", "folder-open", menu=True),
                 f"Open folder in {manager.name}",
                 lambda: desktop.open_with(manager, folder, self._show_error),
             )
@@ -1742,7 +1754,7 @@ class MainWindow(QMainWindow):
         """The folder menu's entries for how the list is shown."""
         column, order = self._view.sort_column(), self._view.sort_order()
         sort = menus.menu(menu, "Sort by")
-        sort.setIcon(style.icon("view-sort-symbolic", "view-sort"))
+        sort.setIcon(style.icon("view-sort-symbolic", "view-sort", menu=True))
         for text, sorts_by, first_order in _SORTS:
             item = sort.addAction(
                 text, lambda by=sorts_by, first=first_order: self._view.sort(by, first)
@@ -1759,7 +1771,7 @@ class MainWindow(QMainWindow):
             item.setChecked(way == order)
         menu.addMenu(sort)
         view = menus.menu(menu, "View")
-        view.setIcon(style.icon("view-grid-symbolic", "view-grid"))
+        view.setIcon(style.icon("view-grid-symbolic", "view-grid", menu=True))
         view.addActions([self._details_mode, self._icons_mode])
         if settings.per_folder():
             # The view and the sort order that were chosen in this folder, given up
@@ -2240,9 +2252,11 @@ class MainWindow(QMainWindow):
 
     def _ask_drop_action(self, position):
         menu = menus.menu(self)
-        move = menu.addAction(style.icon("go-jump-symbolic", "transform-move"), "Move here")
-        copy = menu.addAction(style.icon("edit-copy-symbolic", "edit-copy"), "Copy here")
-        link = menu.addAction(style.icon("edit-link-symbolic", "edit-link"), "Link here")
+        move = menu.addAction(
+            style.icon("go-jump-symbolic", "transform-move", menu=True), "Move here"
+        )
+        copy = menu.addAction(style.icon("edit-copy-symbolic", "edit-copy", menu=True), "Copy here")
+        link = menu.addAction(style.icon("edit-link-symbolic", "edit-link", menu=True), "Link here")
         menu.addSeparator()
         menu.addAction("Cancel")
         return {move: JobKind.MOVE, copy: JobKind.COPY, link: LINK}.get(menu.exec(position))

@@ -4,6 +4,7 @@ Colours and fonts go through `QPalette` and `QFont`. The stylesheet is for
 shapes: rounded groups, cards, rows and menus.
 """
 
+import math
 from functools import cache
 
 from PySide6.QtCore import QObject, QRectF, QSize, Qt, Signal
@@ -16,6 +17,7 @@ from PySide6.QtGui import (
     QPalette,
     QPixmap,
 )
+from PySide6.QtWidgets import QApplication, QStyle
 
 from filehouse.integration import theme as theme_reader
 
@@ -233,6 +235,21 @@ def apply(app, theme, live=False):
 # `generation` tells caches when the theme they were made for is no longer in use.
 
 _ICON_SIZES = (16, 20, 24, 28, 32, 48, 64, 128)
+# A one-colour icon is for a button or a menu entry: the largest it is shown, unscaled
+_GLYPH_LARGEST = 24
+
+
+def _sizes(largest):
+    """The sizes an icon needs that is shown no larger than `largest` pixels. Each one
+    is a search of the icon theme and a drawing of its own, and a window has some
+    seventy icons: the sizes nothing asks for were most of the time a start took."""
+    needed = []
+    for side in _ICON_SIZES:
+        needed.append(side)
+        # Qt makes a larger one smaller, never a smaller one larger
+        if side >= largest:
+            break
+    return needed
 
 
 def _theme_icon(names):
@@ -277,26 +294,45 @@ def _tile(source, side, colour):
     return pixmap
 
 
-def _build(draw, names, colour):
+def _build(draw, names, colour, sizes):
     source = _theme_icon(names)
     made = QIcon()
     for mode, shade in ((QIcon.Mode.Normal, colour), (QIcon.Mode.Disabled, color("textTertiary"))):
-        for side in _ICON_SIZES:
+        for side in sizes:
             pixmap = draw(source, side, shade)
             if not pixmap.isNull():
                 made.addPixmap(pixmap, mode)
     return made
 
 
-def icon(*names, colour="textPrimary"):
+def icon(*names, colour="textPrimary", menu=False):
     """A one-colour icon: the first of `names` the icon theme has, in a theme colour.
-    `colour` is a name from the theme's colours."""
-    return _build(_glyph, names, color(colour))
+    `colour` is a name from the theme's colours. For buttons and menus: it is not
+    made in the sizes a list or a preview would ask for, and with `menu` only in the
+    one size a menu shows it at."""
+    if menu:
+        sizes = (QApplication.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize),)
+    else:
+        sizes = _sizes(px(_GLYPH_LARGEST))
+    return _build(_glyph, names, color(colour), sizes)
 
 
-def tile(*names, colour):
-    """An icon on a rounded tile, both in one of the palette colours ("green", "blue", …)."""
-    return _build(_tile, names, palette_color(colour))
+def tile(*names, colour, side=None):
+    """An icon on a rounded tile, both in one of the palette colours ("green", "blue", …).
+    `side` is the one size it is shown at, unscaled, for a tile with only one: without
+    it the tile is made in every size."""
+    if side is None:
+        sizes = _ICON_SIZES
+    else:
+        # A tile is made of the screen's own pixels, and a dense screen has more of them
+        # to the size: Qt asks for the larger one there, and does not make one larger
+        sizes = sorted({px(side), math.ceil(px(side) * _pixel_ratio())})
+    return _build(_tile, names, palette_color(colour), sizes)
+
+
+def _pixel_ratio():
+    # Of the densest screen there is
+    return QApplication.instance().devicePixelRatio()
 
 
 # Palette, font, stylesheet

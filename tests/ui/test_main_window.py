@@ -3,6 +3,8 @@ import os
 import pytest
 from gi.repository import Gio
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtWidgets import QStyle, QToolButton
 
 from filehouse.integration import style
 from filehouse.ui.main_window import MainWindow
@@ -515,3 +517,25 @@ def test_the_pane_button_and_key_are_there_only_in_a_wide_window(qtbot, tree, ho
     window.resize(500, 600)
 
     qtbot.waitUntil(lambda: not window._button_for(window._pane_toggle).isVisible(), timeout=5000)
+
+
+def test_an_action_on_a_button_has_its_icon_in_the_buttons_size(qtbot, tmp_path, monkeypatch):
+    # Most actions are in menus only, and their icons are made in a menu's one size.
+    # Whatever the icon theme of the machine has: a source that draws at any size
+    source = QPixmap(256, 256)
+    source.fill(QColor("white"))
+    monkeypatch.setattr(style, "_theme_icon", lambda names: QIcon(source))
+    window = open_window(qtbot, tmp_path)
+
+    def largest(icon):
+        return max(size.width() for size in icon.availableSizes())
+
+    buttons = [b for b in window.findChildren(QToolButton) if b.defaultAction() is not None]
+    assert len(buttons) > 8
+    for button in buttons + [window._private_button]:
+        assert largest(button.icon()) >= button.iconSize().width(), button.toolTip()
+    in_menus = [a for a in window.actions() if a not in window._button_actions]
+    assert len(in_menus) > 20
+    menu_side = window.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize)
+    for item in in_menus:
+        assert [size.width() for size in item.icon().availableSizes()] == [menu_side], item.text()

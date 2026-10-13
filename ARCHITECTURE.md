@@ -95,7 +95,8 @@ filehouse/
 │   ├── filehouse.desktop     Exec=filehouse %U, StartupWMClass=filehouse
 │   └── icons/
 ├── src/filehouse/
-│   ├── app.py                   argument parsing, QApplication, desktop file name, first window
+│   ├── app.py                   argument parsing, and whether this process is to be the application
+│   ├── application.py           QApplication, desktop file name, the windows, what other processes ask
 │   ├── core/
 │   │   ├── locations.py         path/URI handling, places (home, Downloads, …), display names
 │   │   ├── listing.py           batched directory enumeration, file info records
@@ -166,9 +167,9 @@ filehouse/
 
 ## Components
 
-### Startup (`app.py`)
+### Startup (`app.py`, then `application.py`)
 
-0. Ask to be the one process of the session (see "One process, and the desktop's file manager"). When another is, hand it the paths and end, before any of the application is set up.
+0. Ask to be the one process of the session (see "One process, and the desktop's file manager"). When another is, hand it the paths and end, before any of the application is set up or even imported: `app.py` imports Gio and the argument parser only, and `application.py`, with Qt and the windows, after the claim (`tests/test_start.py` holds it to that).
 1. Parse arguments: zero or more paths or `file://` URIs (`%U` from the `.desktop` file). A file argument opens its folder with the file selected. A missing path opens home and shows a message.
 2. `QGuiApplication.setDesktopFileName("filehouse")`. On Wayland this sets the app id, which the shell's `DockService.findToplevels` compares **exactly** against `StartupWMClass`. This is what gives point 3a for free.
 3. Load the theme and apply the style before creating any window.
@@ -178,7 +179,7 @@ filehouse/
 
 The app is meant to stand where Dolphin stood, so the desktop has to be able to hand it a folder.
 
-- **One process for the session.** The first start owns `io.github.joonaskit.filehouse` on the session bus. A later start is told the name is taken (`RequestName` with "do not queue"), sends its arguments to the owner with `Open(uris, activation_token)` and exits, in about a quarter of a second and before a `QApplication` is made. So there is one `JobModel`, one island client and one list of favourites however the app is started. The arguments go as URIs, because a relative path means something else in the other process. The owner opens **a window per folder** (not a tab: the first open question of the issue), and a home window when it was given nothing.
+- **One process for the session.** The first start owns `io.github.joonaskit.filehouse` on the session bus. A later start is told the name is taken (`RequestName` with "do not queue"), sends its arguments to the owner with `Open(uris, activation_token)` and exits, in under a fifth of a second (it was half a second while Qt and the windows were imported first) and before a `QApplication` is made. So there is one `JobModel`, one island client and one list of favourites however the app is started. The arguments go as URIs, because a relative path means something else in the other process. The owner opens **a window per folder** (not a tab: the first open question of the issue), and a home window when it was given nothing.
 - **Without a bus, or with an owner that does not answer** within five seconds, the start goes on as a process of its own, as every start used to be: better a second process than no window.
 - **`org.freedesktop.FileManager1`** is served by the same process, which is how other apps do "Show in folder". `ShowFolders` opens each folder; `ShowItems` opens the folder an item is in with the item selected (`locations.resolve_item`: a folder is an item too, shown in the one above it), one window per folder however many of its items were named; `ShowItemProperties` opens the properties dialog, without a window behind it. The name has one owner: when another file manager has it (Dolphin, while it runs), it keeps it, and this process is only the one process of this app (`Instance.file_manager` says which).
 - **Started by the bus.** `data/org.freedesktop.FileManager1.service.in` becomes a service file in the user's `dbus-1/services`, which comes before the system's (Dolphin's), so a call with nobody running starts `filehouse --service`: no window of its own, and it ends after ten seconds if no call opened one. That it takes the place of Dolphin's is the choice made by installing it (the second open question). Two things found on a real session (Fedora, dbus-broker): the bus reads service files only when it starts or is told to reload, and it outlives a logout, so `install.sh` calls `ReloadConfig`; and Dolphin's own background process (`plasma-dolphin.service`, started by the first call that reached it) holds the name until it is stopped. With both dealt with, the broker logs that it ignores Dolphin's duplicate, and a `ShowItems` call starts `filehouse --service`.
@@ -621,7 +622,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 
 **Done.** How it was built:
 
-- `integration/style.py` has the helpers the rest of the phase uses: `palette_color`, `radius`, `overlay` (the text colour at an opacity), `icon` (a theme icon in one colour) and `tile` (an icon on a rounded tile in a palette colour). Icons are drawn once as ordinary pixmaps; a custom icon engine was tried and dropped, because Qt can outlive Python at exit and then calls into an engine that is gone. `style.generation` goes up with each applied theme, so caches of icons know when to start over.
+- `integration/style.py` has the helpers the rest of the phase uses: `palette_color`, `radius`, `overlay` (the text colour at an opacity), `icon` (a theme icon in one colour) and `tile` (an icon on a rounded tile in a palette colour). Icons are drawn once as ordinary pixmaps; a custom icon engine was tried and dropped, because Qt can outlive Python at exit and then calls into an engine that is gone. `style.generation` goes up with each applied theme, so caches of icons know when to start over. An icon is made only in the sizes it can be shown at, because each size is a search of the icon theme and a drawing of its own (about a millisecond), and a window has some seventy icons: made in all eight sizes they were more than half of the time a start took. `icon` makes the sizes of a button (up to 24, scaled), or with `menu=True` the one size of a menu entry; the window gives its actions their icons together (`_draw_action_icons`), once it is known which of them sit on buttons. `tile` makes every size, for the file kinds that lists, the details and the preview all show, or with `side` the one size a place in the sidebar has, and that size again for the pixels of a dense screen.
 - `qt_models/icons.py` sorts content types into eight kinds (folder, image, video, audio, archive, document, code, other), each with a palette colour. The sidebar maps places to colours the same way.
 - The breadcrumb starts at Home for anything in the home folder.
 - The toolbar has no "show hidden files" button any more; it is in the folder menu and on Ctrl+H.
