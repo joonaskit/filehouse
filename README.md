@@ -89,8 +89,8 @@ install -Dm644 data/filehouse.desktop ~/.local/share/applications/filehouse.desk
 | --- | --- |
 | Enter | Open |
 | Space | Preview (Space again closes it) |
-| Backspace, Alt+Left | Back |
-| Alt+Right | Forward |
+| Backspace, Alt+Left, the mouse's back button | Back |
+| Alt+Right, the mouse's forward button | Forward |
 | Alt+Up | Up |
 | Ctrl+L | Edit the location |
 | Ctrl+H | Show hidden files |

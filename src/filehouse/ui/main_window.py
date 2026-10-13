@@ -42,6 +42,7 @@ from filehouse.ui.dialogs.properties import PropertiesDialog
 from filehouse.ui.dialogs.rename_many import RenameManyDialog
 from filehouse.ui.dialogs.select import SelectDialog
 from filehouse.ui.dialogs.settings import SettingsDialog
+from filehouse.ui.folder_view import history_step
 from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
 from filehouse.ui.pane import Pane
@@ -758,6 +759,7 @@ class MainWindow(QMainWindow):
         view.context_menu_requested.connect(for_this_pane(self._on_context_menu))
         view.dropped.connect(for_this_pane(self._on_dropped))
         view.open_in_tab.connect(for_this_pane(self._open_in_new_tab))
+        view.history_requested.connect(for_this_pane(self._go_in_history))
         view.set_compact(self._narrow)
         if tab.active is None:
             tab.active = pane
@@ -1023,6 +1025,33 @@ class MainWindow(QMainWindow):
 
     def go_up(self):
         self._pane.go_up()
+
+    def _go_in_history(self, step):
+        if step < 0:
+            self.go_back()
+        else:
+            self.go_forward()
+
+    # The back and forward buttons of a mouse. Over a list they are that list's (see
+    # FolderView.history_requested); anywhere else in the window a press that nothing
+    # took comes here, and is the active list's
+
+    def mousePressEvent(self, event):
+        step = history_step(event)
+        if step:
+            self._go_in_history(step)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        step = history_step(event)
+        if step:
+            # The second of two quick presses
+            self._go_in_history(step)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def reload(self):
         self._pane.reload()

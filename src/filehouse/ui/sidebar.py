@@ -20,6 +20,7 @@ from filehouse.core import locations
 from filehouse.integration import style
 from filehouse.qt_models.favourites import Favourite
 from filehouse.ui import clipboard, menus, settings
+from filehouse.ui.folder_view import history_step
 
 _EntryRole = Qt.ItemDataRole.UserRole
 # How full a drive is: a `Usage`, or nothing when that isn't known
@@ -383,6 +384,19 @@ class Sidebar(QListWidget):
         else:
             # A drive that is plugged in but not mounted: mount it, then go there
             self._volumes.mount(entry, self.place_activated.emit)
+
+    def mousePressEvent(self, event):
+        if history_step(event):
+            # The mouse's back or forward button: the window's, not a click on a place
+            event.ignore()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if history_step(event):
+            event.ignore()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event):
         # A middle click opens a place in a tab
