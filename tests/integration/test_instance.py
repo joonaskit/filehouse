@@ -131,6 +131,29 @@ def test_started_with_nothing_it_still_asks_for_a_window(qtbot, first, bus_addre
     assert calls.log == [("open", [], "")]
 
 
+def test_a_later_start_can_ask_the_one_that_runs_to_end(qtbot, first, bus_address):
+    calls = Calls(first)
+    asked = []
+    first.on_quit = lambda: asked.append(True)
+    second = Instance(connect(bus_address))
+    second.claim()
+
+    assert from_another_process(qtbot, second.ask_to_quit) is True
+
+    assert asked == [True]
+    assert calls.log == []
+
+
+def test_asking_one_that_is_gone_to_end_says_so(bus_address):
+    first = Instance(connect(bus_address))
+    first.claim()
+    second = Instance(connect(bus_address))
+    second.claim()
+    first.close()
+
+    assert second.ask_to_quit() is False
+
+
 @pytest.mark.parametrize(
     "method, handler",
     [

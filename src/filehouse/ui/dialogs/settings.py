@@ -77,6 +77,10 @@ class SettingsDialog(QDialog):
         self.restore.setChecked(settings.restore_tabs())
         self.restore.toggled.connect(settings.set_restore_tabs)
 
+        self.stay = QCheckBox("Keep running without a window, so the next one opens sooner")
+        self.stay.setChecked(settings.stay_running())
+        self.stay.toggled.connect(settings.set_stay_running)
+
         self.pane = QCheckBox("Show the details pane")
         self.pane.setChecked(settings.details_pane())
         self.pane.toggled.connect(settings.set_details_pane)
@@ -110,7 +114,7 @@ class SettingsDialog(QDialog):
         appearance = QFormLayout()
         appearance.addRow("Density", self.density)
         layout.addLayout(appearance)
-        layout.addWidget(self._note("Density applies the next time the app starts."))
+        layout.addWidget(self._note("Density applies once every window has been closed."))
 
         layout.addWidget(self._heading("Folders"))
         folders = QFormLayout()
@@ -127,6 +131,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.hidden)
         layout.addWidget(self.pane)
         layout.addWidget(self._note("These two change the window you opened this from as well."))
+        layout.addWidget(self.stay)
 
         layout.addWidget(self._heading("Privacy"))
         layout.addWidget(self.private)

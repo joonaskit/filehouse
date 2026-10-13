@@ -18,12 +18,23 @@ def main(argv=None):
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     # Started by the session bus for another app's "Show in folder": no window of its own
     parser.add_argument("--service", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--quit",
+        action="store_true",
+        help="end the process that stays in the background, once it has nothing open",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     # One process for the session. When one runs already it opens the windows, and this
     # one is done: before anything of the application is set up
     instance = Instance()
     primary = instance.claim()
+    if args.quit:
+        if primary is False:
+            return 0 if instance.ask_to_quit() else 1
+        # None runs, as far as can be told
+        instance.close()
+        return 0
     if primary is False:
         # As URIs: a path is relative to where this process was started, not that one
         uris = [locations.uri(locations.from_argument(path)) for path in args.paths]

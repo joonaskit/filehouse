@@ -33,6 +33,7 @@ _XML = f"""
       <arg type="as" name="uris" direction="in"/>
       <arg type="s" name="activation_token" direction="in"/>
     </method>
+    <method name="Quit"/>
   </interface>
   <interface name="{FILE_MANAGER_INTERFACE}">
     <method name="ShowFolders">
@@ -80,6 +81,8 @@ class Instance:
         self.on_show_folders = lambda uris, token: None
         self.on_show_items = lambda uris, token: None
         self.on_show_properties = lambda uris, token: None
+        # Asked to end, by `filehouse --quit`: takes nothing
+        self.on_quit = lambda: None
 
     def claim(self):
         """Try to be the one process. True when this is it, False when another is and
@@ -118,6 +121,26 @@ class Instance:
                 INTERFACE,
                 "Open",
                 GLib.Variant("(ass)", (list(uris), token)),
+                None,
+                Gio.DBusCallFlags.NO_AUTO_START,
+                _SEND_TIMEOUT_MS,
+                None,
+            )
+        except GLib.Error as error:
+            log.warning("the running filehouse did not answer: %s", error.message)
+            return False
+        return True
+
+    def ask_to_quit(self):
+        """Tell the process that runs to end: at once when it has nothing open, and
+        otherwise when its windows are closed and its jobs have ended. Whether it heard."""
+        try:
+            self._connection.call_sync(
+                BUS_NAME,
+                OBJECT_PATH,
+                INTERFACE,
+                "Quit",
+                None,
                 None,
                 Gio.DBusCallFlags.NO_AUTO_START,
                 _SEND_TIMEOUT_MS,
@@ -184,9 +207,15 @@ class Instance:
         )
 
     def _on_call(self, _connection, _sender, _path, interface, method, parameters, invocation):
-        uris, token = parameters.unpack()
         # Answered first: the caller waits for this, not for a window
         invocation.return_value(None)
+        if (interface, method) == (INTERFACE, "Quit"):
+            try:
+                self.on_quit()
+            except Exception:
+                log.exception("%s failed", method)
+            return
+        uris, token = parameters.unpack()
         handler = {
             (INTERFACE, "Open"): self.on_open,
             (FILE_MANAGER_INTERFACE, "ShowFolders"): self.on_show_folders,

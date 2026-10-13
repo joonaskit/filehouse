@@ -128,7 +128,9 @@ def pick_folder(parent, title, start):
 
 
 def quit_app():
-    QApplication.quit()
+    """End the process, as closing the last window does: not when it is to stay."""
+    if QApplication.quitOnLastWindowClosed():
+        QApplication.quit()
 
 
 def session_to_open():

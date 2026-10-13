@@ -7,7 +7,11 @@ from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import QStyle, QToolButton
 
 from filehouse.integration import style
+from filehouse.ui import main_window
 from filehouse.ui.main_window import MainWindow
+
+# The real one: the tests' own (conftest) never ends the app
+quit_app = main_window.quit_app
 
 
 @pytest.fixture
@@ -539,3 +543,24 @@ def test_an_action_on_a_button_has_its_icon_in_the_buttons_size(qtbot, tmp_path,
     menu_side = window.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize)
     for item in in_menus:
         assert [size.width() for size in item.icon().availableSizes()] == [menu_side], item.text()
+
+
+@pytest.mark.parametrize("ends_with_last_window", [True, False])
+def test_the_process_ends_only_when_it_is_not_to_stay(monkeypatch, ends_with_last_window):
+    # Whether Qt ends the app with its last window is where staying is kept
+    class App:
+        quits = 0
+
+        @staticmethod
+        def quitOnLastWindowClosed():
+            return ends_with_last_window
+
+        @classmethod
+        def quit(cls):
+            cls.quits += 1
+
+    monkeypatch.setattr(main_window, "QApplication", App)
+
+    quit_app()
+
+    assert App.quits == (1 if ends_with_last_window else 0)

@@ -21,10 +21,11 @@ from filehouse.integration.recent import RecentFiles
 from filehouse.integration.theme_watcher import ThemeWatcher
 from filehouse.qt_models.favourites import Favourites
 from filehouse.qt_models.job_model import JobModel
-from filehouse.ui import clipboard, settings
+from filehouse.ui import clipboard, main_window, settings
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
 from filehouse.ui.main_window import MainWindow, session_to_open
+from filehouse.ui.tray import Tray
 
 # How often the garbage is collected, in milliseconds
 _COLLECT_MS = 5000
@@ -48,6 +49,11 @@ def run(args, instance):
     collector.start()
     # Let Ctrl+C in a terminal end the app
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # With the last window closed the process stays, when that is the setting, and the
+    # next start is only a call to it. Whether Qt ends the app with its last window is
+    # the one place this is kept: `main_window.quit_app` asks it too
+    app.setQuitOnLastWindowClosed(not settings.stay_running())
+    settings.changes.stay_running_changed.connect(lambda on: app.setQuitOnLastWindowClosed(not on))
 
     style.set_density(settings.density())
     style.apply(app, theme.load_theme())
@@ -102,7 +108,58 @@ def run(args, instance):
     # The process may end the moment the last job has: what was sent must be on the bus
     app.aboutToQuit.connect(notifier.flush)
 
+    # Whether a window has been closed since the look was read: see start_over
+    stale = []
+
+    def start_over():
+        """With nothing open, the next window is a start: what applies "at the next
+        start" (the density, the scale and the fonts of the theme) is read again."""
+        if stale and not windows and not dialogs:
+            stale.clear()
+            style.set_density(settings.density())
+            style.apply(app, theme.load_theme())
+
+    def closed(kept, item):
+        kept.remove(item)
+        stale.append(True)
+
+    def quit_when_done(close=False):
+        """`filehouse --quit`: not to stay any more. At once with nothing open, and
+        otherwise as it was before there was staying: with the last window, or with the
+        last job of a window that was closed over it. Quit in the tray's menu closes
+        the windows as well (`close`)."""
+        app.setQuitOnLastWindowClosed(True)
+        if close:
+            for item in windows + dialogs:
+                if isValid(item) and item.isVisible():
+                    item.close()
+            if any(isValid(item) and item.isVisible() for item in windows + dialogs):
+                # A window with jobs running asked, and was told not to close: as it was
+                app.setQuitOnLastWindowClosed(not settings.stay_running())
+                return
+        tray.set_shown(False)
+        if not any(isValid(w) for w in windows + dialogs) and not jobs.active_count():
+            app.quit()
+
+    def show_a_window():
+        """A click on the tray's icon: the window there is, or one as a start would."""
+        shown = [w for w in windows if isValid(w)]
+        if shown:
+            shown[-1].come_forward()
+        else:
+            open_all([], "")
+
+    # Seen in the tray for as long as the process is one that stays: there it is opened
+    # from and ended, with a window or without
+    tray = Tray(app)
+    tray.open_requested.connect(show_a_window)
+    tray.new_window_requested.connect(lambda: open_window(locations.StartTarget(locations.home())))
+    tray.quit_requested.connect(lambda: quit_when_done(close=True))
+    tray.set_shown(settings.stay_running())
+    settings.changes.stay_running_changed.connect(tray.set_shown)
+
     def open_window(target, token="", session=None):
+        start_over()
         window = MainWindow(
             target.location,
             select=target.select,
@@ -113,7 +170,7 @@ def run(args, instance):
             session=session,
         )
         windows.append(window)
-        window.destroyed.connect(lambda _obj=None, w=window: windows.remove(w))
+        window.destroyed.connect(lambda _obj=None, w=window: closed(windows, w))
         _use_token(token)
         window.come_forward()
         return window
@@ -136,10 +193,11 @@ def run(args, instance):
     def show_properties(uris, token):
         if not uris:
             return
+        start_over()
         dialog = PropertiesDialog([locations.from_uri(uri) for uri in uris], None)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialogs.append(dialog)
-        dialog.destroyed.connect(lambda _obj=None, d=dialog: dialogs.remove(d))
+        dialog.destroyed.connect(lambda _obj=None, d=dialog: closed(dialogs, d))
         _use_token(token)
         dialog.show()
         dialog.raise_()
@@ -154,12 +212,13 @@ def run(args, instance):
         [locations.resolve_item(uri) for uri in uris], token
     )
     instance.on_show_properties = show_properties
+    instance.on_quit = quit_when_done
 
     if args.service:
         # Started for a call that is on its way. If nothing came of it, it is over
         QTimer.singleShot(
             _SERVICE_WAIT_MS,
-            lambda: None if windows or dialogs or jobs.active_count() else app.quit(),
+            lambda: None if windows or dialogs or jobs.active_count() else main_window.quit_app(),
         )
     else:
         open_all([locations.resolve_start(path) for path in args.paths], "")
