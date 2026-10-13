@@ -7,11 +7,12 @@ operations panel and the island reporter both observe it.
 
 import time
 from collections import deque
+from dataclasses import dataclass
 
 from PySide6.QtCore import QLocale, QObject, QTimer, Signal
 
 from filehouse.core import locations
-from filehouse.core.operations import Job, JobKind, JobQueue, JobState
+from filehouse.core.operations import Job, JobKind, JobQueue, JobState, undo
 from filehouse.core.operations.archive import CompressJob, ExtractJob
 from filehouse.qt_models import workers
 
@@ -34,6 +35,19 @@ ICONS = {
 }
 
 
+@dataclass(frozen=True)
+class Undone:
+    """What taking an action back came to. A move or a trash is taken back by `job`,
+    which reports as any job does; a rename or something that was made is taken back
+    at once, with where the files are now in `changed` and what could not be done, by
+    name, in `errors`."""
+
+    record: undo.Record
+    job: Job | None = None
+    changed: tuple = ()
+    errors: tuple = ()
+
+
 class JobModel(QObject):
     job_added = Signal(object)
     job_changed = Signal(object)
@@ -41,6 +55,8 @@ class JobModel(QObject):
     # A job waits for `question.answer(...)`. Exactly one listener should give it
     question_asked = Signal(object, object)
     idle = Signal()  # the last active job has ended
+    # What Undo would take back is another action now, or none
+    undo_changed = Signal()
 
     # From worker threads to the UI thread
     _reported = Signal(object)
@@ -56,6 +72,8 @@ class JobModel(QObject):
         self._last_report = {}  # job id -> (state, time); touched only by that job's thread
         self._keep_finished_ms = keep_finished_ms
         self._queue = JobQueue(workers.spawn)
+        # The actions that can be taken back, of every window: jobs belong to the process
+        self._history = undo.History()
         self._reported.connect(self._on_reported)
         self._asked.connect(self.question_asked)
         # Nobody can answer a job once its model is gone, so it must not wait
@@ -113,6 +131,37 @@ class JobModel(QObject):
         )
         self._add(job, origin)
         return job
+
+    def remember(self, record):
+        """Keep an action so that it can be taken back. A job's own is kept when it
+        ends; this is for what the windows do at once: a rename, a new folder."""
+        if record is None or not record.pairs:
+            return
+        self._history.push(record)
+        self.undo_changed.emit()
+
+    def undo_text(self):
+        """What Undo would take back, to follow the word: "move of 3 items". None when
+        there is nothing."""
+        record = self._history.peek()
+        return record.describe() if record is not None else None
+
+    def undo(self, origin=None):
+        """Take back the last action that can be. Returns an `Undone`, or None when
+        there is none. What is taken back is not kept to be done again: there is no redo."""
+        record = self._history.pop()
+        if record is None:
+            return None
+        self.undo_changed.emit()
+        if record.kind in (undo.Kind.MOVE, undo.Kind.TRASH):
+            job = Job.undo_of(record, prompt=self._prompt, on_change=self._report)
+            self._add(job, origin)
+            return Undone(record, job=job)
+        if record.kind is undo.Kind.RENAME:
+            changed, errors = undo.rename_back(record)
+        else:
+            changed, errors = undo.remove_created(record)
+        return Undone(record, changed=tuple(changed), errors=tuple(errors))
 
     def cancel(self, job):
         job.cancel()
@@ -183,6 +232,8 @@ class JobModel(QObject):
             return
         self._ended.add(job.id)
         self._last_report.pop(job.id, None)
+        # Also of a job that was cancelled or failed: what it did finish
+        self.remember(job.undo)
         if job.state is not JobState.FAILED:
             # A failed job stays until it is dismissed
             QTimer.singleShot(self._keep_finished_ms, self, lambda: self.dismiss(job))
@@ -229,6 +280,9 @@ def verb(job):
 def heading(job):
     """What the job is doing, whatever state it is in: "Copying 3 items to Pictures"."""
     text = short_heading(job)
+    if job.kind is JobKind.MOVE and job.destination is None:
+        # A move that is taken back: each item to where it was, not all to one folder
+        return f"{text} back"
     if job.kind in (JobKind.COPY, JobKind.MOVE, JobKind.EXTRACT):
         text += f" to {locations.display_name(job.destination)}"
     return text

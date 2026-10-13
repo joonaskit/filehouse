@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from filehouse.core import archives, locations, search
 from filehouse.core.errors import OperationError
 from filehouse.core.listing import mode_text
-from filehouse.core.operations import JobKind, permissions, quick
+from filehouse.core.operations import JobKind, permissions, quick, undo
 from filehouse.core.operations.conflicts import split_extension
 from filehouse.integration import desktop, style
 from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE
@@ -421,6 +421,10 @@ class MainWindow(QMainWindow):
             "Paste", "edit-paste", QKeySequence.keyBindings(keys.Paste), self.paste
         )
         self._rename = action("Rename…", "edit-rename", [QKeySequence("F2")], self.rename)
+        # The last rename, move, trash or new folder of any window: see JobModel.undo
+        self._undo = action("Undo", "edit-undo", [QKeySequence("Ctrl+Z")], self.undo)
+        self._jobs.undo_changed.connect(self._update_undo)
+        self._update_undo()
         # A copy beside the file, and a link to it. Neither has a key: Ctrl+D is the
         # favourites', and Dolphin has none for them either
         self._duplicate = action("Duplicate", "edit-duplicate", [], self.duplicate)
@@ -1610,6 +1614,7 @@ class MainWindow(QMainWindow):
             # The folder's own menu
             menu.addActions([self._new_folder, self._new_file])
             menu.addSeparator()
+            menu.addAction(self._undo)
             menu.addAction(self._paste)
             menu.addActions(self._selecting())
             menu.addSeparator()
@@ -2143,6 +2148,7 @@ class MainWindow(QMainWindow):
                 made = quick.create_file(folder, text)
             except OperationError as error:
                 return f"Could not create the file: {error.message}."
+            self._jobs.remember(undo.created(made))
             self._select_when_listed(folder, locations.basename(made))
             return None
 
@@ -2159,6 +2165,7 @@ class MainWindow(QMainWindow):
                 made = quick.create_folder(folder, text)
             except OperationError as error:
                 return f"Could not create the folder: {error.message}."
+            self._jobs.remember(undo.created(made))
             self._select_when_listed(folder, locations.basename(made))
             return None
 
@@ -2179,6 +2186,7 @@ class MainWindow(QMainWindow):
                 renamed = quick.rename(target, text)
             except OperationError as error:
                 return f"Could not rename “{info.display_name}”: {error.message}."
+            self._jobs.remember(undo.renamed([(renamed, target)]))
             self._select_when_listed(folder, locations.basename(renamed))
             # Nothing watches the folders below: a result that was renamed is found again
             self._pane.search_again()
@@ -2195,8 +2203,11 @@ class MainWindow(QMainWindow):
         """Several at once, in a dialog that shows every new name first."""
         pane = self._pane
         folder = self._location
+        before = [locations.child(folder, info.name) for info in infos]
 
         def renamed(now):
+            # In the order of the list, as they were given
+            self._jobs.remember(undo.renamed(zip(now, before, strict=True)))
             names = {locations.name_below(folder, location) for location in now}
             pane.select_names_when_listed(folder, names)
             # Nothing watches the folders below: results that were renamed are found again
@@ -2206,12 +2217,44 @@ class MainWindow(QMainWindow):
 
         dialog = RenameManyDialog(
             self,
-            [(locations.child(folder, info.name), info.is_dir) for info in infos],
+            [(location, info.is_dir) for location, info in zip(before, infos, strict=True)],
             renamed,
         )
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.open()
         return dialog
+
+    # Undo
+
+    def _update_undo(self):
+        what = self._jobs.undo_text()
+        self._undo.setText(f"Undo {what}" if what else "Undo")
+        self._undo.setEnabled(what is not None)
+
+    def undo(self):
+        """Take back the last rename, move, trash or new folder, of this window or of
+        another. A move and a trash are taken back by a job, which says how it went
+        as any job does; the others at once, and what could not be done is named."""
+        undone = self._jobs.undo(origin=self)
+        if undone is None or undone.job is not None:
+            return undone
+        what = undone.record.describe()
+        errors = list(undone.errors)
+        if undone.changed:
+            self._pane.search_again()
+            if len(undone.changed) == 1 and undone.record.kind is undo.Kind.RENAME:
+                now = undone.changed[0]
+                self._select_when_listed(locations.parent(now), locations.basename(now))
+        if not errors:
+            self.statusBar().showMessage(f"Undid the {what}", _COPIED_MS)
+        elif len(errors) == 1:
+            self._show_error(f"Could not undo the {what}: {errors[0]}.")
+        else:
+            # Every one of them, by name
+            summary = f"Could not undo the {what} for {len(errors)} of them."
+            self._show_error(summary)
+            ErrorDetails(SimpleNamespace(errors=errors, summary=summary), self).open()
+        return undone
 
     def _ask_name(self, title, label, name, apply, select_to=None):
         dialog = NameDialog(self, title, label, name, apply, select_to)

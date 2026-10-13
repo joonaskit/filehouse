@@ -34,6 +34,7 @@ Everyday browsing and file operations work, and operations show in the shell's i
 
 - Copy, cut and paste, drag and drop (a move on the same file system, a copy across), Move to…, rename, new folder and new file
 - **Duplicate** (a copy beside the file, "report (2).pdf") and **Create link** (a symbolic link beside it, or in another folder by dropping with Ctrl+Shift or from the Alt drop menu)
+- **Undo** (Ctrl+Z) takes back the last rename, move, trash, new folder or new file, from the last one and up to twenty back. It never replaces anything: if something else has the old place now it asks, and what it could not put back is named
 - **Rename several at once** (F2 with several selected): find and replace, a name with a number, or upper and lower case, with every new name shown first. A name that is taken blocks all of it, so nothing is half renamed, and nothing is ever replaced
 - Move to trash, with restore and empty; permanent delete asks first and never happens by itself
 - Permission presets (Private, Shared, Make executable, Read-only) and a properties dialog
@@ -96,6 +97,7 @@ install -Dm644 data/filehouse.desktop ~/.local/share/applications/filehouse.desk
 | Ctrl+H | Show hidden files |
 | F5 | Reload |
 | Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, paste |
+| Ctrl+Z | Undo the last rename, move, trash or new folder |
 | Delete | Move to trash |
 | Shift+Delete | Delete permanently (asks first) |
 | F2 | Rename (several at once when several are selected) |

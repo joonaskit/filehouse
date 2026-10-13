@@ -109,13 +109,14 @@ filehouse/
 │   │       ├── job.py           Job, JobState, JobProgress
 │   │       ├── plan.py          expand a request into concrete steps, count bytes
 │   │       ├── copy.py          copy and move (same-device rename, cross-device copy+delete)
-│   │       ├── trash.py         trash (restore is added in phase 5)
+│   │       ├── trash.py         trash, and finding there what was trashed
 │   │       ├── delete.py        permanent delete
 │   │       ├── archive.py       extract and compress, each a job
 │   │       ├── conflicts.py     the questions a job asks, answers, names for "Keep both"
 │   │       ├── quick.py         new folder, new file, rename and links: immediate, no job
 │   │       ├── rename_many.py   several renames as one: the names, the check, all or none
 │   │       ├── permissions.py   the permission presets: immediate, no job
+│   │       ├── undo.py          what an action did, kept so that it can be taken back
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
 │   │   ├── directory_model.py   QAbstractItemModel over listing + Gio.FileMonitor
@@ -262,7 +263,15 @@ This is the part that has to be right. Every user action that changes files beco
 
 **Concurrency.** The queue runs up to two jobs at a time; others wait as `queued`. The core starts no threads: `JobQueue` is given a `spawn` function by `qt_models/`. A job cancelled while it is still queued reports `cancelled` at once and is never started. This also keeps the app well inside the island's limit of 8 activities per sender.
 
-**Undo.** Not in v1. Trash is the safety net. A later "Undo" can cover rename, move (same device) and trash.
+**Undo (#16).** Ctrl+Z, and Undo in the folder's menu, take back the last rename, move, trash, new folder or new file. `core/operations/undo.py` has what is kept and how it is taken back.
+
+- **What is kept is what was finished.** A job that ends has a `Record` in `job.undo`, made from its steps, also when it was cancelled or failed halfway: the files a move really moved, the items a trash really trashed. A folder that went over whole is one pair of (where it is now, where it was); one that only partly did gives the pairs of what went. Left out, because they cannot be taken back: whatever replaced something (what it replaced is gone), what was deleted where there is no trash, and every permanent delete. A rename and a new folder or file, which finish at once, are told to the history by the window (`JobModel.remember`).
+- **Taking back is an ordinary operation.** A move is taken back by a move job of each item to where it was, and a trash by a restore job (`Job.undo_of`): with progress, cancel, errors and Retry as any job, and by the same safety rules. Nothing is replaced: when something else has the old place now, the job asks as any move does, and with nobody to ask it fails for that file by name. A rename is renamed back and something that was made is removed, at once, as they were done (`undo.rename_back`, `undo.remove_created`); several renames go back all or none, through `rename_many`.
+- **The world may have changed.** A file that is no longer where the action left it, a name that is taken, an item that is no longer in the trash: each is an error naming the file, and the rest is put back. The folder an item was in is made again when it went with the move.
+- **A trashed item is found** by where it was and when it went there (`trash.find`, from `trash::orig-path` and `trash::deletion-date` of `trash:///`), when the undo runs and not when the trash did: the trash gives its own names, and Gio does not say which. Without GVFS there is no trash to list, and the restore fails saying so. Checked on a real session: two items trashed and restored, found at once.
+- **Something that was made is removed only while it is empty**: a folder by a delete that is never recursive, which the file system refuses for one that holds anything, and a file only when nothing was written to it. This is a delete without the question a permanent delete asks (safety rule 5), on the ground that there is nothing in it to lose; anything a user has since put there is never deleted.
+- **Decided** (the issue's open questions): a history, of the last twenty actions (`undo.LIMIT`), taken back from the last one; for the process and not a window, since jobs belong to the process, so one window takes back what another did; no redo, so the job that takes back is not kept (`job.is_undo`); and not kept past the end of the process, which with a process that stays is a long time all the same.
+- **Not done:** a copy (taking it back is a permanent delete of the copies, which must ask), a duplicate, a link, a restore from the trash view, and changed permissions (the old modes would have to be remembered). After a folder that only partly moved is taken back, the folders the move made at the destination stay there, empty.
 
 ### Toolbar layout
 
@@ -320,7 +329,7 @@ F2 with several entries selected opens `ui/dialogs/rename_many.py` in place of t
 - **Every new name is shown first**, beside the old one, and checked on every key (`rename_many.check`): a name that cannot be used, a name two of them would get, and a name something else has, each shown in the danger colour with the reason, and any one of them **blocks all of it**. A name that another of the selected has now is free when that one gets a new name too (1 → 2, 2 → 3 is done 2 first); two that trade names are blocked, since no order does it.
 - **All or none.** It is immediate, not a job (the second question): a rename is one call, and hundreds are done before a progress bar could be read. The check is advisory, as planning is for a job, so each rename is still the single rename that never replaces; when one fails (a file appeared meanwhile, a permission), those done before it are given their names back and the dialog says which file and why. If one of those cannot go back either, that is said with the count.
 - Afterwards the renamed entries are selected.
-- Not done: a job for a slow drive, undo (#16, for which this is one step), trading names through a temporary name, and regular expressions.
+- Not done: a job for a slow drive, trading names through a temporary name, and regular expressions.
 
 ### The view of each folder (#43)
 
@@ -773,7 +782,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Custom title bar: a decision of its own, #9 (and #21 comment in the shell repo).
 - Recent files written to the freedesktop recent-files list, for the shell's launcher (shell #24, point 4): #14, built; see below.
 - A notification for a job that finished while the window was hidden (shell #24, point 7): #15, built; see below.
-- Undo for rename, move and trash: #16.
+- Undo for rename, move and trash: #16, built; see "Undo".
 - Remote locations through GVFS: #17.
 - Search: #18, built; see "Search".
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19, built; see "Archives".
