@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QProgressBar,
     QScrollArea,
     QSizePolicy,
     QToolButton,
@@ -24,9 +23,10 @@ from filehouse.core.operations import JobState
 from filehouse.integration import style
 from filehouse.qt_models import job_model
 from filehouse.ui.dialogs.details import ErrorDetails
+from filehouse.ui.progress_bar import ProgressBar
+from filehouse.ui.slide import Slide
 
 _MAX_HEIGHT = 220
-_PROGRESS_STEPS = 1000
 
 
 class JobRow(QWidget):
@@ -44,8 +44,7 @@ class JobRow(QWidget):
         for label in (self.title, self.text):
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.bar = QProgressBar()
-        self.bar.setTextVisible(False)
+        self.bar = ProgressBar()
         self.bar.setFixedHeight(style.px(6))
 
         self.cancel = self._button("Cancel", lambda: jobs.cancel(job))
@@ -86,14 +85,9 @@ class JobRow(QWidget):
         self.text.setToolTip(self.text.text())
         self.text.setVisible(bool(self.text.text()))
 
-        fraction = job.progress.fraction
         self.bar.setVisible(not state.is_final)
-        if fraction is None:
-            # Busy indicator: the totals aren't known yet
-            self.bar.setRange(0, 0)
-        else:
-            self.bar.setRange(0, _PROGRESS_STEPS)
-            self.bar.setValue(round(fraction * _PROGRESS_STEPS))
+        # Busy without one: the totals aren't known yet
+        self.bar.set_fraction(job.progress.fraction)
 
         failed = state is JobState.FAILED
         self.cancel.setVisible(not state.is_final)
@@ -152,6 +146,7 @@ class OperationsPanel(QFrame):
         layout.setSpacing(0)
         layout.addWidget(self._header)
         layout.addWidget(self._scroll)
+        self._slide = Slide(self)
 
         jobs.job_added.connect(self._add)
         jobs.job_changed.connect(self._change)
@@ -210,7 +205,6 @@ class OperationsPanel(QFrame):
         if not rows:
             # The next job starts with the panel closed
             self._open = False
-        self.setVisible(self._open and bool(rows))
         running = sum(not row.job.state.is_final for row in rows)
         failed = sum(row.job.state is JobState.FAILED for row in rows)
         if running:
@@ -220,5 +214,9 @@ class OperationsPanel(QFrame):
         else:
             text = "Operations finished"
         self._header.setText(text)
-        # As tall as its rows, up to a limit; more rows than that scroll
-        self._scroll.setFixedHeight(min(self._holder.sizeHint().height(), style.px(_MAX_HEIGHT)))
+        if rows:
+            # As tall as its rows, up to a limit; more rows than that scroll. Without
+            # rows it is on its way out, as tall as it was
+            height = min(self._holder.sizeHint().height(), style.px(_MAX_HEIGHT))
+            self._scroll.setFixedHeight(height)
+        self._slide.set_shown(self._open and bool(rows))

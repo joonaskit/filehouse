@@ -137,6 +137,7 @@ filehouse/
 │   │   ├── island.py            activities client: JobModel → activities, actions → jobs
 │   │   ├── instance.py          one process per session, and org.freedesktop.FileManager1
 │   │   ├── theme_watcher.py     follows the theme file while the app runs
+│   │   ├── motion.py            how long things take to move, at the desktop's animation speed
 │   │   ├── autostart.py         the entry that starts the app with the session
 │   │   ├── places.py            the places file Dolphin keeps (user-places.xbel), edited in place
 │   │   ├── recent.py            tells the desktop's lists of recent files what was opened
@@ -156,6 +157,8 @@ filehouse/
 │       ├── operations_panel.py  in-app list of jobs, with cancel, retry and details
 │       ├── job_status.py        the running jobs as one line in the status bar
 │       ├── sheet.py             a panel that slides up from the bottom, for the narrow window
+│       ├── slide.py             showing and hiding a part of the window by sliding it
+│       ├── progress_bar.py      the bar of a job, filling from one report to the next
 │       ├── details_pane.py      what is selected, beside the list
 │       ├── clipboard.py         cut, copy and paste of files as `text/uri-list`
 │       ├── settings.py          what is remembered between runs
@@ -534,6 +537,22 @@ Not done: `QtMultimedia` for video, and KDE's thumbnail plugins through KIO: wit
   - A theme file that is gone or cannot be read leaves the look as it is; the defaults are for starting without one. The two job titles painted in the failure colour (`job_status`, `operations_panel`) are set again with the next update of the job.
 - Window decorations stay server-side (KWin draws them). Matching the frame to the shell is tracked in shell issue #56.
 
+### Motion (`integration/motion.py`, #11)
+
+The shell has a catalogue of its animations (`docs/ANIMATION_CATALOGUE.md` in the quickshell repo). Most of it is about what a window of widgets does not have: pills that morph, a dock that popups grow out of, things that spring up from nothing. What carries over is a slide, a progress bar's fill, and the rule that nothing has a duration of its own.
+
+- **The values are a copy.** They are in the shell's `Theme.qml` and not in `theme.json`, so `motion.py` has them, with the catalogue named as the source. Nothing in `ui/` has a duration or an easing: it asks `motion.ms()` when an animation starts. Should the shell ever export them, this module is the one place to read them.
+- **A slide takes 160 ms** (`SLIDE_MS`, the shell's `animDurationPopover`) with `OutCubic`, opening and closing alike. Not the 360 ms of the shell's own slides, and no overshoot: that is for a pill that morphs, and a file browser is to stay out of the way. The shell leaves the overshoot out of its full-width bar for the same reason.
+- **A progress bar fills in 300 ms** (`PROGRESS_MS`, `animDurationProgress`) with `OutQuad`, as the shell's bars do.
+- **What slides** (`ui/slide.py`):
+  - the sheets of the narrow window (details and preview) and the operations panel, by their height (`Slide`): what is above gives and takes the room;
+  - the details pane of the wide window, by its width in the splitter (`SideSlide`), when the user shows or hides it (F11, the button, the setting). It may be narrower than its minimum only while it moves, and comes back as wide as it was.
+- **What does not:** the details pane coming and going with a split or a narrow window (the list is changing under it already), the switch between the wide and the narrow layout (it happens while the window is being resized), and hover and selection colours (a stylesheet cannot animate, and painting them by hand is a lot for a fade). The settings have checkboxes, so there is no switch with a knob to slide.
+- **The bars** (`ui/progress_bar.py`, in the status bar and the panel's rows) fill from one report of a job to the next. A bar starts where the job is, without a fill, when it appears or was busy. It is behind the job and never ahead of it, and it says nothing about done: only the job's state does (safety rule 1).
+- **The desktop's animation speed** scales every duration: `AnimationDurationFactor` in the `[KDE]` group of `kdeglobals`, the user's file before the system's, 1 without one. At 0 nothing moves: a panel is shown or hidden at once and a bar jumps. It is read again when it is two seconds old, so a change in System Settings applies while the app runs. The tests run with it at 0 (`tests/conftest.py`), and the tests of the animations turn it on.
+- **In a window that is not on show** nothing is animated either.
+- **`settled`** of a slide means that what is beside it has its new size, with or without an animation: the list scrolls to what is selected then.
+
 ### Drag and drop and clipboard
 
 - Dragging out sets `text/uri-list`. This is what the dock's future `DropArea` in #32 will accept.
@@ -801,7 +820,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Video and PDF thumbnails: #20, built; see below.
 - Duplicate and Create link (#41), selecting by pattern (#42), renaming several at once (#40), the view of each folder (#43) and the tabs of last time (#49): built; each has a section above.
 
-Also open, though never on this list: packaging as a Flatpak (#7), localization (#10), the shell's animations (#11) and tabs (#22). The split view (#12) and tabs are built; see below.
+Also open, though never on this list: packaging as a Flatpak (#7), localization (#10) and tabs (#22). The split view (#12) and tabs are built; see below.
 
 ### Split view (#12)
 

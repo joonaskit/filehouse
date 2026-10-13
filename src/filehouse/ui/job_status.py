@@ -1,13 +1,13 @@
 """The running operations as one line in the status bar. Click it for the panel."""
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QToolButton
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton
 
 from filehouse.core.operations import JobState
 from filehouse.integration import style
 from filehouse.qt_models import job_model
+from filehouse.ui.progress_bar import ProgressBar
 
-_PROGRESS_STEPS = 1000
 _BAR_WIDTH = 120
 _COMPACT_BAR_WIDTH = 64
 
@@ -30,8 +30,7 @@ class JobStatus(QToolButton):
 
         self.title = QLabel()
         self.title.setTextFormat(Qt.TextFormat.PlainText)
-        self.bar = QProgressBar()
-        self.bar.setTextVisible(False)
+        self.bar = ProgressBar()
         self.bar.setFixedSize(style.px(_BAR_WIDTH), style.px(4))
         self.percent = QLabel()
         layout = QHBoxLayout(self)
@@ -89,13 +88,11 @@ class JobStatus(QToolButton):
 
         self.bar.setVisible(bool(active))
         fraction = job_model.overall_fraction(active)
+        # Busy without one: nothing is known yet about how much there is to do
+        self.bar.set_fraction(fraction)
         if fraction is None:
-            # Busy indicator: nothing is known yet about how much there is to do
-            self.bar.setRange(0, 0)
             self.percent.hide()
         else:
-            self.bar.setRange(0, _PROGRESS_STEPS)
-            self.bar.setValue(round(fraction * _PROGRESS_STEPS))
             # Never 100 %: all the bytes written is not yet done, only the job's state says that
             self.percent.setText(f"{min(99, int(fraction * 100))} %")
             self.percent.setVisible(bool(active))
