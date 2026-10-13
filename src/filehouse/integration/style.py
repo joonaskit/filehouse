@@ -467,8 +467,9 @@ def _stylesheet():
         }}
         QListView::item {{ border-radius: {medium}px; padding: {px(4)}px; }}
 
-        /* A list beside another one: the active one has the accent colour */
-        #pane[split="true"] {{
+        /* The list has a border around it, as the cards beside it have. A list beside
+           another one: the active one has the accent colour */
+        #pane {{
             border: 1px solid {card_border}; border-radius: {large}px; padding: {px(2)}px;
         }}
         #pane[split="true"][active="true"] {{ border-color: {colors["accent"]}; }}

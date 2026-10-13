@@ -69,4 +69,5 @@ These are requirements, not guidelines. Any change in `core/operations/` needs a
 - Island updates: at most 4 per second per job, final state sent immediately, never `cancelled` before the work has actually stopped.
 - Colours and fonts go through `QPalette` and `QFont` from the theme. The stylesheet is for shapes (rounded groups, cards, rows, menus) and takes every colour, radius and size from `integration/style.py`: no literal colours, and nothing that assumes a dark background. Icons come from `style.icon` and `style.tile`.
 - Sizes are defined in unscaled pixels and multiplied by the theme's `scale.ui`.
+- Durations and easings come from `integration/motion.py`, and a duration is asked for with `motion.ms()` when the animation starts: the desktop's animation speed scales it, and at zero nothing is animated.
 - Tests run against `tmp_path`; never touch the real home directory or the real trash. `tests/conftest.py` points `HOME` and the XDG directories at a temporary folder before `gi` loads; tests that need a working trash use the `home_dir` fixture.

@@ -434,6 +434,45 @@ def test_the_details_pane_can_be_hidden_and_comes_back(qtbot, tree, home_dir):
     assert window._details.isVisible() and settings.details_pane()
 
 
+def test_the_details_pane_slides_away_and_back(qtbot, tree, home_dir, monkeypatch):
+    from filehouse.integration import motion
+
+    monkeypatch.setattr(motion, "factor", lambda: 1.0)
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1100, 600)
+    window.show()
+    width = window._details.width()
+    minimum = window._details.minimumWidth()
+
+    window._pane_toggle.trigger()
+
+    # On its way out: still there to see
+    assert window._details.isVisible()
+    qtbot.waitUntil(lambda: not window._details.isVisible(), timeout=5000)
+
+    window._pane_toggle.trigger()
+
+    assert window._details.isVisible() and window._details.width() < width
+    qtbot.waitUntil(lambda: window._details.width() == width, timeout=5000)
+    # What let it be narrower than it may be is over with the slide
+    qtbot.waitUntil(lambda: window._details.minimumWidth() == minimum, timeout=5000)
+
+
+def test_the_details_pane_does_not_slide_for_a_split(qtbot, tree, home_dir, monkeypatch):
+    from filehouse.integration import motion
+
+    monkeypatch.setattr(motion, "factor", lambda: 1.0)
+    window = open_window(qtbot, tree / "Downloads")
+    window.resize(1100, 600)
+    window.show()
+
+    window.set_split(True)
+    assert not window._details.isVisible()
+
+    window.set_split(False)
+    assert window._details.isVisible()
+
+
 def test_a_hidden_pane_is_not_asked_for_details(qtbot, tree, home_dir, monkeypatch):
     window = open_window(qtbot, tree / "Downloads")
     window.resize(1100, 600)

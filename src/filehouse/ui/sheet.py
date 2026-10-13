@@ -1,12 +1,10 @@
 """A panel that slides up from the bottom of the window and down again."""
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 
 from filehouse.integration import style
-
-_SLIDE_MS = 160
-_NO_LIMIT = 16777215
+from filehouse.ui.slide import Slide
 
 
 class Sheet(QWidget):
@@ -18,43 +16,19 @@ class Sheet(QWidget):
 
     def __init__(self, content, parent=None):
         super().__init__(parent)
-        self._open = False
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(style.px(8), style.px(4), style.px(8), style.px(4))
         layout.addWidget(content)
-        self._slide = QPropertyAnimation(self, b"maximumHeight", self)
-        self._slide.setDuration(_SLIDE_MS)
-        self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._slide.finished.connect(self._on_slid)
-        self.hide()
+        self._slide = Slide(self)
+        self._slide.settled.connect(self.settled)
 
     @property
     def is_open(self):
-        return self._open
+        return self._slide.shown
 
     def set_open(self, open_, animate=True):
-        if open_ == self._open:
+        if open_ == self.is_open:
             return
-        self._open = open_
-        self._slide.stop()
-        if not animate:
-            self.setMaximumHeight(_NO_LIMIT)
-            self.setVisible(open_)
-            self.settled.emit()
-        else:
-            start = self.height() if self.isVisible() else 0
-            if open_:
-                self.setMaximumHeight(start)
-                self.show()
-            self._slide.setStartValue(start)
-            self._slide.setEndValue(self.sizeHint().height() if open_ else 0)
-            self._slide.start()
+        self._slide.set_shown(open_, animate)
         self.opened_changed.emit(open_)
-
-    def _on_slid(self):
-        if not self._open:
-            self.hide()
-        # Free to follow its content from here on: what it shows changes height
-        self.setMaximumHeight(_NO_LIMIT)
-        self.settled.emit()

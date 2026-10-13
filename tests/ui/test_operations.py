@@ -940,6 +940,24 @@ def test_the_status_bar_opens_the_panel_and_its_header_closes_it(
     assert not window._panel.isVisible()
 
 
+def test_the_panel_slides_open_and_shut(qtbot, tree, open_window, jobs, wait_final, monkeypatch):
+    from filehouse.integration import motion
+
+    monkeypatch.setattr(motion, "factor", lambda: 1.0)
+    window = open_window(tree / "dst")
+    wait_final(jobs, drop(window, [tree / "src" / "a.txt"]))
+    panel = window._panel
+
+    window._job_status.click()
+    assert panel.is_open and panel.isVisible() and panel.maximumHeight() == 0
+    qtbot.waitUntil(lambda: panel.height() == panel.sizeHint().height(), timeout=TIMEOUT)
+
+    panel._header.click()
+    # Closed, and on its way out
+    assert not panel.is_open and panel.isVisible()
+    qtbot.waitUntil(lambda: not panel.isVisible(), timeout=TIMEOUT)
+
+
 def test_a_question_opens_the_panel_and_a_closed_panel_stays_closed(
     qtbot, tree, open_window, jobs, wait_final, wait_question
 ):

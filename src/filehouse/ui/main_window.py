@@ -51,6 +51,7 @@ from filehouse.ui.preview import SHEET_SHARE, PreviewWindow
 from filehouse.ui.search_field import SearchField
 from filehouse.ui.sheet import Sheet
 from filehouse.ui.sidebar import Sidebar
+from filehouse.ui.slide import SideSlide
 from filehouse.ui.tab import Tab
 from filehouse.ui.tab_bar import TabBar
 
@@ -197,7 +198,6 @@ class MainWindow(QMainWindow):
         # and every action are about it
         self._action_icons = []  # (action, icon name, colour) to make them again
         self._button_actions = []  # the ones a button shows, not only a menu
-        self._unsplit_sizes = None
         self._tab_bar = TabBar()
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
         self._tab_bar.tabMoved.connect(self._on_tab_moved)
@@ -268,6 +268,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([style.px(200), style.px(620), style.px(250)])
         splitter.setHandleWidth(style.px(8))
         splitter.setContentsMargins(style.px(8), 0, style.px(8), style.px(4))
+        self._details_slide = SideSlide(splitter, self._details)
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -842,21 +843,13 @@ class MainWindow(QMainWindow):
         """Changed here or in another window: it is one setting."""
         # The action is checked already when it was its own click that changed it
         self._pane_toggle.setChecked(show)
-        self._sync_details()
+        self._sync_details(animate=True)
         self._update_state()
 
-    def _sync_details(self):
-        """No room for the details beside two lists: they come and go with the split."""
-        wanted = self._details_wanted()
-        if wanted == (not self._details.isHidden()):
-            return
-        if wanted:
-            self._details.setVisible(True)
-            if self._unsplit_sizes:
-                self._splitter.setSizes(self._unsplit_sizes)
-        else:
-            self._unsplit_sizes = self._splitter.sizes()
-            self._details.setVisible(False)
+    def _sync_details(self, animate=False):
+        """No room for the details beside two lists: they come and go with the split,
+        at once. Asked for or put away by the user, the pane slides."""
+        self._details_slide.set_shown(self._details_wanted(), animate)
 
     # Tabs
 
@@ -1302,7 +1295,7 @@ class MainWindow(QMainWindow):
             self._wide_sizes = self._splitter.sizes()
         else:
             self._show_details.setChecked(False)
-        self._details.setVisible(self._details_wanted())
+        self._details_slide.set_shown(self._details_wanted(), animate=False)
         self._sidebar.set_rail(narrow)
         self._path_bar.set_short(narrow)
         for pane in self._all_panes():
