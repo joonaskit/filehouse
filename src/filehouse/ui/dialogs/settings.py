@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from filehouse.integration import style
+from filehouse.integration import autostart, style
 from filehouse.ui import settings
 
 _DENSITIES = (("comfortable", "Comfortable"), ("compact", "Compact"))
@@ -79,7 +79,12 @@ class SettingsDialog(QDialog):
 
         self.stay = QCheckBox("Keep running without a window, so the next one opens sooner")
         self.stay.setChecked(settings.stay_running())
-        self.stay.toggled.connect(settings.set_stay_running)
+        self.stay.toggled.connect(self._on_stay_toggled)
+        # Only a process that stays is worth starting at a login
+        self.login = QCheckBox("Start it in the background when I log in")
+        self.login.setChecked(settings.stay_running() and autostart.enabled())
+        self.login.setEnabled(settings.stay_running())
+        self.login.toggled.connect(self._on_login_toggled)
 
         self.pane = QCheckBox("Show the details pane")
         self.pane.setChecked(settings.details_pane())
@@ -132,6 +137,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.pane)
         layout.addWidget(self._note("These two change the window you opened this from as well."))
         layout.addWidget(self.stay)
+        layout.addWidget(self.login)
 
         layout.addWidget(self._heading("Privacy"))
         layout.addWidget(self.private)
@@ -159,6 +165,19 @@ class SettingsDialog(QDialog):
         label.setEnabled(False)
         label.setWordWrap(True)
         return label
+
+    def _on_stay_toggled(self, on):
+        settings.set_stay_running(on)
+        if not on:
+            self.login.setChecked(False)
+        self.login.setEnabled(on)
+
+    def _on_login_toggled(self, on):
+        if not autostart.set_enabled(on):
+            # The folder could not be written: shown as it is
+            self.login.blockSignals(True)
+            self.login.setChecked(autostart.enabled())
+            self.login.blockSignals(False)
 
     def _on_notify_toggled(self, on):
         settings.set_notify(on)

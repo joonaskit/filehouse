@@ -176,7 +176,7 @@ class MainWindow(QMainWindow):
         the first of them."""
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self.setWindowIcon(QIcon.fromTheme("system-file-manager"))
+        self.setWindowIcon(style.app_icon())
         self.setMinimumSize(style.px(_MINIMUM_SIZE[0]), style.px(_MINIMUM_SIZE[1]))
         self.resize(settings.window_size(QSize(style.px(1080), style.px(660))))
 

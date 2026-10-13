@@ -7,6 +7,7 @@ cd "$(dirname "$(readlink -f "$0")")"
 
 bin_dir="$HOME/.local/bin"
 apps_dir="$HOME/.local/share/applications"
+icons_dir="$HOME/.local/share/icons/hicolor/scalable/apps"
 services_dir="$HOME/.local/share/dbus-1/services"
 
 # PySide6 and PyGObject must come from the distribution (see CLAUDE.md).
@@ -34,6 +35,11 @@ fi
 mkdir -p "$bin_dir"
 ln -sf "$PWD/.venv/bin/filehouse" "$bin_dir/filehouse"
 install -Dm644 data/filehouse.desktop "$apps_dir/filehouse.desktop"
+# The app's icon, under the app's name: the launcher entry, the windows and the tray ask
+# the icon theme for it, and fall back to the theme's file manager without it
+install -Dm644 icons/filehouse-d.svg "$icons_dir/filehouse.svg"
+command -v gtk-update-icon-cache >/dev/null &&
+    gtk-update-icon-cache -q -t -f "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 command -v update-desktop-database >/dev/null && update-desktop-database "$apps_dir"
 
 # "Show in folder" of other apps: the session bus starts the app for it. A service file

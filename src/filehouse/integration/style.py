@@ -19,6 +19,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QApplication, QStyle
 
+from filehouse import APP_ID
 from filehouse.integration import theme as theme_reader
 
 BASE_FONT_PX = 13
@@ -303,6 +304,13 @@ def _build(draw, names, colour, sizes):
             if not pixmap.isNull():
                 made.addPixmap(pixmap, mode)
     return made
+
+
+def app_icon():
+    """The app's own icon, for its windows and the tray: the lighthouse `install.sh`
+    puts in the user's icons under the app's name, or the icon theme's file manager
+    where that was not run."""
+    return QIcon.fromTheme(APP_ID if QIcon.hasThemeIcon(APP_ID) else "system-file-manager")
 
 
 def icon(*names, colour="textPrimary", menu=False):
