@@ -34,7 +34,7 @@ Do not `pip install PySide6` into the venv: mixing a PyPI Qt with the system PyG
 
 ## Naming
 
-The app, package, command and app id are all `filehouse` (`APP_ID` in `src/filehouse/__init__.py`). The `.desktop` file name, `StartupWMClass`, and `QGuiApplication.setDesktopFileName()` must be that same string. The one name that is not is the D-Bus name the process owns, `io.github.joonaskit.filehouse` (`integration/instance.py`): a bus name needs dots.
+The app, package, command and app id are all `filehouse` (`APP_ID` in `src/filehouse/__init__.py`). The `.desktop` file name, `StartupWMClass`, and `QGuiApplication.setDesktopFileName()` must be that same string. The one name that is not is the D-Bus name the process owns, `io.github.joonaskit.filehouse` (`integration/instance.py`): a bus name needs dots. As the file chooser portal's backend it also owns `org.freedesktop.impl.portal.desktop.filehouse` (`integration/portal.py`), the name `data/filehouse.portal` gives the portal.
 
 ## Layer rules
 
@@ -48,6 +48,7 @@ ui/  →  qt_models/  →  core/  →  Gio
 - `ui/` never calls Gio or D-Bus directly. It passes locations (`Gio.File`) around as opaque values and asks `core/locations.py` for anything it needs from them.
 - `tests/test_layers.py` enforces these import rules.
 - `integration/` must degrade silently: no island means no activities, no `theme.json` means built-in defaults. The app must work with the shell stopped.
+- A call from the file chooser portal is always answered (`integration/portal.py`): another app's Open dialog waits for it. Chosen, cancelled or failed, never left open.
 - `JobModel` is the single source of truth for job state. The in-app operations panel and the island reporter both observe it; the island client holds no job logic.
 
 ## Safety rules for file operations

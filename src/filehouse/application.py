@@ -17,11 +17,13 @@ from filehouse.core import locations
 from filehouse.integration import style, theme
 from filehouse.integration.island import IslandClient, IslandReporter
 from filehouse.integration.notifications import NotificationReporter, Notifier
+from filehouse.integration.portal import FileChooserPortal
 from filehouse.integration.recent import RecentFiles
 from filehouse.integration.theme_watcher import ThemeWatcher
 from filehouse.qt_models.favourites import Favourites
 from filehouse.qt_models.job_model import JobModel
 from filehouse.ui import clipboard, main_window, settings
+from filehouse.ui.chooser import Chooser
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
 from filehouse.ui.main_window import MainWindow, session_to_open
@@ -34,9 +36,10 @@ _SERVICE_WAIT_MS = 10000
 
 
 class Windows:
-    """The windows of the process and the properties dialogs opened for other apps,
-    kept alive here until they are closed, and with them whether the process goes on:
-    it stays without a window when that is the setting, seen in the tray."""
+    """The windows of the process and the dialogs opened for other apps (properties, and
+    choosing a file to open or save), kept alive here until they are closed, and with
+    them whether the process goes on: it stays without a window when that is the
+    setting, seen in the tray."""
 
     def __init__(self, app, jobs, tray, recent=None, favourites=None):
         self._app = app
@@ -132,6 +135,16 @@ class Windows:
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def choose(self, request):
+        """Another app asks for a file to open or to save: the dialog for it, over
+        that app's window."""
+        self._start_over()
+        dialog = Chooser(request, self._favourites)
+        self.dialogs.append(dialog)
+        dialog.destroyed.connect(lambda _obj=None, d=dialog: self._closed(self.dialogs, d))
+        dialog.show_for_app()
+        return dialog
 
     def _closed(self, kept, item):
         kept.remove(item)
@@ -235,6 +248,15 @@ def run(args, instance):
     )
     instance.on_show_properties = windows.show_properties
     instance.on_quit = windows.quit_when_done
+
+    # The Open and Save dialog of other apps, for the user who chose this app for it.
+    # Only the one process of the session answers, as for everything else on the bus
+    if instance.primary:
+        chooser_portal = FileChooserPortal(instance.connection)
+        chooser_portal.on_request = windows.choose
+        chooser_portal.start()
+        # An app waits for its answer: what is still open is answered, and on the bus
+        app.aboutToQuit.connect(chooser_portal.close)
 
     if args.service:
         # Started for a call that is on its way. If nothing came of it, it is over,

@@ -76,6 +76,15 @@ There is one process per session: a second `filehouse` hands its folder to the o
 gio mime inode/directory filehouse.desktop
 ```
 
+The app can also be the Open and Save dialog of other apps: those that use the desktop portal (every Flatpak, and Qt and GTK apps set up for it). It is a choice, and one command each way:
+
+```sh
+./install.sh --portal      # other apps open and save with Filehouse's dialog
+./install.sh --no-portal   # back to the desktop's own
+```
+
+The portal does not fall back to the desktop's dialog when Filehouse cannot start, so `--no-portal` is also what to run if Open stops working in other apps.
+
 `install.sh` also installs the service file that lets the session bus start the app for "Show in folder", and tells the bus to read it. Dolphin answers those calls for as long as it runs, its background process included (`systemctl --user stop plasma-dolphin.service`).
 
 To show the app in the launcher and the shell's dock, install the desktop file and make sure `filehouse` is on your `PATH`:

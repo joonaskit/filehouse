@@ -46,6 +46,25 @@ def set_window_size(size):
     _store().setValue("window/size", size)
 
 
+def chooser_size(default):
+    """The size of the dialog other apps open and save with."""
+    size = _store().value("chooser/size")
+    return size if isinstance(size, QSize) and size.isValid() else default
+
+
+def set_chooser_size(size):
+    _store().setValue("chooser/size", size)
+
+
+def chooser_folder():
+    """The URI of the folder a file was last chosen in, for an app that names none."""
+    return _store().value("chooser/folder", "", type=str)
+
+
+def set_chooser_folder(uri):
+    _store().setValue("chooser/folder", uri)
+
+
 def view_mode():
     mode = _store().value("view/mode", DETAILS)
     return mode if mode in (DETAILS, ICONS) else DETAILS

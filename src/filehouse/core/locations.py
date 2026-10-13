@@ -99,6 +99,11 @@ def child(location, name):
     return location.get_child(name)
 
 
+def below(folder, path):
+    """What a path typed in `folder` means: "sub/a.txt", "../other"."""
+    return folder.resolve_relative_path(path)
+
+
 def basename(location):
     return location.get_basename()
 
