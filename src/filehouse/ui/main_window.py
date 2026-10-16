@@ -212,6 +212,7 @@ class MainWindow(QMainWindow):
         self._sidebar.place_activated.connect(self.navigate)
         self._sidebar.new_tab_requested.connect(lambda place: self.new_tab(place, activate=False))
         self._sidebar.favourite_menu_requested.connect(self._show_favourite_menu)
+        self._sidebar.place_menu_requested.connect(self._show_place_menu)
         self._sidebar.files_dropped.connect(self._on_dropped_on_place)
         self._sidebar.folders_dropped.connect(self._add_dropped_folders)
         self._panel = OperationsPanel(self._jobs)
@@ -1477,24 +1478,39 @@ class MainWindow(QMainWindow):
                 if self.toggle_favourite(location, None if index < 0 else index):
                     index += 1 if index >= 0 else 0
 
-    def _show_favourite_menu(self, favourite, position):
+    def _show_place_menu(self, entry, position):
         menu = menus.menu(self)
+        self._add_open_actions(menu, entry.location)
+        if getattr(entry, "can_eject", False):
+            menu.addSeparator()
+            menu.addAction(
+                style.icon("media-eject-symbolic", "media-eject", menu=True),
+                entry.eject_label,
+                lambda: self._sidebar.eject(entry),
+            )
+        menu.exec(position)
+
+    def _add_open_actions(self, menu, location):
         menu.addAction(
             style.icon("document-open-symbolic", "document-open", menu=True),
             "Open",
-            lambda: self.navigate(favourite.location),
+            lambda: self.navigate(location),
         )
         menu.addAction(
             style.icon("tab-new-symbolic", "tab-new", menu=True),
             "Open in new tab",
-            lambda: self.new_tab(favourite.location, activate=False),
+            lambda: self.new_tab(location, activate=False),
         )
         if not self._narrow:
             menu.addAction(
                 self._split_view.icon(),
                 "Open in split view",
-                lambda: self._open_location_in_split(favourite.location),
+                lambda: self._open_location_in_split(location),
             )
+
+    def _show_favourite_menu(self, favourite, position):
+        menu = menus.menu(self)
+        self._add_open_actions(menu, favourite.location)
         menu.addSeparator()
         menu.addAction("Rename…", lambda: self.rename_favourite(favourite))
         items = self._favourites.items

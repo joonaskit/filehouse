@@ -374,3 +374,11 @@ def test_the_sidebar_has_the_apps_font_that_the_desktop_does_not_replace(qtbot, 
     # An explicit size in pixels, the same before and after the window is shown
     assert sidebar.font().pixelSize() == QApplication.font().pixelSize() > 0
     assert sidebar.item(0).font().pixelSize() == before == sidebar.font().pixelSize()
+
+
+def test_context_menu_on_a_place_asks_the_window_for_its_menu(qtbot, sidebar):
+    asked = []
+    sidebar.place_menu_requested.connect(lambda entry, _pos: asked.append(entry.name))
+    row = sidebar.row_of("Home")
+    sidebar._on_context_menu(sidebar.visualItemRect(sidebar.item(row)).center())
+    assert asked == ["Home"]
