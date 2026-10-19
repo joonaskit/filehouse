@@ -212,6 +212,7 @@ class MainWindow(QMainWindow):
         self._sidebar.place_activated.connect(self.navigate)
         self._sidebar.new_tab_requested.connect(lambda place: self.new_tab(place, activate=False))
         self._sidebar.favourite_menu_requested.connect(self._show_favourite_menu)
+        self._sidebar.place_menu_requested.connect(self._show_place_menu)
         self._sidebar.files_dropped.connect(self._on_dropped_on_place)
         self._sidebar.folders_dropped.connect(self._add_dropped_folders)
         self._panel = OperationsPanel(self._jobs)
@@ -1182,6 +1183,8 @@ class MainWindow(QMainWindow):
     def _set_preview_sheet_open(self, open_):
         if open_ == self._preview_sheet.is_open:
             return
+        if not open_:
+            self._sheet_preview.stop()
         self._preview_sheet.set_open(open_, animate=self.isVisible())
         self._update_sheet_actions()
 
@@ -1218,11 +1221,13 @@ class MainWindow(QMainWindow):
             self._show_in(self._sheet_preview, infos)
 
     def _show_in(self, preview, infos):
-        if len(infos) != 1:
-            preview.show_message(f"{len(infos)} items selected")
+        if not infos:
+            preview.show_message("Nothing selected")
         else:
-            path = locations.local_path(locations.entry_location(self._location, infos[0]))
-            preview.show_item(infos[0], path)
+            preview.show_items(
+                infos,
+                lambda info: locations.local_path(locations.entry_location(self._location, info)),
+            )
 
     def _on_preview_key(self, event):
         """An arrow key pressed in the preview moves the selection of the list."""
@@ -1477,24 +1482,39 @@ class MainWindow(QMainWindow):
                 if self.toggle_favourite(location, None if index < 0 else index):
                     index += 1 if index >= 0 else 0
 
-    def _show_favourite_menu(self, favourite, position):
+    def _show_place_menu(self, entry, position):
         menu = menus.menu(self)
+        self._add_open_actions(menu, entry.location)
+        if getattr(entry, "can_eject", False):
+            menu.addSeparator()
+            menu.addAction(
+                style.icon("media-eject-symbolic", "media-eject", menu=True),
+                entry.eject_label,
+                lambda: self._sidebar.eject(entry),
+            )
+        menu.exec(position)
+
+    def _add_open_actions(self, menu, location):
         menu.addAction(
             style.icon("document-open-symbolic", "document-open", menu=True),
             "Open",
-            lambda: self.navigate(favourite.location),
+            lambda: self.navigate(location),
         )
         menu.addAction(
             style.icon("tab-new-symbolic", "tab-new", menu=True),
             "Open in new tab",
-            lambda: self.new_tab(favourite.location, activate=False),
+            lambda: self.new_tab(location, activate=False),
         )
         if not self._narrow:
             menu.addAction(
                 self._split_view.icon(),
                 "Open in split view",
-                lambda: self._open_location_in_split(favourite.location),
+                lambda: self._open_location_in_split(location),
             )
+
+    def _show_favourite_menu(self, favourite, position):
+        menu = menus.menu(self)
+        self._add_open_actions(menu, favourite.location)
         menu.addSeparator()
         menu.addAction("Rename…", lambda: self.rename_favourite(favourite))
         items = self._favourites.items

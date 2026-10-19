@@ -2,7 +2,7 @@
 
 Each of the three is a group that folds shut when its heading is clicked."""
 
-from PySide6.QtCore import QLocale, QMimeData, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QLocale, QMetaMethod, QMimeData, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QFont, QFontInfo, QIcon, QPainter, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -150,6 +150,7 @@ class Sidebar(QListWidget):
     new_tab_requested = Signal(object)  # a location
     # The menu of a favourite: the Favourite, and a global position
     favourite_menu_requested = Signal(object, QPoint)
+    place_menu_requested = Signal(object, QPoint)  # an entry (a place or a device)
     # Files were dropped on an entry: its location, the URIs, the keyboard modifiers and a
     # global position
     files_dropped = Signal(object, list, object, QPoint)
@@ -582,6 +583,9 @@ class Sidebar(QListWidget):
         event.setDropAction(Qt.DropAction.CopyAction)
         event.accept()
 
+    def eject(self, entry):
+        self._volumes.eject(entry)
+
     def _on_context_menu(self, position):
         item = self.itemAt(position)
         favourite = item.data(_FavouriteRole) if item is not None else None
@@ -589,7 +593,13 @@ class Sidebar(QListWidget):
             self.favourite_menu_requested.emit(favourite, self.viewport().mapToGlobal(position))
             return
         entry = item.data(_EntryRole) if item is not None else None
-        if entry is None or not getattr(entry, "can_eject", False):
+        if entry is None:
+            return
+        if self.isSignalConnected(QMetaMethod.fromSignal(self.place_menu_requested)):
+            if entry.location is not None:
+                self.place_menu_requested.emit(entry, self.viewport().mapToGlobal(position))
+            return
+        if not getattr(entry, "can_eject", False):
             return
         menu = menus.menu(self)
         menu.addAction(

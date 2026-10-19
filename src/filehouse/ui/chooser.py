@@ -435,11 +435,15 @@ class Chooser(QDialog):
 
     def _show_preview(self):
         infos = self._view.selected_infos()
-        if len(infos) != 1:
-            self._preview.show_message(f"{len(infos)} items selected")
+        if not infos:
+            self._preview.show_message("Nothing selected")
         else:
-            target = locations.entry_location(self._pane.location, infos[0])
-            self._preview.show_item(infos[0], locations.local_path(target))
+            self._preview.show_items(
+                infos,
+                lambda info: locations.local_path(
+                    locations.entry_location(self._pane.location, info)
+                ),
+            )
 
     def _on_preview_key(self, event):
         """An arrow key pressed in the preview moves the selection of the list."""
