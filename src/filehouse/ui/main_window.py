@@ -1183,6 +1183,8 @@ class MainWindow(QMainWindow):
     def _set_preview_sheet_open(self, open_):
         if open_ == self._preview_sheet.is_open:
             return
+        if not open_:
+            self._sheet_preview.stop()
         self._preview_sheet.set_open(open_, animate=self.isVisible())
         self._update_sheet_actions()
 
@@ -1219,11 +1221,13 @@ class MainWindow(QMainWindow):
             self._show_in(self._sheet_preview, infos)
 
     def _show_in(self, preview, infos):
-        if len(infos) != 1:
-            preview.show_message(f"{len(infos)} items selected")
+        if not infos:
+            preview.show_message("Nothing selected")
         else:
-            path = locations.local_path(locations.entry_location(self._location, infos[0]))
-            preview.show_item(infos[0], path)
+            preview.show_items(
+                infos,
+                lambda info: locations.local_path(locations.entry_location(self._location, info)),
+            )
 
     def _on_preview_key(self, event):
         """An arrow key pressed in the preview moves the selection of the list."""

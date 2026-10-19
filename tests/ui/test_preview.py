@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QImage
 from ui_helpers import TIMEOUT, gfile
 
 from filehouse.qt_models import previews
-from filehouse.ui import preview
+from filehouse.ui import media, preview
 from filehouse.ui.main_window import MainWindow
 
 
@@ -143,12 +143,83 @@ def test_a_folder_shows_its_icon(qtbot, window):
     assert window._preview._canvas._image is None
 
 
-def test_several_items_say_how_many(qtbot, window):
+def select_pictures(window):
+    window._view.select_where(lambda info: info.name.endswith(".png"))
+
+
+def test_several_items_are_shown_one_after_another(qtbot, window):
     window._view.select_name("a.png")
     window.toggle_preview()
-    window._view.select_all()
+    select_pictures(window)
+    preview_ = window._preview
 
-    assert window._preview._canvas._text == f"{len(window._view.selected_infos())} items selected"
+    assert preview_.count == 2
+    assert preview_.index == 0
+    assert preview_.windowTitle() == "a.png"
+    assert preview_._details.text().startswith("1 of 2 · ")
+    assert not preview_._previous.isHidden() and not preview_._previous.isEnabled()
+
+    qtbot.keyClick(preview_, Qt.Key.Key_Right)
+
+    assert preview_.index == 1
+    assert preview_.windowTitle() == "b.png"
+    assert preview_._details.text().startswith("2 of 2 · ")
+    # The selection is the same: the arrow went through it, not along the list
+    assert len(window._view.selected_infos()) == 2
+    canvas = loaded(qtbot, window)
+    qtbot.waitUntil(lambda: canvas._image.width() == 100, timeout=TIMEOUT)
+
+
+def test_stepping_through_the_selection_stops_at_the_ends(qtbot, window):
+    window._view.select_name("a.png")
+    window.toggle_preview()
+    select_pictures(window)
+
+    assert not window._preview.step(-1)
+    qtbot.keyClick(window._preview, Qt.Key.Key_Up)
+    assert window._preview.index == 0
+    assert window._preview.step(1)
+    assert not window._preview.step(1)
+    assert not window._preview._next.isEnabled()
+    window._preview._previous.click()
+    assert window._preview.index == 0
+
+
+def test_the_same_selection_keeps_its_place_and_a_new_one_starts_over(qtbot, window):
+    window._view.select_name("a.png")
+    window.toggle_preview()
+    select_pictures(window)
+    window._preview.step(1)
+
+    window._update_preview(window._view.selected_infos())
+    assert window._preview.index == 1
+
+    window._view.select_all()
+    assert window._preview.index == 0
+
+
+def test_one_file_after_several_has_no_position(qtbot, window):
+    window._view.select_name("a.png")
+    window.toggle_preview()
+    select_pictures(window)
+    window._view.select_name("a.png")
+
+    assert window._preview.count == 0
+    assert window._preview._previous.isHidden()
+    assert " of 2" not in window._preview._details.text()
+
+
+def test_the_sheet_has_the_buttons_for_several_files(qtbot, window):
+    window.resize(480, 600)
+    qtbot.waitUntil(lambda: window._narrow, timeout=TIMEOUT)
+    window._view.select_name("a.png")
+    window.toggle_preview()
+    select_pictures(window)
+
+    sheet = window._sheet_preview
+    assert sheet.count == 2
+    sheet._next.click()
+    assert sheet.index == 1
 
 
 def test_the_preview_goes_when_the_selection_does(qtbot, window):
@@ -711,3 +782,77 @@ def test_a_key_with_control_is_not_a_typed_name(qtbot, window):
     qtbot.keyClick(view, Qt.Key.Key_Down)
 
     assert not window._view.is_searching()
+
+
+# Video and audio
+
+
+def write_wave(path, seconds=1):
+    import wave
+
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(8000)
+        f.writeframes(b"\x00\x00" * 8000 * seconds)
+
+
+@pytest.fixture
+def tune(folder):
+    write_wave(folder / "tune.wav")
+
+
+@pytest.mark.skipif(not media.available(), reason="PySide6 without QtMultimedia")
+def test_an_audio_file_gets_a_player_that_does_not_start_by_itself(qtbot, tune, window):
+    assert window._view.select_name("tune.wav")
+    window.toggle_preview()
+    player = window._preview.media
+
+    assert player is not None
+    assert not player.controls.isHidden()
+    assert not player.playing
+
+
+@pytest.mark.skipif(not media.available(), reason="PySide6 without QtMultimedia")
+def test_the_player_goes_when_the_selection_moves_to_something_else(qtbot, tune, window):
+    assert window._view.select_name("tune.wav")
+    window.toggle_preview()
+    player = window._preview.media
+
+    window._view.select_name("notes.txt")
+
+    assert player.controls.isHidden()
+    assert player.player.source().isEmpty()
+
+
+@pytest.mark.skipif(not media.available(), reason="PySide6 without QtMultimedia")
+def test_closing_the_preview_stops_the_player(qtbot, tune, window):
+    assert window._view.select_name("tune.wav")
+    window.toggle_preview()
+    player = window._preview.media
+
+    window.toggle_preview()
+
+    assert player.player.source().isEmpty()
+    assert not player.playing
+
+
+def test_the_time_of_a_clip_is_written_short():
+    assert media._clock(0) == "0:00"
+    assert media._clock(65_000) == "1:05"
+    assert media._clock(3_725_000) == "1:02:05"
+    assert media._clock(-5) == "0:00"
+
+
+@pytest.mark.skipif(not media.available(), reason="PySide6 without QtMultimedia")
+def test_a_media_file_is_loaded_again_when_the_preview_is_reopened(qtbot, tune, window):
+    assert window._view.select_name("tune.wav")
+    window.toggle_preview()
+    player = window._preview.media
+    qtbot.waitUntil(lambda: not player.player.source().isEmpty(), timeout=TIMEOUT)
+
+    window.toggle_preview()
+    window.toggle_preview()
+
+    assert not player.player.source().isEmpty()
+    assert not player.controls.isHidden()
