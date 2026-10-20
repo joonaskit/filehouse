@@ -579,6 +579,33 @@ def test_cancelling_a_compression_leaves_no_archive_and_every_original(tmp_path)
     assert (src / "2.bin").stat().st_size == 600_000
 
 
+def test_a_new_archive_is_never_written_through_a_link_put_in_its_place(tmp_path, monkeypatch):
+    src = make_tree(tmp_path / "work", {"a.txt": "aaa"})
+    victim = tmp_path / "victim.txt"
+    victim.write_text("somebody else's")
+    links = []
+    made = CompressJob._temp
+
+    def swapped(job, folder):
+        # Somebody who may write to the folder puts a link where the new file was
+        temp, descriptor = made(job, folder)
+        os.unlink(temp)
+        os.symlink(victim, temp)
+        links.append(temp)
+        return temp, descriptor
+
+    monkeypatch.setattr(CompressJob, "_temp", swapped)
+
+    job = compress([src / "a.txt"], src, "pack.zip")
+
+    assert job.state is JobState.FAILED
+    assert job.error.message == "was replaced while it was being written"
+    assert victim.read_text() == "somebody else's"
+    assert not (src / "pack.zip").exists()
+    # Not ours, so not removed either
+    assert os.readlink(links[0]) == str(victim)
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can read everything")
 def test_a_file_that_cannot_be_read_is_left_out_and_named(tmp_path):
     src = make_tree(tmp_path / "work", {"src": {"a.txt": "aaa", "locked.txt": "no"}})
