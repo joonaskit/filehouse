@@ -93,20 +93,21 @@ def search_below(
             continue
         try:
             while (raw := enumerator.next_file(cancellable)) is not None:
-                if not show_hidden and (raw.get_is_hidden() or raw.get_is_backup()):
-                    continue
-                name = raw.get_name()
-                path = f"{prefix}{name}"
-                is_folder = raw.get_file_type() == Gio.FileType.DIRECTORY
-                # A link to a folder is listed, and not gone into: it may lead back here
-                if is_folder and not raw.get_is_symlink() and not _not_searched(folder, name):
-                    folders.append((folder.get_child(name), f"{path}/"))
-                if (prefix or include_root) and matches(wanted, raw.get_display_name()):
-                    batch.append(replace(info_from_gio(raw), name=path))
-                    found += 1
-                    if found >= limit:
-                        on_batch(batch)
-                        return True
+                if show_hidden or not (raw.get_is_hidden() or raw.get_is_backup()):
+                    name = raw.get_name()
+                    path = f"{prefix}{name}"
+                    is_folder = raw.get_file_type() == Gio.FileType.DIRECTORY
+                    # A link to a folder is listed, and not gone into: it may lead back here
+                    if is_folder and not raw.get_is_symlink() and not _not_searched(folder, name):
+                        folders.append((folder.get_child(name), f"{path}/"))
+                    if (prefix or include_root) and matches(wanted, raw.get_display_name()):
+                        batch.append(replace(info_from_gio(raw), name=path))
+                        found += 1
+                        if found >= limit:
+                            on_batch(batch)
+                            return True
+                # Also after what is passed over: many hidden files after a result must
+                # not keep it back
                 if batch and (
                     len(batch) >= _BATCH_SIZE or time.monotonic() - handed >= batch_seconds
                 ):
