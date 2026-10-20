@@ -1,5 +1,6 @@
 """A Qt model of one folder: listed on a worker thread, then kept current by a monitor."""
 
+import math
 import time
 
 from gi.repository import Gio, GLib
@@ -165,7 +166,11 @@ class DirectoryModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._infos = []
-        self._names = set()
+        # The row of each entry by its file name. Rows are only ever appended, so a row
+        # given here is the entry's, or one above it for each row removed since: see
+        # `row_for_name`
+        self._rows = {}
+        self._removed = 0
         self._location = None
         self._generation = 0
         self._cancellable = None
@@ -215,7 +220,8 @@ class DirectoryModel(QAbstractTableModel):
         self.close()
         self.beginResetModel()
         self._infos = []
-        self._names = set()
+        self._rows = {}
+        self._removed = 0
         self._removed_at = {}
         self._thumbnails = {}
         self._counts = {}
@@ -253,7 +259,7 @@ class DirectoryModel(QAbstractTableModel):
             return
         new = []
         for info in batch:
-            if info.name in self._names:
+            if info.name in self._rows:
                 self._replace(info)
             else:
                 new.append(info)
@@ -334,15 +340,17 @@ class DirectoryModel(QAbstractTableModel):
                 first = rows.pop()
             self.beginRemoveRows(QModelIndex(), first, last)
             for info in self._infos[first : last + 1]:
-                self._names.discard(info.name)
+                del self._rows[info.name]
                 self._counts.pop(info.name, None)
                 self._thumbnails.pop(info.name, None)
             del self._infos[first : last + 1]
+            self._removed += last + 1 - first
             self.endRemoveRows()
+        self._reindex_if_stale()
 
     def _on_found(self, generation, batch):
         if generation == self._search_generation:
-            self._append([info for info in batch if info.name not in self._names])
+            self._append([info for info in batch if info.name not in self._rows])
 
     def _on_search_finished(self, generation, truncated):
         if generation != self._search_generation:
@@ -407,7 +415,7 @@ class DirectoryModel(QAbstractTableModel):
             # Asked while the file was there, answered after it was renamed or deleted:
             # a file written under a temporary name and moved into place does this
             return
-        if info.name in self._names:
+        if info.name in self._rows:
             self._replace(info)
         else:
             self._append([info])
@@ -420,7 +428,7 @@ class DirectoryModel(QAbstractTableModel):
         first = len(self._infos)
         self.beginInsertRows(QModelIndex(), first, first + len(infos) - 1)
         self._infos.extend(infos)
-        self._names.update(info.name for info in infos)
+        self._rows.update((info.name, row) for row, info in enumerate(infos, first))
         self.endInsertRows()
         self._count_soon(info.name for info in infos if info.is_dir)
 
@@ -435,14 +443,16 @@ class DirectoryModel(QAbstractTableModel):
             self._count_soon([info.name])
 
     def _remove(self, name):
-        if name not in self._names:
-            return
         row = self.row_for_name(name)
+        if row < 0:
+            return
         self.beginRemoveRows(QModelIndex(), row, row)
         del self._infos[row]
-        self._names.discard(name)
+        del self._rows[name]
+        self._removed += 1
         self._counts.pop(name, None)
         self.endRemoveRows()
+        self._reindex_if_stale()
 
     # Counting what is in the folders
 
@@ -478,7 +488,7 @@ class DirectoryModel(QAbstractTableModel):
         """One count at a time: what changes meanwhile waits for the next."""
         if self.loading or self._counting:
             return
-        names = sorted(self._to_count & self._names, key=natural_key)
+        names = sorted(self._to_count & self._rows.keys(), key=natural_key)
         self._to_count = set()
         if not names:
             return
@@ -490,7 +500,7 @@ class DirectoryModel(QAbstractTableModel):
     def _on_counted(self, generation, counts):
         if generation != self._generation:
             return
-        rows = [row for row, info in enumerate(self._infos) if info.name in counts]
+        rows = sorted(row for row in map(self.row_for_name, counts) if row >= 0)
         if not rows:
             return
         for row in rows:
@@ -560,9 +570,28 @@ class DirectoryModel(QAbstractTableModel):
 
     def row_for_name(self, name):
         """The row of the entry with this file name, or -1."""
-        if name not in self._names:
+        known = self._rows.get(name)
+        if known is None:
             return -1
-        return next(row for row, info in enumerate(self._infos) if info.name == name)
+        # Where it was when the index was made, or up to one row higher for each row
+        # removed since: a look at a few rows. Searching from the start would make a
+        # change to each of many entries go through all of them
+        known = min(known, len(self._infos) - 1)
+        for row in range(known, max(known - self._removed, 0) - 1, -1):
+            if self._infos[row].name == name:
+                return row
+        # Unreachable while rows are only appended and removed
+        self._reindex()
+        return self._rows[name]
+
+    def _reindex_if_stale(self):
+        """After removals: the index again, before finding a row means looking far."""
+        if self._removed > max(64, math.isqrt(len(self._infos))):
+            self._reindex()
+
+    def _reindex(self):
+        self._rows = {info.name: row for row, info in enumerate(self._infos)}
+        self._removed = 0
 
     def info(self, row):
         return self._infos[row]

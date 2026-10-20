@@ -1,9 +1,12 @@
 import os
+import random
+import time
 
 import pytest
 from gi.repository import Gio
 from PySide6.QtCore import Qt
 
+from filehouse.core.listing import natural_key
 from filehouse.qt_models.directory_model import (
     MODIFIED,
     NAME,
@@ -276,3 +279,46 @@ def test_proxy_sorts_by_permissions(qtbot, model, tmp_path):
     load(qtbot, model, tmp_path)
 
     assert names(proxy) == ["private", "shared", "open"]
+
+
+def deleted(model, folder, name):
+    """What the folder's monitor says when `name` is deleted there."""
+    model._on_changed(None, folder.get_child(name), None, Gio.FileMonitorEvent.DELETED)
+
+
+def test_rows_are_found_by_name_after_any_removals(qtbot, model, tmp_path):
+    for index in range(300):
+        (tmp_path / f"file{index}").write_text("")
+    load(qtbot, model, tmp_path)
+    folder = Gio.File.new_for_path(str(tmp_path))
+    # Above and below each other, more than the index lets go by before it is made again
+    gone = [f"file{index}" for index in range(300) if index % 3] + ["missing"]
+    random.Random(1).shuffle(gone)
+
+    for name in gone:
+        deleted(model, folder, name)
+        rows = {info.name: row for row, info in enumerate(model._infos)}
+        assert all(model.row_for_name(name) == row for name, row in rows.items())
+        assert model.row_for_name(name) == -1
+
+    assert sorted(names(model), key=natural_key) == [f"file{index}" for index in range(0, 300, 3)]
+
+
+def test_many_changes_in_a_large_folder_stay_fast(qtbot, model, tmp_path):
+    count = 10000
+    for index in range(count):
+        (tmp_path / f"file{index}").write_text("")
+    load(qtbot, model, tmp_path)
+    folder = Gio.File.new_for_path(str(tmp_path))
+    gone = [f"file{index}" for index in range(count)]
+    random.Random(1).shuffle(gone)
+
+    started = time.monotonic()
+    # Each entry changes, as when something is written to every file, and then goes
+    model._on_batch(model._generation, list(model._infos))
+    for name in gone:
+        deleted(model, folder, name)
+
+    # A quarter of a second here, where finding each row from the start took over three
+    assert time.monotonic() - started < 1.5
+    assert model.rowCount() == 0
