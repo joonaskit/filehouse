@@ -21,10 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 from filehouse.core import archives, locations, search
-from filehouse.core.errors import OperationError
 from filehouse.core.listing import mode_text
-from filehouse.core.operations import JobKind, permissions, quick, undo
-from filehouse.core.operations.conflicts import split_extension
+from filehouse.core.operations import JobKind, permissions, undo
 from filehouse.integration import desktop, style
 from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE
 from filehouse.qt_models.job_model import JobModel
@@ -34,12 +32,12 @@ from filehouse.ui import clipboard, groups, menus, settings
 from filehouse.ui.details_pane import DetailsPane
 from filehouse.ui.dialogs.compress import CompressDialog
 from filehouse.ui.dialogs.details import ErrorDetails
-from filehouse.ui.dialogs.name import NameDialog
+from filehouse.ui.dialogs.name import ask_name
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
-from filehouse.ui.dialogs.rename_many import RenameManyDialog
 from filehouse.ui.dialogs.select import SelectDialog
 from filehouse.ui.dialogs.settings import SettingsDialog
+from filehouse.ui.file_actions import FileActions, all_in
 from filehouse.ui.folder_view import history_step
 from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
@@ -74,8 +72,6 @@ _SORTS = (
 DETAILS, ICONS = settings.DETAILS, settings.ICONS
 
 KEEP_RUNNING, CANCEL_ALL, STAY_OPEN = range(3)
-# What a drop can be asked to do beside the two kinds of job
-LINK = "link"
 
 
 def ask_about_running_jobs(parent, count):
@@ -187,6 +183,13 @@ class MainWindow(QMainWindow):
             jobs = JobModel(self)
             self._prompter = Prompter(jobs, self)
         self._jobs = jobs
+        self._file_actions = FileActions(
+            self,
+            jobs,
+            pane=lambda: self._pane,
+            say=lambda text: self.statusBar().showMessage(text, _COPIED_MS),
+            show_error=self._show_error,
+        )
         self._recent = recent
         self._favourites = favourites
         self._jobs.idle.connect(self._on_jobs_idle)
@@ -931,7 +934,7 @@ class MainWindow(QMainWindow):
 
     def _on_tab_dropped(self, index, uris, modifiers, position):
         """Files were dropped on a tab: into the folder it shows."""
-        self._drop_on(self._tabs[index].active, uris, None, modifiers, position)
+        self._file_actions.drop_on(self._tabs[index].active, uris, None, modifiers, position)
 
     def _update_tab_titles(self):
         for index, tab in enumerate(self._tabs):
@@ -1425,7 +1428,9 @@ class MainWindow(QMainWindow):
     def _on_dropped_on_place(self, location, uris, modifiers, position):
         """Files were dropped on a place or favourite of the sidebar: into it. The trash
         takes them as it does anywhere."""
-        self._drop_into(location, uris, modifiers, position, trash_ok=locations.is_trash(location))
+        self._file_actions.drop_into(
+            location, uris, modifiers, position, trash_ok=locations.is_trash(location)
+        )
 
     def _update_favourite_action(self):
         location = self._location
@@ -1540,7 +1545,8 @@ class MainWindow(QMainWindow):
                 return "Could not change the favourites."
             return None
 
-        return self._ask_name(
+        return ask_name(
+            self,
             "Rename favourite",
             f"New name for “{favourite.title}”:",
             favourite.title,
@@ -1850,7 +1856,7 @@ class MainWindow(QMainWindow):
         if cut:
             # A cut is used up by its paste
             clipboard.clear()
-            if self._all_in(sources, self._location):
+            if all_in(sources, self._location):
                 return None
         return self._start(JobKind.MOVE if cut else JobKind.COPY, sources, self._location)
 
@@ -1863,38 +1869,7 @@ class MainWindow(QMainWindow):
 
     def create_link(self):
         """A symbolic link to each selected item, beside it."""
-        selected = self._selected_locations()
-        if not selected or self._read_only():
-            return []
-        # Each beside what it points to, which for a result of a search is further down
-        made = []
-        errors = []
-        for target in selected:
-            links, failed = quick.create_links([target], locations.parent(target))
-            made += links
-            errors += failed
-        return self._after_linking(made, errors, len(selected), self._location)
-
-    def _link_into(self, sources, folder):
-        """A link in `folder` to each of the files dropped there."""
-        made, errors = quick.create_links(sources, folder)
-        return self._after_linking(made, errors, len(sources), folder)
-
-    def _after_linking(self, made, errors, count, folder):
-        if len(made) == 1:
-            self._select_when_listed(folder, locations.basename(made[0]))
-        if not errors:
-            self.statusBar().showMessage(
-                "Link created" if count == 1 else f"{count} links created", _COPIED_MS
-            )
-        elif len(errors) == 1:
-            self._show_error(f"Could not create a link to {errors[0]}.")
-        else:
-            # Every one of them, by name
-            summary = f"Could not create {len(errors)} of {count} links."
-            self._show_error(summary)
-            ErrorDetails(SimpleNamespace(errors=errors, summary=summary), self).open()
-        return made
+        return self._file_actions.create_link()
 
     # Selecting
 
@@ -2044,7 +2019,7 @@ class MainWindow(QMainWindow):
         if not path:
             return None
         target = locations.from_path(path)
-        if self._all_in(selected, target):
+        if all_in(selected, target):
             # Already there
             return None
         return self._start(JobKind.MOVE, selected, target)
@@ -2128,97 +2103,19 @@ class MainWindow(QMainWindow):
             return None
         if kind is JobKind.MOVE and self._read_only():
             return None
-        if kind is JobKind.MOVE and self._all_in(selected, other.location):
+        if kind is JobKind.MOVE and all_in(selected, other.location):
             # Already there
             return None
         return self._start(kind, selected, other.location)
 
     def new_file(self):
-        if self._read_only():
-            return None
-        folder = self._location
-        name = quick.suggest_file_name(folder)
-
-        def create(text):
-            try:
-                made = quick.create_file(folder, text)
-            except OperationError as error:
-                return f"Could not create the file: {error.message}."
-            self._jobs.remember(undo.created(made))
-            self._select_when_listed(folder, locations.basename(made))
-            return None
-
-        return self._ask_name("New file", "Name of the new file:", name, create)
+        return self._file_actions.new_file()
 
     def new_folder(self):
-        if self._read_only():
-            return None
-        folder = self._location
-        name = quick.suggest_folder_name(folder)
-
-        def create(text):
-            try:
-                made = quick.create_folder(folder, text)
-            except OperationError as error:
-                return f"Could not create the folder: {error.message}."
-            self._jobs.remember(undo.created(made))
-            self._select_when_listed(folder, locations.basename(made))
-            return None
-
-        return self._ask_name("New folder", "Name of the new folder:", name, create)
+        return self._file_actions.new_folder()
 
     def rename(self):
-        infos = self._view.selected_infos()
-        if not infos or self._read_only():
-            return None
-        if len(infos) > 1:
-            return self._rename_many(infos)
-        info = infos[0]
-        folder = self._location
-        target = locations.child(folder, info.name)
-
-        def apply(text):
-            try:
-                renamed = quick.rename(target, text)
-            except OperationError as error:
-                return f"Could not rename “{info.display_name}”: {error.message}."
-            self._jobs.remember(undo.renamed([(renamed, target)]))
-            self._select_when_listed(folder, locations.basename(renamed))
-            # Nothing watches the folders below: a result that was renamed is found again
-            self._pane.search_again()
-            return None
-
-        # Not `info.name`: for a result of a search that is its path below this folder
-        name = locations.basename(target)
-        stem = name if info.is_dir else split_extension(name)[0]
-        return self._ask_name(
-            "Rename", f"New name for “{info.display_name}”:", name, apply, len(stem)
-        )
-
-    def _rename_many(self, infos):
-        """Several at once, in a dialog that shows every new name first."""
-        pane = self._pane
-        folder = self._location
-        before = [locations.child(folder, info.name) for info in infos]
-
-        def renamed(now):
-            # In the order of the list, as they were given
-            self._jobs.remember(undo.renamed(zip(now, before, strict=True)))
-            names = {locations.name_below(folder, location) for location in now}
-            pane.select_names_when_listed(folder, names)
-            # Nothing watches the folders below: results that were renamed are found again
-            pane.search_again()
-            count = len(now)
-            self.statusBar().showMessage(f"{count} items renamed", _COPIED_MS)
-
-        dialog = RenameManyDialog(
-            self,
-            [(location, info.is_dir) for location, info in zip(before, infos, strict=True)],
-            renamed,
-        )
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.open()
-        return dialog
+        return self._file_actions.rename()
 
     # Undo
 
@@ -2240,7 +2137,7 @@ class MainWindow(QMainWindow):
             self._pane.search_again()
             if len(undone.changed) == 1 and undone.record.kind is undo.Kind.RENAME:
                 now = undone.changed[0]
-                self._select_when_listed(locations.parent(now), locations.basename(now))
+                self._pane.select_when_listed(locations.parent(now), locations.basename(now))
         if not errors:
             self.statusBar().showMessage(f"Undid the {what}", _COPIED_MS)
         elif len(errors) == 1:
@@ -2252,84 +2149,9 @@ class MainWindow(QMainWindow):
             ErrorDetails(SimpleNamespace(errors=errors, summary=summary), self).open()
         return undone
 
-    def _ask_name(self, title, label, name, apply, select_to=None):
-        dialog = NameDialog(self, title, label, name, apply, select_to)
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.open()
-        return dialog
-
-    def _select_when_listed(self, folder, name):
-        self._pane.select_when_listed(folder, name)
-
-    @staticmethod
-    def _all_in(sources, folder):
-        return all(locations.same(locations.parent(source), folder) for source in sources)
-
     def _on_dropped(self, uris, folder_info, modifiers, position):
         """Files were dropped on the list, or on a folder in it."""
-        return self._drop_on(self._pane, uris, folder_info, modifiers, position)
-
-    def _drop_on(self, pane, uris, folder_info, modifiers, position):
-        if pane.read_only and not pane.at_trash:
-            # Nothing is put into the recent files, and not into a trashed folder
-            return None
-        target = pane.location
-        if folder_info is not None:
-            target = locations.child(target, folder_info.name)
-        # The trash itself takes what is dropped on it, and nothing inside it does
-        trash_ok = pane.at_trash and folder_info is None
-        return self._drop_into(target, uris, modifiers, position, trash_ok)
-
-    def _drop_into(self, target, uris, modifiers, position, trash_ok=False):
-        """Move or copy dropped files into a folder, by the keys held and the file systems."""
-        if locations.in_recent(target):
-            return None
-        sources = [locations.from_uri(uri) for uri in uris]
-        if any(locations.same(source, target) for source in sources):
-            # A folder dropped on itself
-            return None
-        if locations.in_trash(target):
-            # Dropped on the trash: that is where they go. Not into a trashed folder
-            if not trash_ok:
-                return None
-            sources = [source for source in sources if not locations.in_trash(source)]
-            return self._start(JobKind.TRASH, sources) if sources else None
-
-        keys = Qt.KeyboardModifier
-        both = keys.ControlModifier | keys.ShiftModifier
-        if modifiers & keys.AltModifier:
-            kind = self._ask_drop_action(position)
-        elif modifiers & both == both:
-            # As in Dolphin: a link to what was dragged
-            kind = LINK
-        elif modifiers & keys.ShiftModifier:
-            kind = JobKind.MOVE
-        elif modifiers & keys.ControlModifier:
-            kind = JobKind.COPY
-        elif all(locations.same_filesystem(source, target) for source in sources):
-            # As in Dolphin: a drop moves within a file system and copies across
-            kind = JobKind.MOVE
-        else:
-            kind = JobKind.COPY
-        if kind is None:
-            return None
-        if kind == LINK:
-            return self._link_into(sources, target)
-        if kind is JobKind.MOVE and self._all_in(sources, target):
-            # Already where they were dropped
-            return None
-        return self._start(kind, sources, target)
-
-    def _ask_drop_action(self, position):
-        menu = menus.menu(self)
-        move = menu.addAction(
-            style.icon("go-jump-symbolic", "transform-move", menu=True), "Move here"
-        )
-        copy = menu.addAction(style.icon("edit-copy-symbolic", "edit-copy", menu=True), "Copy here")
-        link = menu.addAction(style.icon("edit-link-symbolic", "edit-link", menu=True), "Link here")
-        menu.addSeparator()
-        menu.addAction("Cancel")
-        return {move: JobKind.MOVE, copy: JobKind.COPY, link: LINK}.get(menu.exec(position))
+        return self._file_actions.drop_on(self._pane, uris, folder_info, modifiers, position)
 
     # Closing
 

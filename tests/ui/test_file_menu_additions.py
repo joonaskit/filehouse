@@ -138,11 +138,11 @@ def test_a_drop_with_ctrl_and_shift_links(qtbot, tree, window):
 
 
 def test_the_drop_menu_can_link(qtbot, tree, window, monkeypatch):
-    from filehouse.ui import main_window
+    from filehouse.ui import file_actions
 
     window.navigate(gfile(tree / "dst"))
     wait_loaded(qtbot, window)
-    monkeypatch.setattr(window, "_ask_drop_action", lambda position: main_window.LINK)
+    monkeypatch.setattr(window._file_actions, "ask_drop_action", lambda position: file_actions.LINK)
 
     window._on_dropped(
         [gfile(tree / "src" / "notes.txt").get_uri()],

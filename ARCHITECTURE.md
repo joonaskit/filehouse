@@ -150,6 +150,7 @@ filehouse/
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
 │       ├── main_window.py
+│       ├── file_actions.py      new file and folder, rename, links, what a drop does (#64)
 │       ├── pane.py              one folder: model, sort proxy, list, history, selection
 │       ├── chooser.py           the dialog other apps open and save with
 │       ├── groups.py            the rounded groups of a toolbar
