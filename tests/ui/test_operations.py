@@ -772,7 +772,7 @@ def test_ctrl_copies_and_shift_moves(qtbot, tree, open_window, jobs, wait_final,
 def test_alt_asks_with_a_menu(qtbot, tree, open_window, jobs, wait_final, monkeypatch):
     window = open_window(tree / "dst")
     choices = iter([JobKind.COPY, None])
-    monkeypatch.setattr(window, "_ask_drop_action", lambda position: next(choices))
+    monkeypatch.setattr(window._file_actions, "ask_drop_action", lambda position: next(choices))
     alt = Qt.KeyboardModifier.AltModifier
 
     job = wait_final(jobs, drop(window, [tree / "src" / "a.txt"], keys=alt))

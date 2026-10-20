@@ -1,5 +1,6 @@
 """Asking for a name: rename and new folder."""
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QLineEdit, QVBoxLayout
 
 from filehouse.integration import style
@@ -53,3 +54,11 @@ class NameDialog(QDialog):
         self.error.setText(problem)
         self.error.show()
         self.edit.setFocus()
+
+
+def ask_name(parent, title, label, name, apply, select_to=None):
+    """Open a NameDialog that goes away once it is closed, and return it."""
+    dialog = NameDialog(parent, title, label, name, apply, select_to)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    dialog.open()
+    return dialog
