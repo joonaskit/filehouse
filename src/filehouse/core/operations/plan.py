@@ -57,10 +57,16 @@ class Step:
 
     @property
     def dest(self):
-        if self.kind is StepKind.FINISH_DIR:
-            return self.parent.dest
-        base = self.parent.dest if self.parent is not None else self.folder
-        return base.get_child(self.name)
+        step = self.parent if self.kind is StepKind.FINISH_DIR else self
+        # Up to the top-level step and down again, not a call for each folder above
+        names = [step.name]
+        while step.parent is not None:
+            step = step.parent
+            names.append(step.name)
+        location = step.folder
+        for name in reversed(names):
+            location = location.get_child(name)
+        return location
 
     def ancestors(self):
         step = self.parent
@@ -99,7 +105,7 @@ def check_not_inside(source, folder, verb):
 def plan_transfer(source, folder, name, move, cancellable, parent=None, rename=True):
     """The steps that copy or move `source` to `name` in `folder` (under `parent` when nested)."""
     steps = []
-    _walk(steps, source, None, parent, folder, name, move, cancellable, True, rename)
+    _walk(steps, source, parent, folder, name, move, cancellable, rename)
     return steps
 
 
@@ -112,7 +118,7 @@ def plan_delete(source, cancellable, parent=None, walk=False):
     if parent is None and not walk and locations.in_trash(source):
         return [Step(StepKind.DELETE, source, counted=True, whole=True)]
     steps = []
-    _walk_delete(steps, source, None, parent, cancellable)
+    _walk_delete(steps, source, parent, cancellable)
     return steps
 
 
@@ -142,7 +148,34 @@ def plan_restore(source, folder, name, cancellable):
     ]
 
 
-def _walk(steps, source, info, parent, folder, name, move, cancellable, look, rename):
+def _walk(steps, source, parent, folder, name, move, cancellable, rename):
+    """Add the steps for `source` and everything in it: a folder's MAKE_DIR, what is in
+    it, then its FINISH_DIR. From a list of what is left to plan rather than a call for
+    each folder, so that no tree is too deep to plan."""
+    # What to plan, as the arguments of `_plan_one`, or the step that finishes a folder
+    pending = [(source, None, parent, folder, name, True, rename)]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, Step):
+            steps.append(item)
+            continue
+        planned = _plan_one(steps, *item, move=move, cancellable=cancellable)
+        if planned is None:
+            continue
+        made, children, merging = planned
+        pending.append(Step(StepKind.FINISH_DIR, made.source, parent=made, is_dir=True))
+        # Last first, so they come off the list in order
+        for child in reversed(children):
+            child_name = child.get_name()
+            pending.append(
+                (made.source.get_child(child_name), child, made, None, child_name, merging, False)
+            )
+
+
+def _plan_one(steps, source, info, parent, folder, name, look, rename, *, move, cancellable):
+    """Add the step for `source` itself. For a folder whose contents go item by item,
+    returns its MAKE_DIR, what is in it, and whether it may be merged into one that is
+    there; None otherwise."""
     mark = len(steps)
     try:
         if info is None:
@@ -155,29 +188,16 @@ def _walk(steps, source, info, parent, folder, name, move, cancellable, look, re
         if info.get_file_type() != _DIRECTORY:
             size = info.get_size() if info.get_file_type() == Gio.FileType.REGULAR else 0
             steps.append(Step(StepKind.COPY, source, size=size, counted=True, **common))
-            return
+            return None
 
         if move and rename and existing is None and _same_filesystem(info, base, cancellable):
             steps.append(Step(StepKind.RENAME, source, is_dir=True, counted=True, **common))
-            return
+            return None
 
         children = _children(source, cancellable)
         made = Step(StepKind.MAKE_DIR, source, is_dir=True, counted=not children, **common)
         steps.append(made)
-        for child in children:
-            _walk(
-                steps,
-                source.get_child(child.get_name()),
-                child,
-                made,
-                None,
-                child.get_name(),
-                move,
-                cancellable,
-                existing == _DIRECTORY,
-                False,
-            )
-        steps.append(Step(StepKind.FINISH_DIR, source, parent=made, is_dir=True))
+        return made, children, existing == _DIRECTORY
     except GLib.Error as error:
         if is_cancelled(error):
             raise
@@ -185,26 +205,36 @@ def _walk(steps, source, info, parent, folder, name, move, cancellable, look, re
         steps.append(
             Step(StepKind.UNPLANNED, source, parent=parent, folder=folder, name=name, error=error)
         )
+        return None
 
 
-def _walk_delete(steps, source, info, parent, cancellable):
-    mark = len(steps)
-    try:
-        if info is None:
-            info = source.query_info(_ATTRIBUTES, _NOFOLLOW, cancellable)
-        if info.get_file_type() != _DIRECTORY:
-            steps.append(Step(StepKind.DELETE, source, parent=parent, counted=True))
-            return
-        children = _children(source, cancellable)
+def _walk_delete(steps, source, parent, cancellable):
+    """Add the steps that delete `source`, each folder after what is in it. From a list
+    of what is left to plan, as `_walk`."""
+    # What to plan, as (source, info, parent), or the step that deletes a folder
+    pending = [(source, None, parent)]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, Step):
+            steps.append(item)
+            continue
+        source, info, parent = item
+        try:
+            if info is None:
+                info = source.query_info(_ATTRIBUTES, _NOFOLLOW, cancellable)
+            if info.get_file_type() != _DIRECTORY:
+                steps.append(Step(StepKind.DELETE, source, parent=parent, counted=True))
+                continue
+            children = _children(source, cancellable)
+        except GLib.Error as error:
+            if is_cancelled(error):
+                raise
+            steps.append(Step(StepKind.UNPLANNED, source, parent=parent, error=error))
+            continue
         folder = Step(StepKind.DELETE, source, parent=parent, is_dir=True, counted=not children)
-        for child in children:
-            _walk_delete(steps, source.get_child(child.get_name()), child, folder, cancellable)
-        steps.append(folder)
-    except GLib.Error as error:
-        if is_cancelled(error):
-            raise
-        del steps[mark:]
-        steps.append(Step(StepKind.UNPLANNED, source, parent=parent, error=error))
+        pending.append(folder)
+        for child in reversed(children):
+            pending.append((source.get_child(child.get_name()), child, folder))
 
 
 def _children(folder, cancellable):

@@ -493,16 +493,22 @@ class CompressJob(_ArchiveJob):
         return items
 
     def _walk(self, items, path, arcname):
-        self._check_cancelled()
-        try:
-            status = os.lstat(path)
-            children = sorted(os.listdir(path)) if stat.S_ISDIR(status.st_mode) else ()
-        except OSError as error:
-            self.errors.append(OperationError(path, "compress", _reason(error)))
-            return
-        items.append((path, arcname, status))
-        for child in children:
-            self._walk(items, os.path.join(path, child), f"{arcname}/{child}")
+        """Add `path` and everything in it, each folder before what is in it. From a list
+        of what is left to read, not a call for each folder: no tree is too deep."""
+        pending = [(path, arcname)]
+        while pending:
+            path, arcname = pending.pop()
+            self._check_cancelled()
+            try:
+                status = os.lstat(path)
+                children = sorted(os.listdir(path)) if stat.S_ISDIR(status.st_mode) else ()
+            except OSError as error:
+                self.errors.append(OperationError(path, "compress", _reason(error)))
+                continue
+            items.append((path, arcname, status))
+            # Last first, so they come off the list in order
+            for child in reversed(children):
+                pending.append((os.path.join(path, child), f"{arcname}/{child}"))
 
     def _temp(self, folder):
         while True:
