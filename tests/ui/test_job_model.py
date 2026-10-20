@@ -196,6 +196,7 @@ def test_running_text_names_the_file_its_position_and_the_speed(qtbot):
     assert job_model.text(Job, 2_500_000).endswith("/s")
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
 def test_a_retry_is_added_before_the_job_it_replaces_is_removed(
     qtbot, bare_jobs, files, wait_final
 ):
