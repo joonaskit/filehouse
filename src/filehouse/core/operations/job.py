@@ -203,9 +203,18 @@ class Job:
         """A new job for the items this one failed on, or None when there are none."""
         if not self.can_retry:
             return None
-        items = []
+        items, retried = [], set()
         for step in self._steps:
             if not step.failed:
+                continue
+            if self.kind is JobKind.DELETE:
+                # A delete has no destination to put an item back in. What is left of
+                # the item the failure was in is deleted again, with the folders it was in
+                step = [step, *step.ancestors()][-1]
+                if id(step) in retried:
+                    continue
+                retried.add(id(step))
+                items.append((step.source, None, step.source.get_basename()))
                 continue
             if step.kind is StepKind.FINISH_DIR:
                 step = step.parent

@@ -56,7 +56,8 @@ def transfer_file(step, move, cancellable, on_bytes):
             existing = locations.file_type(dest, cancellable)
             if existing is not None:
                 raise Exists(existing)
-        flags = _RENAME | (Gio.FileCopyFlags.OVERWRITE if step.overwrite else 0)
+        # Never `| 0`: some PyGObject versions make that a plain int, which Gio refuses
+        flags = (_RENAME | Gio.FileCopyFlags.OVERWRITE) if step.overwrite else _RENAME
         if move:
             try:
                 _rename_item(source, dest, flags, cancellable)

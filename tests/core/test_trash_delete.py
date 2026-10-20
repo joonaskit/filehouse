@@ -161,6 +161,55 @@ def test_a_failed_delete_names_the_file_and_keeps_its_folders(tmp_path):
     assert read_tree(tmp_path) == {"dir": {"locked": {"stuck": "s"}}}
 
 
+@needs_permissions
+def test_retry_of_a_delete_deletes_what_is_left_of_the_item(tmp_path):
+    make_tree(tmp_path, {"dir": {"a": "a", "locked": {"stuck": "s"}}, "other": {"o": "o"}})
+    (tmp_path / "dir" / "locked").chmod(0o555)
+    asked = []
+
+    def prompt(question):
+        if isinstance(question, ConfirmDelete):
+            asked.append([source.get_basename() for source in question.sources])
+            return Answer.DELETE
+        return Answer.SKIP
+
+    try:
+        job = run_job(JobKind.DELETE, [tmp_path / "dir", tmp_path / "other"], prompt=prompt)
+    finally:
+        (tmp_path / "dir" / "locked").chmod(0o755)
+    assert job.state is JobState.FAILED
+
+    again = job.retry()
+    again.run()
+
+    assert [source.get_basename() for source in again.sources] == ["dir"]
+    # A permanent delete asks first, also when it is tried again
+    assert asked == [["dir", "other"], ["dir"]]
+    assert again.state is JobState.DONE
+    assert read_tree(tmp_path) == {}
+
+
+@needs_permissions
+def test_retry_of_a_delete_takes_each_item_once(tmp_path):
+    make_tree(tmp_path, {"dir": {"one": {"1": "1"}, "two": {"2": "2"}}})
+    for name in ("one", "two"):
+        (tmp_path / "dir" / name).chmod(0o555)
+
+    def prompt(question):
+        return Answer.DELETE if isinstance(question, ConfirmDelete) else Answer.SKIP
+
+    try:
+        job = run_job(JobKind.DELETE, [tmp_path / "dir"], prompt=prompt)
+    finally:
+        for name in ("one", "two"):
+            (tmp_path / "dir" / name).chmod(0o755)
+    assert len(job.errors) == 2
+
+    again = job.retry()
+
+    assert [source.get_basename() for source in again.sources] == ["dir"]
+
+
 def test_cancelled_delete_says_how_far_it_got(tmp_path):
     make_tree(tmp_path, {"dir": {"1": "", "2": "", "3": ""}})
 
