@@ -110,36 +110,39 @@ def moved(steps):
     children = {}
     for step in steps:
         children.setdefault(id(step.parent), []).append(step)
+    whole = _whole_folders(steps, children)
     pairs = []
-    for step in children.get(id(None), []):
-        _moved_below(step, children, pairs)
+    # A list of what is left to look at, not a call for each folder: a tree can be
+    # deeper than Python allows. Last first, so they come off it in order
+    pending = list(reversed(children.get(id(None), [])))
+    while pending:
+        step = pending.pop()
+        if step.kind in (StepKind.COPY, StepKind.RENAME):
+            if step.done and not step.overwrite:
+                pairs.append((step.dest, step.source))
+        elif step.kind is StepKind.MAKE_DIR:
+            if id(step) in whole:
+                pairs.append((step.dest, step.source))
+            else:
+                pending.extend(reversed(children.get(id(step), [])))
     return tuple(pairs)
 
 
-def _moved_below(step, children, pairs):
-    if step.kind in (StepKind.COPY, StepKind.RENAME):
-        if step.done and not step.overwrite:
-            pairs.append((step.dest, step.source))
-        return
-    if step.kind is not StepKind.MAKE_DIR:
-        return
-    if _whole(step, children):
-        pairs.append((step.dest, step.source))
-        return
-    for child in children.get(id(step), []):
-        _moved_below(child, children, pairs)
-
-
-def _whole(folder, children):
-    """Whether a folder was made by the move and everything in it went with it."""
-    if not (folder.done and folder.created):
-        return False
-    for child in children.get(id(folder), []):
-        if not child.done or child.overwrite:
-            return False
-        if child.kind is StepKind.MAKE_DIR and not _whole(child, children):
-            return False
-    return True
+def _whole_folders(steps, children):
+    """The folders made by the move that everything in went with, by id. The deepest
+    are settled first: what is in a folder comes after it among the steps."""
+    whole = set()
+    for step in reversed(steps):
+        if step.kind is not StepKind.MAKE_DIR or not (step.done and step.created):
+            continue
+        if all(
+            child.done
+            and not child.overwrite
+            and (child.kind is not StepKind.MAKE_DIR or id(child) in whole)
+            for child in children.get(id(step), [])
+        ):
+            whole.add(id(step))
+    return whole
 
 
 def trashed(steps):

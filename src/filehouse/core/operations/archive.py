@@ -462,9 +462,9 @@ class CompressJob(_ArchiveJob):
         if existing is not None:
             name = self._free_name(name, False, existing)
 
-        temp = self._temp(folder)
+        temp, descriptor = self._temp(folder)
         try:
-            with archives.Writer(temp, self._format) as writer:
+            with archives.Writer(descriptor, self._format) as writer:
                 for path, arcname, status in items:
                     self._check_cancelled()
                     self._set_progress(current=os.path.basename(path))
@@ -472,13 +472,17 @@ class CompressJob(_ArchiveJob):
             if self.errors and not self._files_done:
                 # Nothing could be read: an empty archive would only mislead
                 raise self.errors.pop(0)
+            if not _is_ours(temp, descriptor):
+                raise OperationError(temp, "compress", "was replaced while it was being written")
             self.result = self._place(temp, name)
         except archives.ArchiveProblem as problem:
-            _discard(temp)
+            _discard(temp, descriptor)
             raise OperationError(os.path.join(folder, name), "compress", str(problem)) from problem
         except BaseException:
-            _discard(temp)
+            _discard(temp, descriptor)
             raise
+        finally:
+            os.close(descriptor)
         self._complete = True
 
     def _plan(self):
@@ -493,28 +497,35 @@ class CompressJob(_ArchiveJob):
         return items
 
     def _walk(self, items, path, arcname):
-        self._check_cancelled()
-        try:
-            status = os.lstat(path)
-            children = sorted(os.listdir(path)) if stat.S_ISDIR(status.st_mode) else ()
-        except OSError as error:
-            self.errors.append(OperationError(path, "compress", _reason(error)))
-            return
-        items.append((path, arcname, status))
-        for child in children:
-            self._walk(items, os.path.join(path, child), f"{arcname}/{child}")
+        """Add `path` and everything in it, each folder before what is in it. From a list
+        of what is left to read, not a call for each folder: no tree is too deep."""
+        pending = [(path, arcname)]
+        while pending:
+            path, arcname = pending.pop()
+            self._check_cancelled()
+            try:
+                status = os.lstat(path)
+                children = sorted(os.listdir(path)) if stat.S_ISDIR(status.st_mode) else ()
+            except OSError as error:
+                self.errors.append(OperationError(path, "compress", _reason(error)))
+                continue
+            items.append((path, arcname, status))
+            # Last first, so they come off the list in order
+            for child in reversed(children):
+                pending.append((os.path.join(path, child), f"{arcname}/{child}"))
 
     def _temp(self, folder):
+        """A new file to write the archive in: its path, and a descriptor the archive is
+        written through, never the name, which could be made a link meanwhile."""
         while True:
             temp = os.path.join(folder, f"{_TEMP_PREFIX}{secrets.token_hex(4)}{_TEMP_SUFFIX}")
             try:
-                # Made here, so the name libarchive then opens is certain to be ours
-                os.close(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o666))
+                descriptor = os.open(temp, _NEW_FILE_FLAGS, 0o666)
             except FileExistsError:
                 continue
             except OSError as error:
                 raise OperationError.at(self.destination, "compress", _reason(error)) from error
-            return temp
+            return temp, descriptor
 
     def _add(self, writer, path, arcname, status):
         mode = status.st_mode
@@ -581,7 +592,19 @@ class CompressJob(_ArchiveJob):
             return target
 
 
-def _discard(temp):
+def _is_ours(temp, descriptor):
+    """Whether the name `temp` is still the file open as `descriptor`."""
+    try:
+        named, opened = os.lstat(temp), os.fstat(descriptor)
+    except OSError:
+        return False
+    return (named.st_dev, named.st_ino) == (opened.st_dev, opened.st_ino)
+
+
+def _discard(temp, descriptor):
+    """Remove the temporary file, if what has its name is still it."""
+    if not _is_ours(temp, descriptor):
+        return
     try:
         os.unlink(temp)
     except OSError:

@@ -210,19 +210,19 @@ def password_works(path, passphrase):
 
 
 class Writer:
-    """An archive being written to `path`, which must be ours to write."""
+    """An archive being written to the open file `descriptor`, which the caller closes."""
 
-    def __init__(self, path, format):
+    def __init__(self, descriptor, format):
         _need()
-        self._path = path
+        self._descriptor = descriptor
         self._format = format
         self._context = None
         self._archive = None
 
     def __enter__(self):
         try:
-            self._context = libarchive.file_writer(
-                self._path, self._format.format_name, self._format.filter_name
+            self._context = libarchive.fd_writer(
+                self._descriptor, self._format.format_name, self._format.filter_name
             )
             self._archive = self._context.__enter__()
         except ArchiveError as error:

@@ -1,11 +1,12 @@
 import os
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 from ui_helpers import gfile
 
-from filehouse.core.operations import Answer, Conflict, JobKind, JobState
+from filehouse.core.operations import Answer, Conflict, JobKind, JobProgress, JobState
 from filehouse.qt_models import job_model
 from filehouse.qt_models.job_model import JobModel
 
@@ -196,6 +197,7 @@ def test_running_text_names_the_file_its_position_and_the_speed(qtbot):
     assert job_model.text(Job, 2_500_000).endswith("/s")
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
 def test_a_retry_is_added_before_the_job_it_replaces_is_removed(
     qtbot, bare_jobs, files, wait_final
 ):
@@ -213,3 +215,22 @@ def test_a_retry_is_added_before_the_job_it_replaces_is_removed(
 
     assert events == [("added", again, failed), ("removed", failed)]
     wait_final(jobs, again)
+
+
+def test_a_report_held_back_is_sent_once_its_interval_is_over(qtbot, bare_jobs):
+    jobs = bare_jobs
+    job = SimpleNamespace(
+        id=-1, state=JobState.RUNNING, progress=JobProgress(current="one"), cancel=lambda: None
+    )
+    jobs._jobs.append(job)
+    seen = []
+    jobs.job_changed.connect(lambda job: seen.append(job.progress.current))
+
+    jobs._report(job)
+    job.progress = JobProgress(current="two")
+    # Too soon after the first to be sent, and then nothing more comes
+    jobs._report(job)
+    assert seen == ["one"]
+
+    qtbot.waitUntil(lambda: seen == ["one", "two"], timeout=1000)
+    jobs._jobs.remove(job)
