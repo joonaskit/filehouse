@@ -3,7 +3,7 @@
 import pytest
 from PySide6.QtCore import Qt
 from shiboken6 import isValid
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, settle
 
 from filehouse.core import locations
 from filehouse.core.operations import JobState
@@ -181,6 +181,7 @@ def test_renaming_a_result_offers_its_name_and_not_its_path(qtbot, window, tree)
     assert dialog.edit.selectedText() == "report-draft"
     dialog.edit.setText("report-final.txt")
     dialog.accept()
+    settle(window)
 
     assert (tree / "docs" / "old" / "report-final.txt").exists()
     # Found again under its new name, in the search that is still on

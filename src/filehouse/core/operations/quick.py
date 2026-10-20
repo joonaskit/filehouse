@@ -10,18 +10,19 @@ from filehouse.core import locations
 from filehouse.core.errors import OperationError, has_code
 from filehouse.core.operations.conflicts import free_name
 
-_NEW_FOLDER = "New folder"
-_NEW_FILE = "New file"
+# What a new folder or file is called until it is named, when that is free
+NEW_FOLDER = "New folder"
+NEW_FILE = "New file"
 
 
 def suggest_folder_name(folder):
     """ "New folder", or "New folder (2)" and so on when that is taken."""
     try:
-        if locations.file_type(folder.get_child(_NEW_FOLDER)) is None:
-            return _NEW_FOLDER
-        return free_name(folder, _NEW_FOLDER, is_dir=True)
+        if locations.file_type(folder.get_child(NEW_FOLDER)) is None:
+            return NEW_FOLDER
+        return free_name(folder, NEW_FOLDER, is_dir=True)
     except GLib.Error:
-        return _NEW_FOLDER
+        return NEW_FOLDER
 
 
 def create_folder(folder, name):
@@ -38,11 +39,11 @@ def create_folder(folder, name):
 def suggest_file_name(folder):
     """ "New file", or "New file (2)" and so on when that is taken."""
     try:
-        if locations.file_type(folder.get_child(_NEW_FILE)) is None:
-            return _NEW_FILE
-        return free_name(folder, _NEW_FILE, is_dir=False)
+        if locations.file_type(folder.get_child(NEW_FILE)) is None:
+            return NEW_FILE
+        return free_name(folder, NEW_FILE, is_dir=False)
     except GLib.Error:
-        return _NEW_FILE
+        return NEW_FILE
 
 
 def create_file(folder, name):

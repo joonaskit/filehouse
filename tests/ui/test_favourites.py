@@ -4,7 +4,7 @@ import os
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, settle
 
 from filehouse.core.operations import JobKind
 from filehouse.integration import places
@@ -316,6 +316,7 @@ def drop(window, row, uris):
         Qt.KeyboardModifier.NoModifier,
     )
     sidebar.dropEvent(event)
+    settle(window)
     return event
 
 
@@ -480,6 +481,7 @@ def drag_favourite(window, favourite, row, upper):
         Qt.KeyboardModifier.NoModifier,
     )
     sidebar.dropEvent(event)
+    settle(window)
     return event
 
 
@@ -661,6 +663,7 @@ def drag_over(window, row, uris, where, drop_it=True):
         return None
     event = QDropEvent(point, copy, mime, left, no_keys)
     sidebar.dropEvent(event)
+    settle(window)
     return event
 
 

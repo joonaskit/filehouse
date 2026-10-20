@@ -35,13 +35,21 @@ _MAX_START = 999999
 class RenameManyDialog(QDialog):
     """Renames `items`, which are (location, is_dir) in the order of the list, and calls
     `renamed(locations)` with where they are afterwards. It stays open, saying why,
-    when they could not be renamed: none of them is then."""
+    when they could not be renamed: none of them is then.
 
-    def __init__(self, parent, items, renamed):
+    Which names are taken, and the renaming, are found out and done on `background`
+    (a `workers.Background`): until the answer is in, the dialog says it is checking,
+    or renaming, and OK waits."""
+
+    def __init__(self, parent, items, renamed, background):
         super().__init__(parent)
         self._items = list(items)
         self._renamed = renamed
+        self._background = background
         self._renames = []
+        # The check that is wanted, so that one asked for since is not done for nothing
+        self._latest = [0]
+        self.busy = False
         self.setWindowTitle(f"Rename {len(self._items)} items")
         self.setMinimumSize(style.px(520), style.px(460))
 
@@ -151,7 +159,22 @@ class RenameManyDialog(QDialog):
         pairs = [
             (location, name) for (location, _is_dir), name in zip(self._items, names, strict=True)
         ]
-        self._renames = rename_many.check(pairs)
+        self._latest[0] += 1
+        asked, latest = self._latest[0], self._latest
+
+        def check():
+            # Typed over already: what this would find is not wanted
+            return rename_many.check(pairs) if latest[0] == asked else None
+
+        self.busy = True
+        self._ok.setEnabled(False)
+        self._background.call(check, lambda renames: self._show(asked, renames))
+
+    def _show(self, asked, renames):
+        if asked != self._latest[0] or self._renamed is None:
+            return
+        self.busy = False
+        self._renames = renames
         danger = style.color("danger")
         for row, rename in enumerate(self._renames):
             item = self.preview.topLevelItem(row)
@@ -185,15 +208,36 @@ class RenameManyDialog(QDialog):
         super().done(result)
 
     def accept(self):
-        if self._renamed is None or not self._ok.isEnabled():
+        if self._renamed is None or self.busy or not self._ok.isEnabled():
             return
-        try:
-            now = rename_many.rename_all(self._renames)
-        except OperationError as error:
-            self._say(
-                f"Could not rename “{error.name}”: {error.message}. Nothing is renamed.", True
-            )
-            return
-        renamed = self._renamed
-        super().accept()
-        renamed(now)
+        # Called with what was done, also when the dialog was closed meanwhile
+        renamed, renames = self._renamed, self._renames
+        self._set_renaming(True)
+
+        def finished(now):
+            renamed(now)
+            if self._renamed is not None:
+                self._set_renaming(False)
+                super(RenameManyDialog, self).accept()
+
+        def failed(error):
+            if self._renamed is None:
+                return
+            self._set_renaming(False)
+            if isinstance(error, OperationError):
+                self._say(
+                    f"Could not rename “{error.name}”: {error.message}. Nothing is renamed.", True
+                )
+            else:
+                self._say(f"Could not rename: internal error: {error}.", True)
+
+        self._background.call(lambda: rename_many.rename_all(renames), finished, failed)
+
+    def _set_renaming(self, renaming):
+        self.busy = renaming
+        self._ok.setEnabled(not renaming)
+        for field in (self.way, self.find, self.replacement, self.pattern, self.start):
+            field.setEnabled(not renaming)
+        self.extension.setEnabled(not renaming)
+        if renaming:
+            self._say("Renaming…", False)

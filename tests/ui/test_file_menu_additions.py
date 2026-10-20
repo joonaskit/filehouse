@@ -5,7 +5,7 @@ import os
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from shiboken6 import isValid
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, settle
 
 from filehouse.core.operations import JobKind, JobState
 from filehouse.ui.dialogs import rename_many as rename_dialog
@@ -113,9 +113,9 @@ def test_the_job_says_what_it_does(window, jobs):
 def test_create_link_makes_one_beside_each_and_selects_it(qtbot, tree, window):
     select(window, "notes.txt")
 
-    made = window.create_link()
+    window.create_link()
+    settle(window)
 
-    assert [link.get_basename() for link in made] == ["Link to notes.txt"]
     assert os.readlink(tree / "src" / "Link to notes.txt") == "notes.txt"
     qtbot.waitUntil(lambda: selected(window) == ["Link to notes.txt"], timeout=TIMEOUT)
     assert window.statusBar().currentMessage() == "Link created"
@@ -127,9 +127,9 @@ def test_a_drop_with_ctrl_and_shift_links(qtbot, tree, window):
     keys = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
     dropped = [gfile(tree / "src" / name).get_uri() for name in ("notes.txt", "album")]
 
-    made = window._on_dropped(dropped, None, keys, QPoint(0, 0))
+    window._on_dropped(dropped, None, keys, QPoint(0, 0))
+    settle(window)
 
-    assert len(made) == 2
     assert os.readlink(tree / "dst" / "notes.txt") == str(tree / "src" / "notes.txt")
     assert os.readlink(tree / "dst" / "album") == str(tree / "src" / "album")
     # Nothing was moved or copied
@@ -150,6 +150,7 @@ def test_the_drop_menu_can_link(qtbot, tree, window, monkeypatch):
         Qt.KeyboardModifier.AltModifier,
         QPoint(0, 0),
     )
+    settle(window)
 
     assert os.path.islink(tree / "dst" / "notes.txt")
 
@@ -159,9 +160,10 @@ def test_a_link_that_cannot_be_made_is_said(qtbot, tree, window):
     wait_loaded(qtbot, window)
     keys = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
 
-    made = window._on_dropped(["trash:///gone.txt"], None, keys, QPoint(0, 0))
+    window._on_dropped(["trash:///gone.txt"], None, keys, QPoint(0, 0))
+    settle(window)
 
-    assert made == []
+    assert not os.listdir(tree / "dst")
     assert window.statusBar().currentMessage() == (
         "Could not create a link to gone.txt: a link can only point to this computer."
     )
@@ -174,6 +176,7 @@ def test_f2_with_several_selected_opens_the_dialog_with_a_preview(window):
     select(window, "IMG_1.jpg", "IMG_2.jpg")
 
     dialog = window.rename()
+    settle(window)
 
     assert isinstance(dialog, rename_dialog.RenameManyDialog)
     assert dialog.windowTitle() == "Rename 2 items"
@@ -190,15 +193,19 @@ def test_find_and_replace_renames_all_and_selects_them(qtbot, tree, window):
 
     dialog.find.setText("IMG_")
     dialog.replacement.setText("Trip ")
+    settle(window)
 
     assert [dialog.preview.topLevelItem(row).text(1) for row in range(2)] == [
         "Trip 1.jpg",
         "Trip 2.jpg",
     ]
     assert dialog.status.text() == "2 items get new names."
+    finished = []
+    dialog.finished.connect(finished.append)
     dialog.accept()
+    settle(window)
 
-    assert dialog.result() == 1
+    assert finished == [1]
     assert names(tree / "src") == [
         "Holiday 2024.JPG",
         "Trip 1.jpg",
@@ -218,7 +225,9 @@ def test_numbering_follows_the_order_of_the_list(tree, window):
     dialog.set_way(rename_dialog.NUMBER)
     dialog.pattern.setText("Shot ##")
     dialog.start.setValue(7)
+    settle(window)
     dialog.accept()
+    settle(window)
 
     # Z first: notes, then IMG_2, then IMG_1
     assert (tree / "src" / "Shot 07.txt").read_text() == "notes.txt"
@@ -234,6 +243,7 @@ def test_names_that_collide_are_shown_and_block(tree, window):
     dialog.set_way(rename_dialog.NUMBER)
     dialog.pattern.setText("notes")
     dialog.extension.setChecked(True)
+    settle(window)
     # "notes 1" and "notes 2" are free; a name without a number is not asked for here
     assert dialog._ok.isEnabled()
 
@@ -241,11 +251,13 @@ def test_names_that_collide_are_shown_and_block(tree, window):
     dialog.find.setText("_1")
     dialog.replacement.setText("_2")
     dialog.extension.setChecked(False)
+    settle(window)
 
     assert not dialog._ok.isEnabled()
     assert dialog.status.text() == "“IMG_2.jpg”: already exists. Nothing is renamed."
     assert dialog.preview.topLevelItem(0).toolTip(1) == "Already exists"
     dialog.accept()
+    settle(window)
     assert dialog.result() == 0
     assert names(tree / "src") == before
     dialog.reject()
@@ -256,10 +268,12 @@ def test_a_rename_that_fails_says_why_and_leaves_all_as_it_was(tree, window):
     dialog = window.rename()
     dialog.find.setText("IMG_")
     dialog.replacement.setText("Trip ")
+    settle(window)
     # After the preview was made
     (tree / "src" / "Trip 2.jpg").write_text("somebody else's")
 
     dialog.accept()
+    settle(window)
 
     assert dialog.result() == 0
     assert dialog.status.text() == (
@@ -275,12 +289,15 @@ def test_case_and_the_extension(tree, window):
     dialog = window.rename()
 
     dialog.set_way(rename_dialog.LOWER)
+    settle(window)
     assert dialog.renames[0].name == "holiday 2024.JPG"
     dialog.extension.setChecked(True)
+    settle(window)
     assert dialog.renames[0].name == "holiday 2024.jpg"
     # One of the two is lower case already: it stays, and is not in the way
     assert [rename.changes for rename in dialog.renames] == [True, False]
     dialog.accept()
+    settle(window)
 
     assert "holiday 2024.jpg" in names(tree / "src")
 

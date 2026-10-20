@@ -4,7 +4,7 @@ import os
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, settle
 
 from filehouse.core.operations import JobKind
 from filehouse.integration import style
@@ -227,6 +227,7 @@ def test_a_drop_goes_to_the_pane_it_lands_on(qtbot, tree, jobs, wait_final, wind
     # As the view reports it: URIs, no folder, no keys, a position
     uris = [gfile(tree / "left" / "a.txt").get_uri()]
     second.view.dropped.emit(uris, None, Qt.KeyboardModifier.NoModifier, QPoint(0, 0))
+    settle(window)
     job = jobs.jobs[0]
     wait_final(jobs, job)
 

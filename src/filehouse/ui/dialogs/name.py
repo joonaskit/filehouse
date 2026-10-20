@@ -5,14 +5,21 @@ from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QLineEdit, QVBo
 
 from filehouse.integration import style
 
+# What `apply` returns when the answer comes later, through `NameDialog.answer`
+LATER = object()
+
 
 class NameDialog(QDialog):
     """Asks for a name and gives it to `apply(name)`, which returns None or what went wrong.
-    The dialog stays open, showing the reason, until a name works or it is cancelled."""
+    The dialog stays open, showing the reason, until a name works or it is cancelled.
+
+    `apply` can also return LATER, when what the name is for is done on another thread:
+    the dialog waits, and takes the answer from `answer(...)`."""
 
     def __init__(self, parent, title, label, name, apply, select_to=None):
         super().__init__(parent)
         self._apply = apply
+        self.busy = False
         self.setWindowTitle(title)
         self.setMinimumWidth(style.px(380))
 
@@ -45,15 +52,42 @@ class NameDialog(QDialog):
         super().done(result)
 
     def accept(self):
-        if self._apply is None:
+        if self._apply is None or self.busy:
             return
         problem = self._apply(self.edit.text())
+        if problem is LATER:
+            self._set_busy(True)
+            return
+        self._show(problem)
+
+    def answer(self, problem):
+        """The answer `apply` said would come later: None, or what went wrong. Nothing
+        once the dialog is closed: what was done stays done."""
+        if self._apply is None:
+            return
+        self._set_busy(False)
+        self._show(problem)
+
+    def suggest(self, name):
+        """A better name than the one the dialog opened with, for when it is worked out
+        on another thread. Not once the user has typed, or asked for one already."""
+        if self._apply is None or self.busy or self.edit.isModified():
+            return
+        self.edit.setText(name)
+        self.edit.selectAll()
+
+    def _show(self, problem):
         if problem is None:
             super().accept()
             return
         self.error.setText(problem)
         self.error.show()
         self.edit.setFocus()
+
+    def _set_busy(self, busy):
+        self.busy = busy
+        self.edit.setEnabled(not busy)
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(not busy)
 
 
 def ask_name(parent, title, label, name, apply, select_to=None):
