@@ -2,6 +2,10 @@
 a rename, links, and what a drop does. Made, named and linked at once, or handed to
 `JobModel` as a job.
 
+What touches the file system runs on a worker (`workers.Background`), and what it comes
+to is shown when the answer is in: a folder that does not answer, a network share say,
+never holds up the window. A name dialog waits, busy, until its answer comes.
+
 The window keeps the actions, menus and signals and calls these. It gives the pane to
 work on, the job model, and where to say how it went.
 """
@@ -15,9 +19,10 @@ from filehouse.core.errors import OperationError
 from filehouse.core.operations import JobKind, quick, undo
 from filehouse.core.operations.conflicts import split_extension
 from filehouse.integration import style
+from filehouse.qt_models.workers import Background
 from filehouse.ui import menus
 from filehouse.ui.dialogs.details import ErrorDetails
-from filehouse.ui.dialogs.name import ask_name
+from filehouse.ui.dialogs.name import LATER, ask_name
 from filehouse.ui.dialogs.rename_many import RenameManyDialog
 
 # What a drop can be asked to do beside the two kinds of job
@@ -27,6 +32,13 @@ LINK = "link"
 def all_in(sources, folder):
     """Whether every one of `sources` is directly in `folder` already."""
     return all(locations.same(locations.parent(source), folder) for source in sources)
+
+
+def _reason(error):
+    """Why a piece of work failed, to follow a colon."""
+    if isinstance(error, OperationError):
+        return error.message
+    return f"internal error: {error}"
 
 
 class FileActions(QObject):
@@ -41,47 +53,71 @@ class FileActions(QObject):
         self._pane = pane
         self._say = say
         self._show_error = show_error
+        self._background = Background(self)
+
+    @property
+    def busy(self):
+        """Whether something asked for is still being done."""
+        return self._background.busy
 
     def _start(self, kind, sources, destination=None):
         return self._jobs.start(kind, sources, destination, origin=self._window)
 
+    def _asking(self, dialog, work, done, problem):
+        """Do `work()` on the worker for a name `dialog` asked for, then `done(result)`
+        and an answer for the dialog. `problem(message)` says what went wrong."""
+
+        def finished(result):
+            done(result)
+            dialog.answer(None)
+
+        def failed(error):
+            dialog.answer(problem(_reason(error)))
+
+        self._background.call(work, finished, failed)
+        return LATER
+
     # Making
 
     def new_file(self):
-        pane = self._pane()
-        if pane.read_only:
-            return None
-        folder = pane.location
-        name = quick.suggest_file_name(folder)
-
-        def create(text):
-            try:
-                made = quick.create_file(folder, text)
-            except OperationError as error:
-                return f"Could not create the file: {error.message}."
-            self._jobs.remember(undo.created(made))
-            pane.select_when_listed(folder, locations.basename(made))
-            return None
-
-        return ask_name(self._window, "New file", "Name of the new file:", name, create)
+        return self._new(
+            quick.NEW_FILE,
+            quick.suggest_file_name,
+            quick.create_file,
+            "New file",
+            "Name of the new file:",
+            "Could not create the file",
+        )
 
     def new_folder(self):
+        return self._new(
+            quick.NEW_FOLDER,
+            quick.suggest_folder_name,
+            quick.create_folder,
+            "New folder",
+            "Name of the new folder:",
+            "Could not create the folder",
+        )
+
+    def _new(self, name, suggest, create, title, label, failure):
         pane = self._pane()
         if pane.read_only:
             return None
         folder = pane.location
-        name = quick.suggest_folder_name(folder)
 
-        def create(text):
-            try:
-                made = quick.create_folder(folder, text)
-            except OperationError as error:
-                return f"Could not create the folder: {error.message}."
-            self._jobs.remember(undo.created(made))
-            pane.select_when_listed(folder, locations.basename(made))
-            return None
+        def made(location):
+            self._jobs.remember(undo.created(location))
+            pane.select_when_listed(folder, locations.basename(location))
 
-        return ask_name(self._window, "New folder", "Name of the new folder:", name, create)
+        def apply(text):
+            return self._asking(
+                dialog, lambda: create(folder, text), made, lambda reason: f"{failure}: {reason}."
+            )
+
+        # The plain name at once; "New folder (2)" once it is known whether that is taken
+        dialog = ask_name(self._window, title, label, name, apply)
+        self._background.call(lambda: suggest(folder), dialog.suggest)
+        return dialog
 
     # Renaming
 
@@ -96,21 +132,24 @@ class FileActions(QObject):
         folder = pane.location
         target = locations.child(folder, info.name)
 
-        def apply(text):
-            try:
-                renamed = quick.rename(target, text)
-            except OperationError as error:
-                return f"Could not rename “{info.display_name}”: {error.message}."
-            self._jobs.remember(undo.renamed([(renamed, target)]))
-            pane.select_when_listed(folder, locations.basename(renamed))
+        def renamed(now):
+            self._jobs.remember(undo.renamed([(now, target)]))
+            pane.select_when_listed(folder, locations.basename(now))
             # Nothing watches the folders below: a result that was renamed is found again
             pane.search_again()
-            return None
+
+        def apply(text):
+            return self._asking(
+                dialog,
+                lambda: quick.rename(target, text),
+                renamed,
+                lambda reason: f"Could not rename “{info.display_name}”: {reason}.",
+            )
 
         # Not `info.name`: for a result of a search that is its path below this folder
         name = locations.basename(target)
         stem = name if info.is_dir else split_extension(name)[0]
-        return ask_name(
+        dialog = ask_name(
             self._window,
             "Rename",
             f"New name for “{info.display_name}”:",
@@ -118,6 +157,7 @@ class FileActions(QObject):
             apply,
             len(stem),
         )
+        return dialog
 
     def _rename_many(self, pane, infos):
         """Several at once, in a dialog that shows every new name first."""
@@ -137,6 +177,7 @@ class FileActions(QObject):
             self._window,
             [(location, info.is_dir) for location, info in zip(before, infos, strict=True)],
             renamed,
+            self._background,
         )
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.open()
@@ -149,20 +190,28 @@ class FileActions(QObject):
         pane = self._pane()
         selected = pane.selected_locations()
         if not selected or pane.read_only:
-            return []
-        # Each beside what it points to, which for a result of a search is further down
-        made = []
-        errors = []
-        for target in selected:
-            links, failed = quick.create_links([target], locations.parent(target))
-            made += links
-            errors += failed
-        return self._after_linking(pane, made, errors, len(selected), pane.location)
+            return
+
+        def link():
+            # Each beside what it points to, which for a result of a search is further down
+            made, errors = [], []
+            for target in selected:
+                links, failed = quick.create_links([target], locations.parent(target))
+                made += links
+                errors += failed
+            return made, errors
+
+        self._background.call(
+            link, lambda result: self._after_linking(pane, *result, len(selected), pane.location)
+        )
 
     def _link_into(self, sources, folder):
         """A link in `folder` to each of the files dropped there."""
-        made, errors = quick.create_links(sources, folder)
-        return self._after_linking(self._pane(), made, errors, len(sources), folder)
+        pane = self._pane()
+        self._background.call(
+            lambda: quick.create_links(sources, folder),
+            lambda result: self._after_linking(pane, *result, len(sources), folder),
+        )
 
     def _after_linking(self, pane, made, errors, count, folder):
         if len(made) == 1:
@@ -176,7 +225,6 @@ class FileActions(QObject):
             summary = f"Could not create {len(errors)} of {count} links."
             self._show_error(summary)
             ErrorDetails(SimpleNamespace(errors=errors, summary=summary), self._window).open()
-        return made
 
     # Drops
 
@@ -185,28 +233,29 @@ class FileActions(QObject):
         the tab that shows it."""
         if pane.read_only and not pane.at_trash:
             # Nothing is put into the recent files, and not into a trashed folder
-            return None
+            return
         target = pane.location
         if folder_info is not None:
             target = locations.child(target, folder_info.name)
         # The trash itself takes what is dropped on it, and nothing inside it does
         trash_ok = pane.at_trash and folder_info is None
-        return self.drop_into(target, uris, modifiers, position, trash_ok)
+        self.drop_into(target, uris, modifiers, position, trash_ok)
 
     def drop_into(self, target, uris, modifiers, position, trash_ok=False):
-        """Move or copy dropped files into a folder, by the keys held and the file systems."""
+        """Move or copy dropped files into a folder, by the keys held and the file systems.
+        What it starts is a job of the job model, or links, once they are made."""
         if locations.in_recent(target):
-            return None
+            return
         sources = [locations.from_uri(uri) for uri in uris]
         if any(locations.same(source, target) for source in sources):
             # A folder dropped on itself
-            return None
+            return
         if locations.in_trash(target):
             # Dropped on the trash: that is where they go. Not into a trashed folder
-            if not trash_ok:
-                return None
             sources = [source for source in sources if not locations.in_trash(source)]
-            return self._start(JobKind.TRASH, sources) if sources else None
+            if trash_ok and sources:
+                self._start(JobKind.TRASH, sources)
+            return
 
         keys = Qt.KeyboardModifier
         both = keys.ControlModifier | keys.ShiftModifier
@@ -219,19 +268,23 @@ class FileActions(QObject):
             kind = JobKind.MOVE
         elif modifiers & keys.ControlModifier:
             kind = JobKind.COPY
-        elif all(locations.same_filesystem(source, target) for source in sources):
-            # As in Dolphin: a drop moves within a file system and copies across
-            kind = JobKind.MOVE
         else:
-            kind = JobKind.COPY
+            # As in Dolphin: a drop moves within a file system and copies across
+            self._background.call(
+                lambda: all(locations.same_filesystem(source, target) for source in sources),
+                lambda same: self._drop_as(JobKind.MOVE if same else JobKind.COPY, sources, target),
+            )
+            return
+        self._drop_as(kind, sources, target)
+
+    def _drop_as(self, kind, sources, target):
         if kind is None:
-            return None
+            return
         if kind == LINK:
-            return self._link_into(sources, target)
-        if kind is JobKind.MOVE and all_in(sources, target):
-            # Already where they were dropped
-            return None
-        return self._start(kind, sources, target)
+            self._link_into(sources, target)
+        elif kind is not JobKind.MOVE or not all_in(sources, target):
+            # A move to where they are already is nothing to do
+            self._start(kind, sources, target)
 
     def ask_drop_action(self, position):
         """Move, copy or link, from a menu at `position`; None when it is cancelled."""

@@ -8,7 +8,7 @@ from urllib.parse import unquote
 import pytest
 from PySide6.QtCore import Qt
 from shiboken6 import isValid
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, settle
 
 from filehouse.core.operations import JobKind, JobState, job, trash
 from filehouse.qt_models import job_model
@@ -57,6 +57,7 @@ def rename(window, old, new):
     dialog = window.rename()
     dialog.edit.setText(new)
     dialog.accept()
+    settle(window)
 
 
 def test_there_is_nothing_to_undo_at_first(tree, open_window):
@@ -72,6 +73,9 @@ def test_ctrl_z_takes_a_rename_back(qtbot, tree, open_window):
     rename(window, "a.txt", "notes.txt")
     assert window._undo.isEnabled()
     assert window._undo.text() == "Undo rename of “notes.txt”"
+    # The offscreen platform gives no window back its focus when a dialog closes
+    window.activateWindow()
+    qtbot.waitUntil(window.isActiveWindow, timeout=TIMEOUT)
 
     qtbot.keyClick(window._view._tree, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
 
@@ -114,7 +118,9 @@ def test_renaming_several_is_taken_back_as_one(qtbot, tree, open_window):
     dialog = window.rename()
     dialog.set_way("number")
     dialog.pattern.setText("note #")
+    settle(window)
     dialog.accept()
+    settle(window)
     assert names(tree / "src") == ["note 1.txt", "note 2.txt", "sub"]
     assert window._undo.text() == "Undo rename of 2 items"
 
@@ -129,6 +135,7 @@ def test_a_new_folder_is_removed_while_it_is_empty(tree, open_window):
     dialog = window.new_folder()
     dialog.edit.setText("Photos")
     dialog.accept()
+    settle(window)
     assert window._undo.text() == "Undo new “Photos”"
 
     window.undo()
@@ -142,6 +149,7 @@ def test_a_new_folder_that_was_used_since_stays(tree, open_window):
     dialog = window.new_folder()
     dialog.edit.setText("Photos")
     dialog.accept()
+    settle(window)
     (tree / "src" / "Photos" / "holiday.jpg").write_text("x")
 
     window.undo()
@@ -157,6 +165,7 @@ def test_a_new_file_is_removed_while_nothing_is_written_to_it(tree, open_window)
     dialog = window.new_file()
     dialog.edit.setText("todo.txt")
     dialog.accept()
+    settle(window)
     assert (tree / "src" / "todo.txt").exists()
 
     window.undo()
@@ -233,7 +242,9 @@ def test_several_that_could_not_be_taken_back_are_listed_by_name(qtbot, tree, op
     dialog = window.rename()
     dialog.set_way("number")
     dialog.pattern.setText("note #")
+    settle(window)
     dialog.accept()
+    settle(window)
     (tree / "src" / "a.txt").write_text("made since")
     (tree / "src" / "b.txt").write_text("made since")
 

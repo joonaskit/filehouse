@@ -133,7 +133,7 @@ filehouse/
 │   │   ├── permissions.py       a permissions preset applied on a worker thread
 │   │   ├── details.py           one file's details on a worker thread
 │   │   ├── job_model.py         all jobs of the process, fed by worker threads; titles and texts
-│   │   └── workers.py           the thread pool jobs run on
+│   │   └── workers.py           the thread pool jobs run on, and `Background`: what a window does at once
 │   ├── integration/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
 │   │   ├── style.py             theme → QPalette, fonts and a small stylesheet
@@ -150,7 +150,8 @@ filehouse/
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
 │       ├── main_window.py
-│       ├── file_actions.py      new file and folder, rename, links, what a drop does (#64)
+│       ├── file_actions.py      new file and folder, rename, links, what a drop does (#64);
+│       │                        their file work on a worker, in turn (`workers.Background`, #61)
 │       ├── pane.py              one folder: model, sort proxy, list, history, selection
 │       ├── chooser.py           the dialog other apps open and save with
 │       ├── groups.py            the rounded groups of a toolbar

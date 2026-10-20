@@ -4,7 +4,7 @@ import os
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, settle
 
 from filehouse.core.operations import JobKind
 from filehouse.integration import style
@@ -217,6 +217,7 @@ def test_a_drop_on_a_tab_moves_where_a_drop_on_the_list_would(
 
     uris = [gfile(tree / "one" / "a.txt").get_uri()]
     window._tab_bar.dropped.emit(1, uris, Qt.KeyboardModifier.NoModifier, QPoint(0, 0))
+    settle(window)
     job = jobs.jobs[0]
     wait_final(jobs, job)
 

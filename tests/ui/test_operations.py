@@ -2,12 +2,13 @@
 
 import dataclasses
 import os
+import threading
 
 import pytest
-from PySide6.QtCore import QPoint, Qt, QUrl
+from PySide6.QtCore import QPoint, Qt, QThread, QUrl
 from PySide6.QtWidgets import QApplication
 from shiboken6 import isValid
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, settle, started_by
 
 from filehouse.core import listing, locations
 from filehouse.core.operations import (
@@ -18,6 +19,7 @@ from filehouse.core.operations import (
     JobKind,
     JobState,
     permissions,
+    quick,
 )
 from filehouse.qt_models import directory_model
 from filehouse.ui import clipboard, main_window, settings
@@ -347,6 +349,7 @@ def test_rename(qtbot, tree, open_window):
     assert dialog.edit.selectedText() == "a"
     dialog.edit.setText("notes.txt")
     dialog.accept()
+    settle(window)
 
     assert names(tree / "src") == ["b.txt", "notes.txt", "sub"]
     qtbot.waitUntil(lambda: "notes.txt" in listed(window), timeout=TIMEOUT)
@@ -363,15 +366,19 @@ def test_rename_onto_an_existing_name_says_why_and_stays_open(qtbot, tree, open_
     dialog = window.rename()
     dialog.edit.setText("b.txt")
     dialog.accept()
+    settle(window)
 
     assert dialog.result() == 0
     assert dialog.error.text() == "Could not rename “a.txt”: already exists."
     assert (tree / "src" / "a.txt").read_text() == "aaa"
     assert (tree / "src" / "b.txt").read_text() == "bbb"
 
+    finished = []
+    dialog.finished.connect(finished.append)
     dialog.edit.setText("c.txt")
     dialog.accept()
-    assert dialog.result() == 1
+    settle(window)
+    assert finished == [1]
     assert names(tree / "src") == ["b.txt", "c.txt", "sub"]
 
 
@@ -380,9 +387,11 @@ def test_new_folder(qtbot, tree, open_window):
     window = open_window(tree / "src")
 
     dialog = window.new_folder()
+    settle(window)
     assert dialog.edit.text() == "New folder (2)"
     dialog.edit.setText("Photos")
     dialog.accept()
+    settle(window)
 
     assert (tree / "src" / "Photos").is_dir()
     qtbot.waitUntil(
@@ -397,6 +406,7 @@ def test_new_folder_with_a_taken_name_says_why(qtbot, tree, open_window):
     dialog = window.new_folder()
     dialog.edit.setText("sub")
     dialog.accept()
+    settle(window)
 
     assert dialog.error.text() == "Could not create the folder: already exists."
     assert dialog.result() == 0
@@ -407,9 +417,11 @@ def test_new_file(qtbot, tree, open_window):
     window = open_window(tree / "src")
 
     dialog = window.new_file()
+    settle(window)
     assert dialog.edit.text() == "New file (2)"
     dialog.edit.setText("notes.md")
     dialog.accept()
+    settle(window)
 
     assert (tree / "src" / "notes.md").read_text() == ""
     qtbot.waitUntil(
@@ -424,10 +436,135 @@ def test_new_file_with_a_taken_name_says_why_and_replaces_nothing(qtbot, tree, o
     dialog = window.new_file()
     dialog.edit.setText("a.txt")
     dialog.accept()
+    settle(window)
 
     assert dialog.error.text() == "Could not create the file: already exists."
     assert dialog.result() == 0
     assert (tree / "src" / "a.txt").read_text() == "aaa"
+
+
+# On a folder that does not answer: the window goes on meanwhile
+
+
+class Stuck:
+    """Stands in for a file system call that does not come back until `release()`, as
+    on a network share that has stopped answering. Then it does what it stands for."""
+
+    def __init__(self, real):
+        self._real = real
+        self._go = threading.Event()
+        self.threads = []
+
+    def __call__(self, *args):
+        self.threads.append(QThread.currentThread())
+        self._go.wait(TIMEOUT / 1000)
+        return self._real(*args)
+
+    def release(self):
+        self._go.set()
+
+
+@pytest.fixture
+def stuck(monkeypatch):
+    made = []
+
+    def make(module, name):
+        call = Stuck(getattr(module, name))
+        monkeypatch.setattr(module, name, call)
+        made.append(call)
+        return call
+
+    yield make
+    for call in made:
+        call.release()
+
+
+def off_the_ui_thread(call):
+    return call.threads and QApplication.instance().thread() not in call.threads
+
+
+def test_a_new_folder_waits_for_its_folder_and_not_the_window(qtbot, tree, open_window, stuck):
+    window = open_window(tree / "src")
+    create = stuck(quick, "create_folder")
+    dialog = window.new_folder()
+    settle(window)
+    dialog.edit.setText("Photos")
+
+    dialog.accept()
+    qtbot.wait(50)
+
+    assert dialog.busy and not dialog.edit.isEnabled()
+    assert not (tree / "src" / "Photos").exists()
+    create.release()
+    settle(window)
+    assert (tree / "src" / "Photos").is_dir()
+    assert off_the_ui_thread(create)
+
+
+def test_a_folder_made_after_its_dialog_closed_can_still_be_taken_back(
+    qtbot, tree, open_window, stuck
+):
+    window = open_window(tree / "src")
+    create = stuck(quick, "create_folder")
+    dialog = window.new_folder()
+    settle(window)
+    dialog.edit.setText("Photos")
+    dialog.accept()
+
+    dialog.reject()
+    create.release()
+    settle(window)
+
+    assert (tree / "src" / "Photos").is_dir()
+    assert window._undo.text() == "Undo new “Photos”"
+
+
+def test_a_name_typed_before_the_suggestion_comes_stays(qtbot, tree, open_window, stuck):
+    (tree / "src" / "New folder").mkdir()
+    window = open_window(tree / "src")
+    suggest = stuck(quick, "suggest_folder_name")
+    dialog = window.new_folder()
+    assert dialog.edit.text() == "New folder"
+
+    qtbot.keyClicks(dialog.edit, "Mine")
+    suggest.release()
+    settle(window)
+
+    assert dialog.edit.text() == "Mine"
+    assert off_the_ui_thread(suggest)
+    dialog.reject()
+
+
+def test_a_drop_waits_for_its_file_systems_and_not_the_window(
+    qtbot, tree, open_window, jobs, wait_final, stuck
+):
+    window = open_window(tree / "dst")
+    same = stuck(locations, "same_filesystem")
+
+    window._on_dropped(uris(tree / "src" / "a.txt"), None, NO_KEYS, QPoint(0, 0))
+    qtbot.wait(50)
+
+    assert jobs.jobs == []
+    same.release()
+    settle(window)
+    job = wait_final(jobs, jobs.jobs[0])
+    assert job.kind is JobKind.MOVE
+    assert off_the_ui_thread(same)
+
+
+def test_a_link_waits_for_its_folder_and_not_the_window(qtbot, tree, open_window, stuck):
+    window = open_window(tree / "src")
+    select(window, "a.txt")
+    links = stuck(quick, "create_links")
+
+    window.create_link()
+    qtbot.wait(50)
+
+    assert not (tree / "src" / "Link to a.txt").exists()
+    links.release()
+    settle(window)
+    assert os.readlink(tree / "src" / "Link to a.txt") == "a.txt"
+    assert off_the_ui_thread(links)
 
 
 # Copy path, the terminal, Move to
@@ -723,7 +860,7 @@ def drop(window, paths, onto=None, keys=NO_KEYS):
     info = None
     if onto is not None:
         info = window._model.info(window._model.row_for_name(onto))
-    return window._on_dropped(uris(*paths), info, keys, QPoint(0, 0))
+    return started_by(window, lambda: window._on_dropped(uris(*paths), info, keys, QPoint(0, 0)))
 
 
 def test_a_drop_on_the_same_file_system_moves(qtbot, tree, open_window, jobs, wait_final):
