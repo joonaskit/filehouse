@@ -14,6 +14,10 @@ _pool.setMaxThreadCount(8)
 # the order it was asked for, so that a rename never overtakes the folder it renames
 _in_turn = QThreadPool()
 _in_turn.setMaxThreadCount(1)
+# What only looks (where the nearest folder is that is there): a few at once, in any order,
+# so that a folder that does not answer holds up none of the above
+_any_order = QThreadPool()
+_any_order.setMaxThreadCount(4)
 
 
 def spawn(function):
@@ -57,10 +61,12 @@ class Background(QObject):
 
     `call(function, done, failed)` runs `function()` on a worker, then calls `done(result)`,
     or `failed(exception)` when it raised, on this object's thread. Calls run one at a
-    time, in the order they were made, across the whole app."""
+    time, in the order they were made, across the whole app; with `in_turn` False, for
+    what changes nothing, a few at once and in any order."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, in_turn=True):
         super().__init__(parent)
+        self._pool = _in_turn if in_turn else _any_order
         self.pending = 0
         self._signals = _Signals(self)
         self._signals.finished.connect(self._on_finished)
@@ -71,7 +77,7 @@ class Background(QObject):
 
     def call(self, function, done, failed=None):
         self.pending += 1
-        _in_turn.start(_Call(function, done, failed, self._signals))
+        self._pool.start(_Call(function, done, failed, self._signals))
 
     def _on_finished(self, done, failed, result, error):
         self.pending -= 1

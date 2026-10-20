@@ -2,13 +2,12 @@
 
 import dataclasses
 import os
-import threading
 
 import pytest
-from PySide6.QtCore import QPoint, Qt, QThread, QUrl
+from PySide6.QtCore import QPoint, Qt, QUrl
 from PySide6.QtWidgets import QApplication
 from shiboken6 import isValid
-from ui_helpers import TIMEOUT, gfile, settle, started_by
+from ui_helpers import TIMEOUT, gfile, off_the_ui_thread, settle, started_by
 
 from filehouse.core import listing, locations
 from filehouse.core.operations import (
@@ -444,43 +443,6 @@ def test_new_file_with_a_taken_name_says_why_and_replaces_nothing(qtbot, tree, o
 
 
 # On a folder that does not answer: the window goes on meanwhile
-
-
-class Stuck:
-    """Stands in for a file system call that does not come back until `release()`, as
-    on a network share that has stopped answering. Then it does what it stands for."""
-
-    def __init__(self, real):
-        self._real = real
-        self._go = threading.Event()
-        self.threads = []
-
-    def __call__(self, *args):
-        self.threads.append(QThread.currentThread())
-        self._go.wait(TIMEOUT / 1000)
-        return self._real(*args)
-
-    def release(self):
-        self._go.set()
-
-
-@pytest.fixture
-def stuck(monkeypatch):
-    made = []
-
-    def make(module, name):
-        call = Stuck(getattr(module, name))
-        monkeypatch.setattr(module, name, call)
-        made.append(call)
-        return call
-
-    yield make
-    for call in made:
-        call.release()
-
-
-def off_the_ui_thread(call):
-    return call.threads and QApplication.instance().thread() not in call.threads
 
 
 def test_a_new_folder_waits_for_its_folder_and_not_the_window(qtbot, tree, open_window, stuck):

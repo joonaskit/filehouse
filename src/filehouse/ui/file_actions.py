@@ -29,6 +29,21 @@ from filehouse.ui.dialogs.rename_many import RenameManyDialog
 LINK = "link"
 
 
+def answer_later(background, dialog, work, done, problem):
+    """For a NameDialog's `apply`: do `work()` on `background`, then `done(result)` and
+    the dialog's answer. `problem(reason)` says what went wrong. Returns LATER."""
+
+    def finished(result):
+        done(result)
+        dialog.answer(None)
+
+    def failed(error):
+        dialog.answer(problem(_reason(error)))
+
+    background.call(work, finished, failed)
+    return LATER
+
+
 def all_in(sources, folder):
     """Whether every one of `sources` is directly in `folder` already."""
     return all(locations.same(locations.parent(source), folder) for source in sources)
@@ -64,18 +79,7 @@ class FileActions(QObject):
         return self._jobs.start(kind, sources, destination, origin=self._window)
 
     def _asking(self, dialog, work, done, problem):
-        """Do `work()` on the worker for a name `dialog` asked for, then `done(result)`
-        and an answer for the dialog. `problem(message)` says what went wrong."""
-
-        def finished(result):
-            done(result)
-            dialog.answer(None)
-
-        def failed(error):
-            dialog.answer(problem(_reason(error)))
-
-        self._background.call(work, finished, failed)
-        return LATER
+        return answer_later(self._background, dialog, work, done, problem)
 
     # Making
 

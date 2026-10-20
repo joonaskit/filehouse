@@ -5,8 +5,9 @@ import shutil
 
 import pytest
 from shiboken6 import isValid
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, off_the_ui_thread
 
+from filehouse.core import locations
 from filehouse.integration import style
 from filehouse.ui import main_window, settings
 from filehouse.ui.main_window import MainWindow, session_to_open
@@ -122,7 +123,24 @@ def test_a_window_that_is_not_the_last_changes_nothing(qtbot, tree, open_window)
     assert settings.session() == ([([uri(tree / "one")], 0)], 0)
 
 
-def test_a_folder_that_is_gone_is_the_nearest_one_above_or_left_out(tree):
+def test_nothing_is_looked_at_before_the_window_opens(tree, monkeypatch):
+    def looked(*_args):
+        raise AssertionError("a folder of last time was looked at")
+
+    monkeypatch.setattr(locations, "is_folder", looked)
+    monkeypatch.setattr(locations, "nearest_folder", looked)
+    settings.set_session([([uri(tree / "one")], 0), ([uri(tree / "gone")], 0)], 1)
+
+    tabs, front = session_to_open()
+
+    assert [[folder.get_basename() for folder in folders] for folders, _active in tabs] == [
+        ["one"],
+        ["gone"],
+    ]
+    assert front == 1
+
+
+def test_a_folder_that_is_gone_is_the_nearest_one_above_or_left_out(qtbot, tree, open_window):
     settings.set_session(
         [
             ([uri(tree / "one" / "sub" / "deeper")], 0),
@@ -134,22 +152,47 @@ def test_a_folder_that_is_gone_is_the_nearest_one_above_or_left_out(tree):
     )
     shutil.rmtree(tree / "one" / "sub")
 
-    tabs, front = session_to_open()
+    window = open_window(session=session_to_open())
 
-    assert [[folder.get_basename() for folder in folders] for folders, _active in tabs] == [
-        ["one"],
-        ["two"],
-        ["three"],
-    ]
-    # The pane that was active is gone with its folder; the tab in front moved up
-    assert [active for _folders, active in tabs] == [0, 0, 0]
-    assert front == 2
+    # Found once each could not be listed: the window opened without waiting for them
+    qtbot.waitUntil(lambda: folders(window) == [["one"], ["two"], ["three"]], timeout=TIMEOUT)
+    # The pane that was active is gone with its folder; the tab in front is the one it was
+    assert not window._tabs[1].is_split
+    assert window._tab is window._tabs[2]
+    # As if it had been opened there
+    assert not window._tabs[0].active.history.can_go_back
+
+
+def test_a_pane_that_moved_on_is_not_taken_back_to_a_folder_of_last_time(
+    qtbot, tree, open_window, stuck
+):
+    nearest = stuck(locations, "nearest_folder")
+    settings.set_session([([uri(tree / "two" / "gone")], 0)], 0)
+    window = open_window(session=session_to_open())
+    pane = window._pane
+    # The folder could not be listed, and where to go instead does not come
+    qtbot.waitUntil(lambda: bool(nearest.threads), timeout=TIMEOUT)
+
+    window.navigate(gfile(tree / "three"))
+    nearest.release()
+    qtbot.waitUntil(lambda: not pane._background.busy, timeout=TIMEOUT)
+
+    assert pane.location.get_path() == str(tree / "three")
+    assert off_the_ui_thread(nearest)
+
+
+def test_with_nothing_left_of_last_time_the_window_goes_home(qtbot, open_window):
+    settings.set_session([(["no-such-scheme://host/share"], 0)], 0)
+
+    window = open_window(session=session_to_open())
+
+    qtbot.waitUntil(
+        lambda: locations.same(window._pane.location, locations.home()), timeout=TIMEOUT
+    )
+    assert len(window._tabs) == 1
 
 
 def test_nothing_to_open(tree):
-    assert session_to_open() is None
-
-    settings.set_session([(["no-such-scheme://host/share"], 0)], 0)
     assert session_to_open() is None
 
     settings.set_session([([uri(tree / "one")], 0)], 0)
