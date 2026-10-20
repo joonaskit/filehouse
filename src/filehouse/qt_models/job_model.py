@@ -60,6 +60,7 @@ class JobModel(QObject):
 
     # From worker threads to the UI thread
     _reported = Signal(object)
+    _held = Signal(object)  # a report was held back: it is sent once the interval is over
     _asked = Signal(object, object)
 
     def __init__(self, parent=None, keep_finished_ms=_KEEP_FINISHED_MS):
@@ -70,11 +71,13 @@ class JobModel(QObject):
         self._samples = {}  # job id -> recent (time, bytes done), for the speed
         self._ended = set()
         self._last_report = {}  # job id -> (state, time); touched only by that job's thread
+        self._held_back = set()  # ids of the jobs with a report waiting to be sent
         self._keep_finished_ms = keep_finished_ms
         self._queue = JobQueue(workers.spawn)
         # The actions that can be taken back, of every window: jobs belong to the process
         self._history = undo.History()
         self._reported.connect(self._on_reported)
+        self._held.connect(self._on_held)
         self._asked.connect(self.question_asked)
         # Nobody can answer a job once its model is gone, so it must not wait
         jobs = self._jobs
@@ -205,10 +208,18 @@ class JobModel(QObject):
         state, now = job.state, time.monotonic()
         last_state, last_time = self._last_report.get(job.id, (None, 0.0))
         if state is last_state and now - last_time < _UPDATE_SECONDS:
+            # Sent when the interval is over, or the last report before a pause, a slow
+            # file say, would be the one lost
+            if job.id not in self._held_back:
+                self._held_back.add(job.id)
+                self._send(self._held, job)
             return
         self._last_report[job.id] = (state, now)
+        self._send(self._reported, job)
+
+    def _send(self, signal, job):
         try:
-            self._reported.emit(job)
+            signal.emit(job)
         except RuntimeError:
             # The model is gone; the job still runs to its end
             pass
@@ -239,6 +250,15 @@ class JobModel(QObject):
             QTimer.singleShot(self._keep_finished_ms, self, lambda: self.dismiss(job))
         if not self.active_count():
             self.idle.emit()
+
+    def _on_held(self, job):
+        QTimer.singleShot(round(_UPDATE_SECONDS * 1000), self, lambda: self._send_held(job))
+
+    def _send_held(self, job):
+        # Let go first: a report held back after this is sent at its own time. This one
+        # shows the job as it is now, with whatever was held back
+        self._held_back.discard(job.id)
+        self._on_reported(job)
 
     def _sample(self, job):
         now = time.monotonic()
