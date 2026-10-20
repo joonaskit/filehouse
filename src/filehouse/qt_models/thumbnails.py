@@ -296,18 +296,30 @@ _external_pool = QThreadPool()
 _external_pool.setMaxThreadCount(_EXTERNAL_AT_ONCE)
 
 
+class _Wanted:
+    """Which round of asking a Thumbnailer is in: what was asked for in an earlier one
+    is not made. A plain object, read on the worker threads, where the Thumbnailer
+    itself may be gone."""
+
+    def __init__(self):
+        self.round = 0
+
+
 class _Task(QRunnable):
     """Looks in the cache, then makes the thumbnail if Qt can. What only a thumbnailer
     can make is handed over to the pool for those."""
 
-    def __init__(self, token, uri, path, mtime, size, content_type, signals):
+    def __init__(self, token, uri, path, mtime, size, content_type, signals, wanted):
         super().__init__()
         self._arguments = (uri, path, mtime, size)
         self._content_type = content_type
         self._token = token
         self._signals = signals
+        self._wanted = (wanted, wanted.round)
 
     def run(self):
+        if not _still_wanted(self._wanted):
+            return
         uri, path, mtime, size = self._arguments
         image = load(uri, mtime)
         if image is None and not failed(uri, mtime):
@@ -317,24 +329,34 @@ class _Task(QRunnable):
                 thumbnailer = thumbnailer_for(self._content_type)
                 if thumbnailer is not None:
                     _external_pool.start(
-                        _ExternalTask(self._token, thumbnailer, self._arguments, self._signals)
+                        _ExternalTask(
+                            self._token, thumbnailer, self._arguments, self._signals, self._wanted
+                        )
                     )
                     return
         _answer(self._signals, self._token, image)
 
 
 class _ExternalTask(QRunnable):
-    def __init__(self, token, thumbnailer, arguments, signals):
+    def __init__(self, token, thumbnailer, arguments, signals, wanted):
         super().__init__()
         self._thumbnailer = thumbnailer
         self._arguments = arguments
         self._token = token
         self._signals = signals
+        self._wanted = wanted
 
     def run(self):
+        if not _still_wanted(self._wanted):
+            return
         uri, path, mtime, size = self._arguments
         image = make_with_thumbnailer(self._thumbnailer, uri, path, mtime, size)
         _answer(self._signals, self._token, image)
+
+
+def _still_wanted(wanted):
+    holder, round_ = wanted
+    return holder.round == round_
 
 
 def _answer(signals, token, image):
@@ -354,8 +376,15 @@ class Thumbnailer(QObject):
         super().__init__(parent)
         self._signals = _Signals(self)
         self._signals.ready.connect(self.ready)
+        self._wanted = _Wanted()
 
     def request(self, token, uri, path, mtime, size, content_type):
         QThreadPool.globalInstance().start(
-            _Task(token, uri, path, mtime, size, content_type, self._signals)
+            _Task(token, uri, path, mtime, size, content_type, self._signals, self._wanted)
         )
+
+    def forget(self):
+        """Nothing asked for so far is wanted any more: what has not started is not made,
+        and gives no answer. For a folder that was left, whose thumbnails would otherwise
+        keep the threads busy long after."""
+        self._wanted.round += 1

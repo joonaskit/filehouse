@@ -5,6 +5,7 @@ import time
 import pytest
 from gi.repository import Gio
 from PySide6.QtCore import Qt
+from ui_helpers import shared_threads_held
 
 from filehouse.core.listing import natural_key
 from filehouse.qt_models.directory_model import (
@@ -322,3 +323,12 @@ def test_many_changes_in_a_large_folder_stay_fast(qtbot, model, tmp_path):
     # A quarter of a second here, where finding each row from the start took over three
     assert time.monotonic() - started < 1.5
     assert model.rowCount() == 0
+
+
+def test_a_folder_is_listed_while_the_shared_threads_are_busy(qtbot, model, tmp_path):
+    (tmp_path / "a.txt").write_text("")
+
+    with shared_threads_held():
+        load(qtbot, model, tmp_path)
+
+        assert names(model) == ["a.txt"]

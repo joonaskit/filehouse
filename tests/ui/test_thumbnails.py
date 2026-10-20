@@ -4,7 +4,7 @@ import os
 import pytest
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QImage, QImageReader
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, shared_threads_held
 
 from filehouse.qt_models import thumbnails
 from filehouse.qt_models.directory_model import NAME, DirectoryModel
@@ -332,6 +332,30 @@ def test_a_huge_file_is_not_handed_to_a_thumbnailer(desktop, tmp_path, monkeypat
     assert image is None
     # Not a failure of the program: nothing was tried
     assert not thumbnails.failed(uri, 1_600_000_000)
+
+
+def test_the_thumbnails_of_a_folder_that_was_left_are_not_made(
+    qtbot, picture, tmp_path, monkeypatch
+):
+    looked = []
+    monkeypatch.setattr(thumbnails, "load", lambda uri, mtime: looked.append(uri))
+    model = DirectoryModel()
+    model.set_thumbnails(True)
+    with qtbot.waitSignal(model.loaded, timeout=TIMEOUT):
+        model.set_location(gfile(picture.parent))
+
+    with shared_threads_held():
+        # Asked for, but not started before the folder is left
+        model.data(
+            model.index(model.row_for_name("photo.png"), NAME), Qt.ItemDataRole.DecorationRole
+        )
+        other = tmp_path / "other"
+        other.mkdir()
+        with qtbot.waitSignal(model.loaded, timeout=TIMEOUT):
+            model.set_location(gfile(other))
+
+    assert looked == []
+    model.close()
 
 
 def test_the_model_shows_what_a_thumbnailer_made(qtbot, desktop, tmp_path):

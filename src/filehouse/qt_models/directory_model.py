@@ -64,6 +64,11 @@ _COUNT_DELAY_MS = 300
 # Seconds between two reports from a count of many folders
 _COUNT_REPORT_S = 0.1
 
+# Listing has threads of its own, so a folder is never listed after thumbnails, counts
+# or a search that are still under way, or stuck on a folder that does not answer
+_listing_pool = QThreadPool()
+_listing_pool.setMaxThreadCount(4)
+
 # The FileInfo behind a row, on any column
 InfoRole = Qt.ItemDataRole.UserRole
 
@@ -233,7 +238,7 @@ class DirectoryModel(QAbstractTableModel):
         # Monitor first, so nothing created during the listing is missed.
         # Entries seen twice are merged by name.
         self._start_monitor()
-        QThreadPool.globalInstance().start(
+        _listing_pool.start(
             _ListingTask(self._generation, location, self._cancellable, self._signals)
         )
 
@@ -244,6 +249,7 @@ class DirectoryModel(QAbstractTableModel):
         self._stop_search()
         self._set_search_text("")
         self._count_timer.stop()
+        self._thumbnailer.forget()
         self._to_count = set()
         self._counting = False
         if self._cancellable is not None:
