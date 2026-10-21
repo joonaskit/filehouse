@@ -177,6 +177,16 @@ _SPECIAL_DIRS = [
 
 def places():
     """Home and the user's special folders that exist."""
+    return _places(look=True)
+
+
+def places_as_set():
+    """Home and every special folder of the user that is set, without asking whether
+    it is there: nothing is read from the disk."""
+    return _places(look=False)
+
+
+def _places(look):
     home_location = home()
     result = [Place("Home", "user-home", home_location)]
     for directory, icon in _SPECIAL_DIRS:
@@ -185,7 +195,7 @@ def places():
             continue
         location = Gio.File.new_for_path(path)
         # An unset special folder is reported as the home folder itself
-        if location.equal(home_location) or not location.query_exists(None):
+        if location.equal(home_location) or (look and not location.query_exists(None)):
             continue
         result.append(Place(location.get_basename(), icon, location))
     if has_recent():

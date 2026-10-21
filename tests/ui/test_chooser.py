@@ -2,10 +2,12 @@
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView
 from shiboken6 import isValid
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, off_the_ui_thread
 
+from filehouse.core import locations
 from filehouse.core.filters import GLOB, MIME, Filter
 from filehouse.integration import portal
 from filehouse.integration.portal import Choice, Request
@@ -76,6 +78,11 @@ def select(qtbot, dialog, *names):
 
 def uri(path):
     return gfile(path).get_uri()
+
+
+def looked(qtbot, dialog):
+    """Wait until what the dialog looks at before it answers has been looked at."""
+    qtbot.waitUntil(lambda: not isValid(dialog) or not dialog._background.busy, timeout=TIMEOUT)
 
 
 # Opening
@@ -294,6 +301,7 @@ def test_saving_offers_the_name_ready_to_be_typed_over(qtbot, open_dialog, tree)
 
     dialog.name.setText("final.txt")
     qtbot.keyClick(dialog.name, Qt.Key.Key_Return)
+    looked(qtbot, dialog)
 
     assert asked.uris == [uri(tree / "final.txt")]
     # Nothing is made by the dialog: the app writes the file
@@ -325,10 +333,12 @@ def test_saving_over_a_file_asks_first(qtbot, open_dialog, tree, monkeypatch):
     dialog = open_dialog(asked)
 
     dialog.accept_button.click()
+    looked(qtbot, dialog)
     # Not replaced: nothing is answered, and the dialog is still there
     assert not asked.answers and dialog.isVisible()
 
     dialog.accept_button.click()
+    looked(qtbot, dialog)
     assert asked.uris == [uri(tree / "report.txt")]
     assert questions == [(["report.txt"], "work", False)] * 2
     assert (tree / "report.txt").read_text() == "top"
@@ -351,6 +361,7 @@ def test_a_folder_typed_as_the_name_is_gone_into(qtbot, open_dialog, tree):
 
     dialog.name.setText("docs")
     dialog.accept_button.click()
+    looked(qtbot, dialog)
 
     qtbot.waitUntil(lambda: shown(dialog) == ["old", "summary.txt"], timeout=TIMEOUT)
     assert not asked.answers and dialog.name.text() == ""
@@ -358,6 +369,7 @@ def test_a_folder_typed_as_the_name_is_gone_into(qtbot, open_dialog, tree):
     # And a path from here names a file in a folder below
     dialog.name.setText("old/new.txt")
     dialog.accept_button.click()
+    looked(qtbot, dialog)
     assert asked.uris == [uri(tree / "docs" / "old" / "new.txt")]
 
 
@@ -367,6 +379,7 @@ def test_a_name_in_a_folder_that_is_not_there_is_not_saved(qtbot, open_dialog, t
 
     dialog.name.setText("nowhere/new.txt")
     dialog.accept_button.click()
+    looked(qtbot, dialog)
 
     assert not asked.answers
     assert "nowhere" in dialog._message.text()
@@ -381,8 +394,42 @@ def test_a_full_path_as_the_name_is_that_file(qtbot, open_dialog, tree):
 
     dialog.name.setText(str(tree / "pictures" / "new.png"))
     dialog.accept_button.click()
+    looked(qtbot, dialog)
 
     assert asked.uris == [uri(tree / "pictures" / "new.png")]
+
+
+def test_the_name_is_looked_at_off_the_ui_thread_and_answered_once(qtbot, open_dialog, tree, stuck):
+    asked = Asked(portal.SAVE, folder=gfile(tree), name="draft.txt")
+    dialog = open_dialog(asked)
+    is_folder = stuck(locations, "is_folder")
+
+    dialog.accept_button.click()
+    # Pressed again while it is looked at: once is what was asked
+    dialog.accept_button.click()
+    assert not asked.answers and dialog.isVisible()
+
+    is_folder.release()
+    looked(qtbot, dialog)
+    assert off_the_ui_thread(is_folder)
+    assert asked.uris == [uri(tree / "draft.txt")]
+
+
+def test_closed_while_the_name_is_looked_at_it_answers_only_as_closed(
+    qtbot, open_dialog, tree, stuck
+):
+    asked = Asked(portal.SAVE, folder=gfile(tree), name="draft.txt")
+    dialog = open_dialog(asked)
+    is_folder = stuck(locations, "is_folder")
+
+    dialog.accept_button.click()
+    dialog.cancel_button.click()
+    is_folder.release()
+    looked(qtbot, dialog)
+    QTest.qWait(20)
+
+    ((response, _results),) = asked.answers
+    assert response != portal.SUCCESS
 
 
 # Saving several files into one folder
@@ -395,6 +442,7 @@ def test_several_files_are_saved_in_the_folder_chosen(qtbot, open_dialog, tree):
     assert shown(dialog) == ["docs", "pictures"] and dialog.name is None
     select(qtbot, dialog, "pictures")
     dialog.accept_button.click()
+    looked(qtbot, dialog)
 
     assert asked.uris == [uri(tree / "pictures" / "a.txt"), uri(tree / "pictures" / "b.txt")]
 
@@ -423,6 +471,7 @@ def test_names_that_are_taken_are_asked_about(
     dialog = open_dialog(asked)
 
     dialog.accept_button.click()
+    looked(qtbot, dialog)
 
     assert questions == [(["report.txt", "notes.md"], "work", True)]
     if expected is None:

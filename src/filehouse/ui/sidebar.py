@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from filehouse.core import locations
 from filehouse.integration import style
 from filehouse.qt_models.favourites import Favourite
+from filehouse.qt_models.workers import Background
 from filehouse.ui import clipboard, menus, settings
 from filehouse.ui.folder_view import history_step
 
@@ -189,13 +190,31 @@ class Sidebar(QListWidget):
         self.setDragDropMode(QListWidget.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self._drop_line = None  # where a dragged favourite would go: a y in the viewport
-        # Whether what is dragged over it is folders only, which can be made favourites
+        # Whether what is dragged over it is folders only, which can be made favourites:
+        # None until that is known. It is asked on a worker, `_drag` counting the drags
         self._dragging_folders = False
+        self._drag = 0
+        self._background = Background(self, in_turn=False)
         volumes.changed.connect(self._fill)
         volumes.usage_changed.connect(self._show_usage)
         if favourites is not None:
             favourites.changed.connect(self._fill)
         self._fill()
+
+    def set_places(self, places):
+        """Show these places instead of the ones it was given."""
+
+        def shown(entries):
+            return [(place.name, locations.uri(place.location)) for place in entries]
+
+        if shown(places) != shown(self._places):
+            self._places = places
+            self._fill()
+
+    @property
+    def busy(self):
+        """Whether it is still being asked what is dragged over it."""
+        return self._background.busy
 
     def entries(self):
         """Every Place and Volume shown, top to bottom."""
@@ -471,21 +490,38 @@ class Sidebar(QListWidget):
             )
 
     def dragLeaveEvent(self, event):
+        self._drag += 1
         self._dragging_folders = False
         self._show_drop_line(None)
         super().dragLeaveEvent(event)
 
     # Files dropped on an entry go into it, and a folder dropped among the favourites is added
 
-    def _only_folders(self, mime):
+    def _look_at_drag(self, mime):
+        """Find out whether what comes in is folders only, on a worker: a folder that does
+        not answer holds up nothing. Until it is known it is not."""
+        self._drag += 1
+        drag = self._drag
+        self._dragging_folders = None
         uris, _cut = clipboard.read(mime)
-        return bool(uris) and all(locations.is_folder(locations.from_uri(uri)) for uri in uris)
 
-    def _folder_insertion(self, position):
+        def only_folders():
+            return bool(uris) and all(locations.is_folder(locations.from_uri(uri)) for uri in uris)
+
+        def known(folders):
+            if drag == self._drag:
+                self._dragging_folders = folders
+
+        self._background.call(only_folders, known)
+
+    def _folder_insertion(self, position, folders=None):
         """Where folders dropped at `position` would be added among the favourites, as for
         a favourite that is moved: the edges of a favourite are between it and the next,
-        and the middle of it is a drop into it. None where they would not be added."""
-        if not self._dragging_folders or self._favourites is None or not self._favourites.available:
+        and the middle of it is a drop into it. None where they would not be added, or when
+        what is dragged is not folders only (`folders`, by default as far as is known)."""
+        if folders is None:
+            folders = bool(self._dragging_folders)
+        if not folders or self._favourites is None or not self._favourites.available:
             return None
         item = self.itemAt(position)
         if item is None or item.data(_FavouriteRole) is None:
@@ -503,7 +539,11 @@ class Sidebar(QListWidget):
 
     def dragEnterEvent(self, event):
         mime = event.mimeData()
-        self._dragging_folders = mime.hasUrls() and self._only_folders(mime)
+        if mime.hasUrls():
+            self._look_at_drag(mime)
+        else:
+            self._drag += 1
+            self._dragging_folders = False
         if mime.hasUrls() or self._dragged_favourite(mime):
             event.acceptProposedAction()
         else:
@@ -537,9 +577,16 @@ class Sidebar(QListWidget):
             event.ignore()
             return
         position = event.position().toPoint()
-        # Asked again: this is what is dropped, whatever it was when it came in
-        self._dragging_folders = self._only_folders(event.mimeData())
-        between = self._folder_insertion(position)
+        dragging_folders = self._dragging_folders
+        self._drag += 1
+        self._dragging_folders = False
+        if dragging_folders is None and self._folder_insertion(position, True) is not None:
+            # Dropped at the edge of a favourite before it is known what this is: added
+            # if it is folders, and put into the favourite if not. Neither, rather than
+            # the wrong one
+            event.ignore()
+            return
+        between = self._folder_insertion(position, bool(dragging_folders))
         if between is not None:
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()

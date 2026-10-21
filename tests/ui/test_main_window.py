@@ -5,7 +5,9 @@ from gi.repository import Gio
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import QStyle, QToolButton
+from ui_helpers import off_the_ui_thread, settle
 
+from filehouse.core import locations
 from filehouse.integration import style
 from filehouse.ui import main_window
 from filehouse.ui.main_window import MainWindow
@@ -92,11 +94,41 @@ def test_typed_path_navigates_and_a_bad_one_stays_put(qtbot, tree):
     window = open_window(qtbot, tree)
 
     window._on_path_entered(str(tree / "Downloads"))
+    settle(window)
     assert current_path(window) == str(tree / "Downloads")
 
     window._on_path_entered(str(tree / "missing"))
+    settle(window)
     assert current_path(window) == str(tree / "Downloads")
     assert "missing" in window.statusBar().currentMessage()
+
+
+def test_a_typed_path_is_looked_at_off_the_ui_thread(qtbot, tree, stuck):
+    window = open_window(qtbot, tree)
+    resolve = stuck(locations, "resolve_start")
+
+    window._on_path_entered(str(tree / "Downloads"))
+    window._on_path_entered(str(tree / "Downloads" / "sub"))
+    # The window goes on meanwhile, where it was
+    assert current_path(window) == str(tree)
+
+    resolve.release()
+    settle(window)
+    assert off_the_ui_thread(resolve)
+    # The last path typed, whichever was found out first
+    assert current_path(window) == str(tree / "Downloads" / "sub")
+
+
+def test_the_special_folders_are_looked_at_off_the_ui_thread(qtbot, tree, stuck):
+    lookup = stuck(locations, "places")
+
+    window = open_window(qtbot, tree)
+    assert "Home" in [entry.name for entry in window._sidebar.entries()]
+
+    lookup.release()
+    settle(window)
+    assert off_the_ui_thread(lookup)
+    assert "Home" in [entry.name for entry in window._sidebar.entries()]
 
 
 def test_unreadable_folder_shows_the_reason(qtbot, tree):

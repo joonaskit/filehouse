@@ -131,3 +131,12 @@ def test_the_name_of_an_entry_below_a_folder(tmp_path):
     assert locations.name_below(folder, folder.get_child("a.txt")) == "a.txt"
     assert locations.name_below(folder, folder.get_child("sub").get_child("a.txt")) == "sub/a.txt"
     assert locations.name_below(folder.get_child("sub"), folder.get_child("a.txt")) is None
+
+
+def test_the_places_as_set_are_the_places_and_need_nothing_read():
+    as_set = [(place.name, place.location.get_uri()) for place in locations.places_as_set()]
+    there = [(place.name, place.location.get_uri()) for place in locations.places()]
+
+    assert as_set[0][0] == "Home"
+    # Every place that is there is one that is set
+    assert all(place in as_set for place in there)

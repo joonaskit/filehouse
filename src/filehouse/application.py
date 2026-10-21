@@ -22,6 +22,7 @@ from filehouse.integration.recent import RecentFiles
 from filehouse.integration.theme_watcher import ThemeWatcher
 from filehouse.qt_models.favourites import Favourites
 from filehouse.qt_models.job_model import JobModel
+from filehouse.qt_models.workers import Background
 from filehouse.ui import clipboard, main_window, settings
 from filehouse.ui.chooser import Chooser
 from filehouse.ui.dialogs.prompter import Prompter
@@ -49,6 +50,8 @@ class Windows:
         self._favourites = favourites
         self.windows = []
         self.dialogs = []
+        # What was asked to be opened is looked at here, off the windows that are open
+        self._background = Background(in_turn=False)
         # Whether a window has been closed since the look was read: see _start_over
         self._stale = False
         # With the last window closed the process stays, when that is the setting, and
@@ -107,6 +110,21 @@ class Windows:
         _use_token(token)
         window.come_forward()
         return window
+
+    def open_paths(self, arguments, token):
+        """Open what a start or another app named, paths or URIs, once it is known
+        what each is: a folder that does not answer holds up no window that is open."""
+        if not arguments:
+            self.open_all([], token)
+            return
+        self._background.call(
+            lambda: [locations.resolve_start(argument) for argument in arguments],
+            lambda targets: self.open_all(targets, token),
+            lambda error: self.open_all(
+                [locations.StartTarget(locations.home(), message=f"Could not open: {error}")],
+                token,
+            ),
+        )
 
     def open_all(self, targets, token):
         if not targets and not self.windows:
@@ -178,7 +196,9 @@ class Windows:
 
     def nothing_to_stay_for(self):
         """Whether a process started for a call that never came may end."""
-        return not (self.windows or self.dialogs or self._jobs.active_count())
+        return not (
+            self.windows or self.dialogs or self._background.busy or self._jobs.active_count()
+        )
 
 
 def run(args, instance):
@@ -239,9 +259,7 @@ def run(args, instance):
     app.aboutToQuit.connect(notifier.flush)
 
     # Asked by a later start of the app, or by another app for "Show in folder"
-    instance.on_open = lambda uris, token: windows.open_all(
-        [locations.resolve_start(uri) for uri in uris], token
-    )
+    instance.on_open = windows.open_paths
     instance.on_show_folders = instance.on_open
     instance.on_show_items = lambda uris, token: windows.open_all(
         [locations.resolve_item(uri) for uri in uris], token
@@ -266,7 +284,7 @@ def run(args, instance):
             lambda: main_window.quit_app() if windows.nothing_to_stay_for() else None,
         )
     else:
-        windows.open_all([locations.resolve_start(path) for path in args.paths], "")
+        windows.open_paths(args.paths, "")
     return app.exec()
 
 

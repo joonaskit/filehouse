@@ -4,7 +4,7 @@ import os
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
-from ui_helpers import TIMEOUT, gfile, settle
+from ui_helpers import TIMEOUT, gfile, off_the_ui_thread, settle
 
 from filehouse.core.operations import JobKind
 from filehouse.integration import places
@@ -658,6 +658,8 @@ def drag_over(window, row, uris, where, drop_it=True):
         Qt.KeyboardModifier.NoModifier,
     )
     sidebar.dragEnterEvent(QDragEnterEvent(point.toPoint(), copy, mime, left, no_keys))
+    # Whether it is folders is found out meanwhile
+    settle(window)
     sidebar.dragMoveEvent(QDragMoveEvent(point.toPoint(), copy, mime, left, no_keys))
     if not drop_it:
         return None
@@ -756,6 +758,73 @@ def test_no_line_for_files_or_over_the_places(qtbot, window, three, tree):
     home = sidebar_names(window).index("Home")
     drag_over(window, home, [gfile(tree / "delta").get_uri()], 0.05, drop_it=False)
     assert sidebar._drop_line is None
+
+
+def test_dropped_at_an_edge_before_it_is_known_what_it_is_nothing_happens(
+    qtbot, window, three, tree, jobs, stuck
+):
+    from PySide6.QtCore import QMimeData, QPointF, QUrl
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+
+    from filehouse.core import locations
+
+    is_folder = stuck(locations, "is_folder")
+    sidebar = window._sidebar
+    mime = QMimeData()
+    mime.setUrls([QUrl(gfile(tree / "delta").get_uri())])
+    rect = sidebar.visualItemRect(sidebar.item(favourite_row(window, "beta")))
+    point = QPointF(rect.center().x(), rect.top() + 1)
+    copy, left, no_keys = (
+        Qt.DropAction.CopyAction,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    sidebar.dragEnterEvent(QDragEnterEvent(point.toPoint(), copy, mime, left, no_keys))
+    event = QDropEvent(point, copy, mime, left, no_keys)
+    sidebar.dropEvent(event)
+    is_folder.release()
+    settle(window)
+
+    assert off_the_ui_thread(is_folder)
+    # Neither added nor put into "beta": either could be wrong
+    assert not event.isAccepted()
+    assert titles(three) == ["alpha", "beta", "gamma"]
+    assert jobs.jobs == []
+
+
+def test_which_dropped_are_folders_is_found_out_off_the_ui_thread(
+    qtbot, window, three, tree, stuck
+):
+    from filehouse.core import locations
+
+    is_folder = stuck(locations, "is_folder")
+    uris = [gfile(tree / "delta").get_uri(), gfile(tree / "note.txt").get_uri()]
+    sidebar = window._sidebar
+    from PySide6.QtCore import QMimeData, QPointF, QUrl
+    from PySide6.QtGui import QDropEvent
+
+    mime = QMimeData()
+    mime.setUrls([QUrl(uri) for uri in uris])
+    point = QPointF(
+        sidebar.visualItemRect(sidebar.item(sidebar_names(window).index("▾ Favourites"))).center()
+    )
+    sidebar.dropEvent(
+        QDropEvent(
+            point,
+            Qt.DropAction.CopyAction,
+            mime,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+    # Not yet: the window goes on meanwhile
+    assert titles(three) == ["alpha", "beta", "gamma"]
+
+    is_folder.release()
+    settle(window)
+    assert off_the_ui_thread(is_folder)
+    assert titles(three) == ["alpha", "beta", "gamma", "delta"]
 
 
 def test_dropped_on_the_heading_or_the_hint_it_still_goes_to_the_end(qtbot, window, three, tree):

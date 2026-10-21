@@ -3,7 +3,7 @@
 
 import pytest
 from shiboken6 import isValid
-from ui_helpers import TIMEOUT, gfile
+from ui_helpers import TIMEOUT, gfile, off_the_ui_thread
 
 from filehouse import application
 from filehouse.application import Windows
@@ -112,6 +112,23 @@ def test_a_window_for_each_folder_named_and_one_for_one_named_twice(made, tree):
     made.open_all([target(tree / "one"), target(tree / "two"), target(tree / "one")], "")
 
     assert paths(made) == [str(tree / "one"), str(tree / "two")]
+
+
+def test_what_is_named_is_looked_at_off_the_ui_thread(qtbot, made, tree, stuck):
+    made.open_all([target(tree / "one")], "")
+    resolve = stuck(locations, "resolve_start")
+
+    made.open_paths([str(tree / "two"), str(tree / "missing")], "")
+    # The window there is goes on meanwhile, and the process does not end in the wait
+    assert paths(made) == [str(tree / "one")]
+    assert not made.nothing_to_stay_for()
+
+    resolve.release()
+    qtbot.waitUntil(lambda: len(made.windows) == 3, timeout=TIMEOUT)
+    assert off_the_ui_thread(resolve)
+    assert paths(made)[1] == str(tree / "two")
+    # What is not there opens home, and says so
+    assert paths(made)[2] == locations.home().get_path()
 
 
 def test_started_with_nothing_it_opens_home(made):

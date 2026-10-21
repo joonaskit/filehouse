@@ -82,6 +82,7 @@ Rules that keep it this way:
 - **`qt_models/` adapts the core to Qt.** It runs core work on worker threads and turns callbacks into queued Qt signals, so the core never touches the UI thread.
 - **`integration/` holds everything that talks to the shell or the desktop.** Each part works when its counterpart is missing: no island means no activities, no theme file means defaults.
 - **The UI never talks to Gio or D-Bus directly.**
+- **Nothing on the UI thread waits for the disk** (#61). What a window only looks at (a path typed or named by a start or another app, what is dragged over the sidebar or dropped among the favourites, which special folders are there, what a name typed to save as would replace) is asked on a worker with `workers.Background`, and the answer is used when it is in. A folder that does not answer, on a share that has gone, holds up nothing else. Where it is still asked, only the last question's answer is used; a dialog waits until its answer is in before it answers the app.
 - **One source of truth for job state:** `JobModel`. Both the in-app operations panel and the island reporter observe it. The island is a second view of it, never the only one, because the app must work without the shell.
 
 ### Project layout
