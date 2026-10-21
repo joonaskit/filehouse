@@ -6,10 +6,11 @@ steps: there is nothing to retry in the middle of a stream.
 
 What keeps them safe:
 
-- Nothing that exists is ever replaced. An extraction makes one new item in the
-  destination (the archive's only top-level item, or a folder named after the archive
-  when it has several) and writes only inside it; an archive is written under a
-  temporary name and put in place when it is complete. A name that is taken asks.
+- Nothing that exists is ever replaced. An extraction writes only inside a new hidden
+  folder in the destination, and then makes one new item of it (the archive's only
+  top-level item, or the folder named after the archive when it has several); an
+  archive is written under a temporary name and put in place when it is complete. A
+  name that is taken asks.
 - A path from an archive is used only when `archives.safe_parts` accepts it, and every
   folder on the way to a file is opened without following links, so a link from the
   archive cannot be written through.
@@ -20,6 +21,7 @@ What keeps them safe:
 import errno
 import os
 import secrets
+import shutil
 import stat
 from dataclasses import replace
 
@@ -98,6 +100,7 @@ class _ArchiveJob(Job):
         self._complete = False
         self._files_done = 0
         self._files_total = 0
+        self._total_known = False  # whether `_files_total` counts everything there is
         self._bytes_done = 0
 
     @property
@@ -132,222 +135,214 @@ class _ArchiveJob(Job):
         self._set_progress(files_done=self._files_done, bytes_done=self._bytes_done)
 
     def _finish(self, cancelled):
-        planned = self.progress.planned
         if not cancelled and not self.errors and not self._complete:
             # Unreachable by design, but `done` must never be a guess
             self.errors.append(OperationError("", self.kind.value, "did not finish"))
-        done, total = self._files_done, self._files_total
-        of_total = f"{done} of {total} file{'' if total == 1 else 's'}"
+        done, total, known = self._files_done, self._files_total, self._total_known
         verb = _VERBS[self.kind]
         if cancelled:
             state = JobState.CANCELLED
-            self.summary = f"Cancelled after {of_total}" if planned else "Cancelled"
+            if known:
+                self.summary = f"Cancelled after {done} of {_files(total)}"
+            else:
+                self.summary = f"Cancelled after {_files(done)}" if done else "Cancelled"
         elif self.errors:
             state = JobState.FAILED
-            if not planned:
+            if not known:
+                # Stopped before the end, where the total would have been known
                 self.summary = str(self.errors[0])
+                if done:
+                    self.summary = f"{verb} {_files(done)}, then stopped"
             elif total > done:
-                self.summary = f"{verb} {of_total}, {total - done} left out"
+                self.summary = f"{verb} {done} of {_files(total)}, {total - done} left out"
             else:
-                self.summary = f"{verb} {of_total}, {len(self.errors)} failed"
+                self.summary = f"{verb} {done} of {_files(total)}, {len(self.errors)} failed"
         else:
             state = JobState.DONE
-            self.summary = f"{verb} {done} file{'' if done == 1 else 's'}"
+            self.summary = f"{verb} {_files(done)}"
         self.progress = replace(
-            self.progress, current="", files_done=done, bytes_done=self._bytes_done
+            self.progress,
+            current="",
+            files_done=done,
+            files_total=total,
+            bytes_done=self._bytes_done,
         )
         self._set_state(state)
+
+
+def _files(count):
+    return f"{count} file{'' if count == 1 else 's'}"
 
 
 class ExtractJob(_ArchiveJob):
     """Extract the archive `archive` into the folder `destination`.
 
-    `prompt` also answers `conflicts.Password` and `conflicts.NameTaken`. Without one,
-    a protected archive and a taken name both fail the job before anything is written.
+    The archive is read once, into a hidden folder in the destination, and what it held
+    is put in place at the end, when what is at its top level is known. `prompt` also
+    answers `conflicts.Password` and `conflicts.NameTaken`. Without one, a protected
+    archive and a taken name both fail the job.
     """
 
     def __init__(self, archive, destination, *, prompt=None, on_change=None):
         super().__init__(JobKind.EXTRACT, [archive], destination, prompt, on_change)
-        self._root = ""
+        self._tops = set()  # the first part of each path that may be used
+        self._made = 0  # entries written
+        self._seen = 0  # entries looked at
+        self._next = 0  # the first entry not finished with, where a new pass starts
+        self._unlocked = False  # the password has opened something
+        self._reader = None
+        self._current = None  # the entry being written
+        self._root = None  # the name of what was made, once it is in place
         self._wrap = False
-        self._root_is_dir = False
         self._folders = []  # (parts, mode, mtime) to set once everything is inside
         self._umask = 0o022
+        self._unplaced = []  # (error, parts): named again once it is known where they went
 
     def _work(self):
         archive = self.sources[0]
         path, folder = self._path(archive), self._path(self.destination)
-        entries, passphrase = self._unlock(archive, path)
-
-        used = [entry for entry in entries if entry.parts is not None]
-        tops = {entry.parts[0] for entry in used}
-        self._wrap = len(tops) != 1
-        self._root = (
-            archives.folder_name(archive.get_basename()) if self._wrap else next(iter(tops))
-        )
-        self._root_is_dir = self._wrap or any(
-            len(entry.parts) > 1 or entry.kind == archives.FOLDER for entry in used
-        )
-        self._files_total = sum(entry.kind != archives.FOLDER for entry in entries)
-        self._set_progress(
-            files_total=self._files_total,
-            bytes_total=sum(entry.size for entry in entries),
-            planned=True,
-        )
-        self._set_state(JobState.RUNNING)
+        try:
+            size = os.stat(path).st_size
+        except OSError as error:
+            raise OperationError.at(archive, "extract", _reason(error)) from error
+        # How far it is: the archive's own bytes read, as nothing else is known before
+        # the end without reading it twice
+        self._set_progress(bytes_total=size, planned=True)
         self._umask = _umask()
-        if not used:
-            # Nothing that may be written: make nothing at all
-            if not entries:
-                raise OperationError.at(archive, "extract", "is empty")
-            for entry in entries:
-                self._refuse(entry)
-            return
-
-        # Advisory: the name is checked again when it is made
-        existing = locations.file_type(self.destination.get_child(self._root), self.cancellable)
-        if existing is not None:
-            self._root = self._free_name(self._root, self._root_is_dir, existing)
-
         try:
             base = os.open(folder, _FOLDER_FLAGS & ~os.O_NOFOLLOW)
         except OSError as error:
             raise OperationError.at(self.destination, "extract", _reason(error)) from error
         try:
-            if self._root_is_dir:
-                root = self._make_root(base)
-                os.close(base)
-                base = root
-            self.result = self.destination.get_child(self._root)
-            self._extract_all(path, passphrase, base)
-            self._finish_folders(base)
+            temp, work = self._make_temp(base)
+            try:
+                self._set_state(JobState.RUNNING)
+                stopped = None
+                try:
+                    self._extract_all(path, work)
+                except Exception as error:
+                    stopped = error
+                self._finish_folders(work)
+                self._put_in_place(folder, base, temp, work, stopped)
+            finally:
+                os.close(work)
         finally:
             os.close(base)
         self._complete = True
 
-    # Before anything is written
+    def _make_temp(self, base):
+        """The hidden folder everything is written in: its name, and a descriptor."""
+        while True:
+            name = f"{_TEMP_PREFIX}{secrets.token_hex(4)}{_TEMP_SUFFIX}"
+            try:
+                os.mkdir(name, 0o700, dir_fd=base)
+            except FileExistsError:
+                continue
+            except OSError as error:
+                raise OperationError.at(self.destination, "extract", _reason(error)) from error
+            return name, os.open(name, _FOLDER_FLAGS, dir_fd=base)
 
-    def _unlock(self, archive, path):
-        """List the archive, asking for its password as often as it takes."""
+    # Reading
+
+    def _extract_all(self, path, work):
+        """Read the archive, asking for its password when an entry needs one. With a
+        password the archive is read again, from that entry on."""
+        archive = self.sources[0]
         passphrase, asked = None, False
         while True:
             try:
-                entries = self._list(path, passphrase)
-                protected = any(entry.encrypted for entry in entries)
-                # Tried without one too: a kind of protection libarchive cannot open
-                # (7z, rar) says so here, before a password is asked for in vain
-                if not protected or archives.password_works(path, passphrase):
-                    return entries, passphrase
-            except archives.NeedsPassword:
-                pass
-            except archives.ArchiveProblem as problem:
-                raise OperationError.at(archive, "extract", str(problem)) from problem
+                self._read(path, passphrase, work)
+                break
+            except archives.NeedsPassword as problem:
+                if self._unlocked:
+                    raise OperationError.at(
+                        archive, "extract", "the password does not open all of it"
+                    ) from problem
             reply = self._ask(conflicts.Password(archive, wrong=asked))
             if reply is None:
                 raise OperationError.at(archive, "extract", "is protected with a password")
             if reply.answer is not Answer.PASSWORD:
                 self._cancel_from_answer()
             passphrase, asked = reply.text, True
+        if not self._seen:
+            raise OperationError.at(archive, "extract", "is empty")
+        self._total_known = True
+        self._bytes_done = self.progress.bytes_total
 
-    def _list(self, path, passphrase):
-        listed = []
-        with archives.reading(path, passphrase) as entries:
-            for entry, _blocks in entries:
-                self._check_cancelled()
-                listed.append(entry)
-        return listed
-
-    def _make_root(self, base):
-        """Make the folder everything goes in. It must be new: what is in a folder
-        that was there is not ours to write among."""
-        while True:
-            try:
-                os.mkdir(self._root, 0o777, dir_fd=base)
-            except FileExistsError:
-                self._root = self._free_name(self._root, True, self._type_of_root())
-                continue
-            except OSError as error:
-                raise OperationError(self._shown(()), "extract", _reason(error)) from error
-            return os.open(self._root, _FOLDER_FLAGS, dir_fd=base)
-
-    def _type_of_root(self):
-        return locations.file_type(self.destination.get_child(self._root)) or Gio.FileType.REGULAR
+    def _read(self, path, passphrase, work):
+        archive = self.sources[0]
+        try:
+            with archives.reading(path, passphrase) as reader:
+                self._reader = reader
+                for index, (entry, blocks) in enumerate(reader):
+                    if index < self._next:
+                        # Written already, before a password was asked for
+                        continue
+                    self._check_cancelled()
+                    if index == self._seen:
+                        self._seen += 1
+                        self._files_total += entry.kind != archives.FOLDER
+                    self._current = entry
+                    self._bytes_done = reader.bytes_read
+                    self._set_progress(
+                        current=entry.name.rstrip("/").rpartition("/")[2],
+                        bytes_done=self._bytes_done,
+                    )
+                    self._extract_one(entry, blocks, work)
+                    self._current = None
+                    self._next = index + 1
+        except archives.Unsupported as problem:
+            raise OperationError.at(archive, "extract", str(problem)) from problem
+        except archives.ArchiveProblem as problem:
+            if not self._seen:
+                # Not an archive, or not one libarchive can read
+                raise OperationError.at(archive, "extract", str(problem)) from problem
+            # The stream is broken: what comes after cannot be read either
+            entry, message = self._current, f"the archive is damaged ({problem})"
+            if entry is None or entry.parts is None:
+                raise OperationError.at(archive, "extract", message) from None
+            raise self._inside(entry.parts, message) from None
+        finally:
+            self._reader = None
 
     # Writing
 
-    def _extract_all(self, path, passphrase, base):
-        try:
-            with archives.reading(path, passphrase) as entries:
-                for entry, blocks in entries:
-                    self._check_cancelled()
-                    self._set_progress(current=entry.name.rstrip("/").rpartition("/")[2])
-                    self._extract_one(entry, blocks, base)
-        except archives.NeedsPassword as problem:
-            raise OperationError.at(
-                self.sources[0], "extract", "the password does not open all of it"
-            ) from problem
-        except archives.ArchiveProblem as problem:
-            # The stream is broken: what comes after cannot be read either
-            name = self.progress.current or self.sources[0].get_basename()
-            raise OperationError(name, "extract", f"the archive is damaged ({problem})") from None
+    def _inside(self, parts, message):
+        """An error about what is written: its path is known once it is in place."""
+        error = OperationError("/".join(parts), "extract", message)
+        self._unplaced.append((error, parts))
+        return error
 
     def _refuse(self, entry):
         self.errors.append(
             OperationError(entry.name, "extract", "has an unsafe path, so it was not extracted")
         )
 
-    def _extract_one(self, entry, blocks, base):
+    def _extract_one(self, entry, blocks, work):
         if entry.parts is None:
             self._refuse(entry)
             return
-        parts = self._below_root(entry.parts)
-        while True:
-            try:
-                self._write(entry, blocks, base, parts)
-            except FileExistsError:
-                if self._root_is_dir:
-                    self.errors.append(
-                        OperationError(self._shown(parts), "extract", "is in the archive twice")
-                    )
-                    return
-                # The one item of the archive, and its name was taken meanwhile
-                self._root = self._free_name(self._root, False, self._type_of_root())
-                parts = (self._root,)
-                self.result = self.destination.get_child(self._root)
-                continue
-            except OperationError as error:
-                self.errors.append(error)
-            except OSError as error:
-                failure = OperationError(self._shown(parts), "extract", _reason(error))
-                if error.errno in _FATAL:
-                    raise failure from error
-                self.errors.append(failure)
-            else:
-                if entry.kind != archives.FOLDER:
-                    self._count(files=1)
-            return
+        self._tops.add(entry.parts[0])
+        try:
+            self._write(entry, blocks, work, entry.parts)
+        except FileExistsError:
+            # The folder is new and ours: only the archive itself made it
+            self.errors.append(self._inside(entry.parts, "is in the archive twice"))
+        except OperationError as error:
+            self.errors.append(error)
+        except OSError as error:
+            failure = self._inside(entry.parts, _reason(error))
+            if error.errno in _FATAL:
+                raise failure from error
+            self.errors.append(failure)
+        else:
+            self._made += 1
+            if entry.kind != archives.FOLDER:
+                self._count(files=1)
 
-    def _below_root(self, parts):
-        """Where an entry goes, below the folder the descriptor is of: the root folder,
-        or the destination when the archive holds a single file."""
-        if not self._root_is_dir:
-            return (self._root,)
-        return parts if self._wrap else parts[1:]
-
-    def _shown(self, parts):
-        """The path of what is written, for messages."""
-        folder = self.destination.get_parse_name().rstrip("/")
-        if not self._root_is_dir:
-            return f"{folder}/{self._root}"
-        return "/".join((folder, self._root, *parts))
-
-    def _write(self, entry, blocks, base, parts):
-        if not parts:
-            # The root folder itself, which is made already
-            self._folders.append(((), entry.mode, entry.mtime))
-            return
+    def _write(self, entry, blocks, work, parts):
         name = parts[-1]
-        parent = _open_folder(base, parts[:-1], create=True)
+        parent = _open_folder(work, parts[:-1], create=True)
         try:
             if entry.kind == archives.FOLDER:
                 try:
@@ -362,25 +357,22 @@ class ExtractJob(_ArchiveJob):
                 # Made, never followed: what it points at is not written to
                 os.symlink(entry.link, name, dir_fd=parent)
             elif entry.kind == archives.HARDLINK:
-                self._hardlink(entry, base, parent, name, parts)
+                self._hardlink(entry, work, parent, name, parts)
             else:
-                raise OperationError(
-                    self._shown(parts), "extract", "is a special file, so it was not extracted"
-                )
+                raise self._inside(parts, "is a special file, so it was not extracted")
         finally:
             os.close(parent)
 
     def _write_file(self, entry, blocks, parent, name):
         descriptor = os.open(name, _NEW_FILE_FLAGS, 0o600, dir_fd=parent)
-        written = 0
         try:
             for block in blocks():
                 self._check_cancelled()
                 view = memoryview(block)
                 while view:
                     view = view[os.write(descriptor, view) :]
-                written += len(block)
-                self._set_progress(bytes_done=self._bytes_done + written)
+                self._bytes_done = self._reader.bytes_read
+                self._set_progress(bytes_done=self._bytes_done)
             os.fchmod(descriptor, (entry.mode or 0o644) & 0o777 & ~self._umask)
             if entry.mtime is not None:
                 os.utime(descriptor, (entry.mtime, entry.mtime))
@@ -391,37 +383,32 @@ class ExtractJob(_ArchiveJob):
                 os.unlink(name, dir_fd=parent)
             except OSError:
                 pass
-            self._set_progress(bytes_done=self._bytes_done)
             raise
         os.close(descriptor)
-        self._count(size=written)
+        if entry.encrypted:
+            self._unlocked = True
 
-    def _hardlink(self, entry, base, parent, name, parts):
+    def _hardlink(self, entry, work, parent, name, parts):
         target = archives.safe_parts(entry.link)
         if target is None:
-            raise OperationError(
-                self._shown(parts), "extract", "links to an unsafe path, so it was not extracted"
-            )
-        target = self._below_root(target)
-        if not target:
-            raise OperationError(self._shown(parts), "extract", "links to a folder")
-        folder = _open_folder(base, target[:-1], create=False)
+            raise self._inside(parts, "links to an unsafe path, so it was not extracted")
+        folder = _open_folder(work, target[:-1], create=False)
         try:
             os.link(target[-1], name, src_dir_fd=folder, dst_dir_fd=parent, follow_symlinks=False)
         finally:
             os.close(folder)
 
-    def _finish_folders(self, base):
+    def _finish_folders(self, work):
         """Folders get their permissions and times last, deepest first, so one that
         is read-only can still be filled. Best effort, as for a copied folder."""
         for parts, mode, mtime in sorted(self._folders, key=lambda item: -len(item[0])):
             try:
-                folder = _open_folder(base, parts, create=False)
+                folder = _open_folder(work, parts, create=False)
             except OSError:
                 continue
             try:
                 if mode:
-                    # Always the owner's to open and to remove things from
+                    # Always the owner's to open, to move and to remove things from
                     os.fchmod(folder, (mode & 0o777 & ~self._umask) | 0o700)
                 if mtime is not None:
                     os.utime(folder, (mtime, mtime))
@@ -429,6 +416,89 @@ class ExtractJob(_ArchiveJob):
                 pass
             finally:
                 os.close(folder)
+
+    # Putting it in place
+
+    def _put_in_place(self, folder, base, temp, work, stopped):
+        """Give the destination one new item: the archive's only top-level item, or the
+        hidden folder named after the archive when it has several. When the job was
+        stopped, what is complete is given all the same, under a free name."""
+        try:
+            made = None
+            if self._made and (stopped is None or self._files_done):
+                made = self._what_was_made(folder, temp, work)
+            if made is None:
+                # Nothing was written, or only folders before it stopped: no use to anyone
+                _discard_folder(base, temp, work)
+            else:
+                source, name, is_dir = made
+                if self._wrap:
+                    os.fchmod(work, 0o777 & ~self._umask)
+                self.result = self._place(source, name, is_dir, ask=stopped is None)
+                if not self._wrap:
+                    # Empty now: what it held is in place
+                    _discard_folder(base, temp, work)
+        except BaseException:
+            # A taken name nobody chose a new one for: what was extracted is not given
+            _discard_folder(base, temp, work)
+            raise
+        finally:
+            named = self._name_errors()
+        if stopped is not None:
+            raise named.get(id(stopped), stopped)
+
+    def _what_was_made(self, folder, temp, work):
+        """(path, name, is_dir) of what to put in place, or None."""
+        self._wrap = len(self._tops) != 1
+        if self._wrap:
+            name = archives.folder_name(self.sources[0].get_basename())
+            return os.path.join(folder, temp), name, True
+        top = next(iter(self._tops))
+        try:
+            is_dir = stat.S_ISDIR(os.lstat(top, dir_fd=work).st_mode)
+        except OSError:
+            return None
+        return os.path.join(folder, temp, top), top, is_dir
+
+    def _place(self, path, name, is_dir, ask):
+        """Move what was made to `name` in the destination. Never onto something that is
+        there: a taken name asks, or with `ask` false, takes a free one."""
+        source = Gio.File.new_for_path(path)
+        while True:
+            target = self.destination.get_child(name)
+            try:
+                # Not cancellable: what is complete is given, not thrown away
+                source.move(target, _PLACE, None, None, None)
+            except GLib.Error as error:
+                if not has_code(error, Gio.IOErrorEnum.EXISTS):
+                    raise OperationError.from_glib(error, target, "extract") from error
+                if ask:
+                    existing = locations.file_type(target) or Gio.FileType.REGULAR
+                    name = self._free_name(name, is_dir, existing)
+                else:
+                    name = conflicts.free_name(self.destination, name, is_dir)
+                continue
+            self._root = name
+            return target
+
+    def _shown(self, parts):
+        """The path of what an entry became, for messages."""
+        folder = self.destination.get_parse_name().rstrip("/")
+        if self._root is None:
+            return "/".join((folder, *parts))
+        if self._wrap:
+            return "/".join((folder, self._root, *parts))
+        return "/".join((folder, self._root, *parts[1:]))
+
+    def _name_errors(self):
+        """Errors about what was written name where it is now. Returns the new error
+        for each one, by the id of the old."""
+        named = {
+            id(error): OperationError(self._shown(parts), error.step, error.message)
+            for error, parts in self._unplaced
+        }
+        self.errors = [named.get(id(error), error) for error in self.errors]
+        return named
 
 
 class CompressJob(_ArchiveJob):
@@ -448,6 +518,7 @@ class CompressJob(_ArchiveJob):
         items = self._plan()
         self._files_total = sum(not stat.S_ISDIR(status.st_mode) for _p, _n, status in items)
         self._files_total += len(self.errors)
+        self._total_known = True
         self._set_progress(
             files_total=self._files_total,
             bytes_total=sum(
@@ -503,6 +574,13 @@ class CompressJob(_ArchiveJob):
         while pending:
             path, arcname = pending.pop()
             self._check_cancelled()
+            if not _is_utf8(arcname):
+                # libarchive cannot store it in every format and locale alike: left out,
+                # with all that is in it, rather than written as something else
+                self.errors.append(
+                    OperationError(path, "compress", "its name is not UTF-8, so it was left out")
+                )
+                continue
             try:
                 status = os.lstat(path)
                 children = sorted(os.listdir(path)) if stat.S_ISDIR(status.st_mode) else ()
@@ -537,6 +615,13 @@ class CompressJob(_ArchiveJob):
                 link = os.readlink(path)
             except OSError as error:
                 self.errors.append(OperationError(path, "compress", _reason(error)))
+                return
+            if not _is_utf8(link):
+                self.errors.append(
+                    OperationError(
+                        path, "compress", "where it points is not UTF-8, so it was left out"
+                    )
+                )
                 return
             writer.add(arcname, status, link=link)
             self._count(files=1)
@@ -590,6 +675,28 @@ class CompressJob(_ArchiveJob):
                 name = self._free_name(name, False, locations.file_type(target))
                 continue
             return target
+
+
+def _discard_folder(base, name, descriptor):
+    """Remove the hidden folder `name` an extraction wrote in, with all that is in it,
+    if what has its name is still the folder open as `descriptor`."""
+    try:
+        named, opened = os.lstat(name, dir_fd=base), os.fstat(descriptor)
+    except OSError:
+        return
+    if (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+        return
+    # Through descriptors and without following links, below `base`
+    shutil.rmtree(name, dir_fd=base, ignore_errors=True)
+
+
+def _is_utf8(name):
+    # A name that is not keeps its bytes as surrogates (surrogateescape)
+    try:
+        name.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _is_ours(temp, descriptor):

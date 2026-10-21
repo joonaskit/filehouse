@@ -78,6 +78,10 @@ class ArchiveProblem(Exception):
     """The archive cannot be read or written: damaged, or of a kind libarchive lacks."""
 
 
+class Unsupported(ArchiveProblem):
+    """The archive is protected in a way libarchive cannot open (7z, rar)."""
+
+
 class NeedsPassword(Exception):
     """The archive is protected, and no password or the wrong one was given."""
 
@@ -134,23 +138,34 @@ def safe_parts(pathname):
 
 @contextmanager
 def reading(path, passphrase=None):
-    """Open an archive and give its entries, in order: `(Entry, blocks)`, where
-    `blocks()` yields the content of a file. An entry's content can only be read
-    before the next entry is asked for."""
+    """Open an archive and give a `Reader` of its entries."""
     _need()
     try:
         with libarchive.file_reader(path, passphrase=passphrase or None) as archive:
-            yield _entries(archive)
+            yield Reader(archive)
     except ArchiveError as error:
         raise _problem(error) from error
 
 
-def _entries(archive):
-    try:
-        for raw in archive:
-            yield _entry(raw), lambda raw=raw: _blocks(raw)
-    except ArchiveError as error:
-        raise _problem(error) from error
+class Reader:
+    """The entries of an open archive, in order: `(Entry, blocks)`, where `blocks()`
+    yields the content of a file. An entry's content can only be read before the next
+    entry is asked for."""
+
+    def __init__(self, archive):
+        self._archive = archive
+
+    def __iter__(self):
+        try:
+            for raw in self._archive:
+                yield _entry(raw), lambda raw=raw: _blocks(raw)
+        except ArchiveError as error:
+            raise _problem(error) from error
+
+    @property
+    def bytes_read(self):
+        """How much of the archive file has been read, compressed as it is there."""
+        return max(0, self._archive.bytes_read)
 
 
 def _blocks(raw):
@@ -194,19 +209,6 @@ def _text(value):
     if isinstance(value, bytes):
         return value.decode("utf-8", "surrogateescape")
     return value or ""
-
-
-def password_works(path, passphrase):
-    """Whether the protected content of an archive can be read with this password."""
-    try:
-        with reading(path, passphrase) as entries:
-            for entry, blocks in entries:
-                if entry.encrypted and entry.kind == FILE and entry.size:
-                    next(blocks(), None)
-                    return True
-    except NeedsPassword:
-        return False
-    return True
 
 
 class Writer:
@@ -270,5 +272,5 @@ def _problem(error):
     if "passphrase" in lowered or "password" in lowered:
         return NeedsPassword(message)
     if "encrypt" in lowered:
-        return ArchiveProblem("its kind of password protection is not supported")
+        return Unsupported("its kind of password protection is not supported")
     return ArchiveProblem(message[:1].lower() + message[1:] if message else "cannot be read")
