@@ -113,6 +113,9 @@ class Job:
         self.destination = destination
         self.cancellable = Gio.Cancellable()
         self.on_change = on_change
+        # Told True when the job starts to wait for an answer and False when it has one,
+        # on the job's thread: the queue lets another job run meanwhile
+        self.on_wait = None
         self.progress = JobProgress()
         self.errors = []  # every OperationError, in the order they happened
         self.summary = ""  # the final text, e.g. "Cancelled after 5 of 12 files"
@@ -520,17 +523,27 @@ class Job:
         before = self._state
         question.job = self
         self._set_state(JobState.WAITING)
+        self._waiting(True)
         try:
             reply = self._prompt(question)
             if reply is None:
                 reply = question.wait(self.cancellable)
         finally:
+            self._waiting(False)
             self._set_state(before)
         self._check_cancelled()
         reply = conflicts.as_reply(reply)
         if reply.answer not in question.answers and not isinstance(question, conflicts.Conflict):
             raise ValueError(f"{reply.answer} does not answer {type(question).__name__}")
         return reply
+
+    def _waiting(self, asking):
+        if self.on_wait is None:
+            return
+        try:
+            self.on_wait(asking)
+        except Exception:
+            log.exception("on_wait failed for job %d", self.id)
 
     def _cancel_from_answer(self):
         self.cancellable.cancel()

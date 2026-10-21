@@ -2,7 +2,7 @@ import threading
 
 from helpers import gfile, make_tree, read_tree
 
-from filehouse.core.operations import Job, JobKind, JobQueue, JobState
+from filehouse.core.operations import Answer, Job, JobKind, JobQueue, JobState
 
 
 def in_thread(function):
@@ -92,3 +92,82 @@ def test_job_ids_are_unique(tmp_path):
     jobs = [Job(JobKind.TRASH, []) for _ in range(3)]
 
     assert len({job.id for job in jobs}) == 3
+
+
+class Asking:
+    """A prompt that is answered only when the test says so, as a user away from the
+    screen would. `asked` is set once a question has come."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.asked = threading.Event()
+        self.answered = threading.Event()
+
+    def __call__(self, _question):
+        self.asked.set()
+        assert self.answered.wait(5)
+        return self.answer
+
+
+def wait_until(condition):
+    for _ in range(500):
+        if condition():
+            return True
+        threading.Event().wait(0.01)
+    return False
+
+
+def asking_copy(tmp_path, name):
+    """A copy of `name` onto a file of that name: it asks what to do about it."""
+    src = make_tree(tmp_path / f"src-{name}", {name: "new"})
+    dst = make_tree(tmp_path / f"dst-{name}", {name: "old"})
+    prompt = Asking(Answer.SKIP)
+    return Job(JobKind.COPY, [gfile(src / name)], gfile(dst), prompt=prompt), prompt
+
+
+def test_a_job_waiting_for_an_answer_gives_its_place_to_the_next(tmp_path):
+    queue = JobQueue(in_thread)
+    first, first_prompt = asking_copy(tmp_path, "a")
+    second, second_prompt = asking_copy(tmp_path, "b")
+    trash_soon = Blocker()
+    for job in (first, second, trash_soon):
+        queue.add(job)
+
+    # Two questions nobody has answered yet: the third job starts all the same
+    assert first_prompt.asked.wait(5) and second_prompt.asked.wait(5)
+    assert first.state is JobState.WAITING and second.state is JobState.WAITING
+    assert trash_soon.started.wait(5)
+    assert not queue.is_idle()
+
+    trash_soon.release.set()
+    first_prompt.answered.set()
+    second_prompt.answered.set()
+    assert wait_until(queue.is_idle)
+    assert first.state is JobState.DONE and second.state is JobState.DONE
+
+
+def test_an_answered_job_goes_on_at_once_even_with_both_places_taken(tmp_path):
+    queue = JobQueue(in_thread)
+    answered, prompt = asking_copy(tmp_path, "a")
+    others = [Blocker(), Blocker()]
+    queue.add(answered)
+    assert prompt.asked.wait(5)
+    for job in others:
+        queue.add(job)
+    assert all(job.started.wait(5) for job in others)
+
+    prompt.answered.set()
+
+    # Not "Waiting to start" again: it finishes while the other two still run
+    assert wait_until(lambda: answered.state is JobState.DONE)
+    assert all(job.state is JobState.RUNNING for job in others)
+    # And the places it took back are not given away twice
+    late = Blocker()
+    queue.add(late)
+    assert not late.started.wait(0.2)
+    others[0].release.set()
+    assert late.started.wait(5)
+
+    others[1].release.set()
+    late.release.set()
+    assert wait_until(queue.is_idle)
