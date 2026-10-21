@@ -42,9 +42,15 @@ def shared_threads_held():
 
 def settle(window, timeout=TIMEOUT):
     """Wait until what the window was asked to do to files at once (a new folder, a
-    rename, a link, what a drop is, taking a rename back) is done, and its answer shown."""
+    rename, a link, what a drop is, taking a rename back) is done, and its answer shown,
+    and what it was asked to look at (a typed path, what is dragged over it)."""
     deadline = time.monotonic() + timeout / 1000
-    while window._file_actions.busy or window._jobs.busy:
+    while (
+        window._file_actions.busy
+        or window._jobs.busy
+        or window._background.busy
+        or window._sidebar.busy
+    ):
         assert time.monotonic() < deadline, "the window's file actions are still busy"
         QTest.qWait(5)
 

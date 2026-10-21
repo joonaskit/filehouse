@@ -29,6 +29,7 @@ from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE
 from filehouse.qt_models.job_model import JobModel
 from filehouse.qt_models.permissions import PermissionChange
 from filehouse.qt_models.volumes import Volumes
+from filehouse.qt_models.workers import Background
 from filehouse.ui import clipboard, groups, menus, settings
 from filehouse.ui.details_pane import DetailsPane
 from filehouse.ui.dialogs.compress import CompressDialog
@@ -189,6 +190,10 @@ class MainWindow(QMainWindow):
         self._recent = recent
         self._favourites = favourites
         self._jobs.idle.connect(self._on_jobs_idle)
+        # What is only looked at (a typed path, what was dropped, the special folders)
+        # is looked at here, and the window goes on meanwhile
+        self._background = Background(self, in_turn=False)
+        self._entered = 0  # paths typed, the last of which is gone to
 
         # Tabs, each with a folder or two side by side. `_tab` is the shown one and
         # `_pane` its active pane: the toolbar, the title, the details, the status bar
@@ -207,7 +212,10 @@ class MainWindow(QMainWindow):
         self._volumes = Volumes(self)
         self._volumes.removed.connect(self._on_volume_removed)
         self._volumes.failed.connect(self._show_error)
-        self._sidebar = Sidebar(locations.places(), self._volumes, self._favourites)
+        # Every special folder that is set, and the ones that are not there taken out
+        # once that is known
+        self._sidebar = Sidebar(locations.places_as_set(), self._volumes, self._favourites)
+        self._background.call(locations.places, self._sidebar.set_places)
         self._sidebar.place_activated.connect(self.navigate)
         self._sidebar.new_tab_requested.connect(lambda place: self.new_tab(place, activate=False))
         self._sidebar.favourite_menu_requested.connect(self._show_favourite_menu)
@@ -1083,16 +1091,24 @@ class MainWindow(QMainWindow):
             self._show_error("The drive this window was showing is gone.")
 
     def _on_path_entered(self, text):
-        target = locations.resolve_start(text)
-        if target.message:
-            self.statusBar().showMessage(target.message, _MESSAGE_MS)
-            return
-        if locations.same(target.location, self._location):
-            if target.select:
-                self._view.select_name(target.select)
-        else:
-            self.navigate(target.location, select=target.select)
-        self._view.setFocus()
+        """Go where was typed, once it is known what that is. Only the last path typed."""
+        self._entered += 1
+        entered = self._entered
+
+        def go(target):
+            if entered != self._entered:
+                return
+            if target.message:
+                self.statusBar().showMessage(target.message, _MESSAGE_MS)
+                return
+            if locations.same(target.location, self._location):
+                if target.select:
+                    self._view.select_name(target.select)
+            else:
+                self.navigate(target.location, select=target.select)
+            self._view.setFocus()
+
+        self._background.call(lambda: locations.resolve_start(text), go)
 
     # Model state
 
@@ -1501,11 +1517,19 @@ class MainWindow(QMainWindow):
         """Folders dropped among the favourites become favourites, at `index` of the list
         (the end for -1), one after the other. Files do not, and a folder that is one
         already stays where it is."""
-        for uri in uris:
-            location = locations.from_uri(uri)
-            if locations.is_folder(location) and self._favourites.find(location) is None:
-                if self.toggle_favourite(location, None if index < 0 else index):
-                    index += 1 if index >= 0 else 0
+        dropped = [locations.from_uri(uri) for uri in uris]
+
+        def add(folders):
+            nonlocal index
+            for location in folders:
+                if self._favourites.find(location) is None:
+                    if self.toggle_favourite(location, None if index < 0 else index):
+                        index += 1 if index >= 0 else 0
+
+        # Which of them are folders is found out on a worker
+        self._background.call(
+            lambda: [location for location in dropped if locations.is_folder(location)], add
+        )
 
     def _show_place_menu(self, entry, position):
         menu = menus.menu(self)

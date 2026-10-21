@@ -44,6 +44,28 @@ _SEARCH_WIDTH = 200
 _MINIMUM_SIZE = (560, 380)
 _SIZE = (900, 580)
 REPLACE, KEEP_BOTH = "replace", "keep both"
+# What a name typed to save as comes to (`_look_at_name`)
+_GO_IN, _NOT_LOCAL, _NO_FOLDER, _TAKEN, _FREE = range(5)
+
+
+def _look_at_name(folder, text):
+    """What saving as `text` from `folder` would be: (one of the above, the location it
+    names). On a worker: it looks at the disk."""
+    if text.startswith(("/", "~")):
+        target = locations.from_user_input(text)
+    else:
+        # A name, or a path from here: "sub/name.txt"
+        target = locations.below(folder, text)
+    if locations.is_folder(target):
+        return _GO_IN, target
+    into = locations.parent(target)
+    if locations.local_path(target) is None or into is None:
+        return _NOT_LOCAL, target
+    if not locations.is_folder(into):
+        return _NO_FOLDER, target
+    if locations.file_type(target) is not None:
+        return _TAKEN, target
+    return _FREE, target
 
 
 def ask_to_replace(parent, names, folder, keep_both=False):
@@ -89,8 +111,11 @@ class Chooser(QDialog):
         self.setWindowTitle(request.title or self._default_title())
 
         self._pane = Pane(settings.show_hidden(), self)
-        # What the dialog does to files itself (a new folder), off the UI thread
+        # What the dialog does to files itself (a new folder) and what it looks at before
+        # it answers, off the UI thread and in turn: a folder just made is there to save in
         self._background = Background(self)
+        self._looking = False  # at what to answer with: the button waits
+        self._entered = 0  # paths typed, the last of which is gone to
         view = self._view = self._pane.view
         view.set_for_choosing(request.kind == portal.OPEN and request.multiple)
         self._pane.changed.connect(self._update)
@@ -103,7 +128,12 @@ class Chooser(QDialog):
         self._volumes = Volumes(self)
         self._volumes.removed.connect(self._on_volume_removed)
         self._volumes.failed.connect(self._say)
-        self._sidebar = Sidebar(self._places(), self._volumes, favourites)
+        # Every special folder that is set, and the ones that are not there taken out
+        # once that is known
+        self._sidebar = Sidebar(self._places(locations.places_as_set()), self._volumes, favourites)
+        self._background.call(
+            locations.places, lambda places: self._sidebar.set_places(self._places(places))
+        )
         self._sidebar.place_activated.connect(self.navigate)
         # The favourites are shown, and changed in the browser
         self._sidebar.setAcceptDrops(False)
@@ -220,13 +250,13 @@ class Chooser(QDialog):
             return "Save"
         return "Select" if self._folders else "Open"
 
-    def _places(self):
-        """The places of the sidebar. Nothing is chosen from the trash, and nothing is
-        saved in the list of recent files."""
+    def _places(self, places):
+        """The places of the sidebar, of these. Nothing is chosen from the trash, and
+        nothing is saved in the list of recent files."""
         choosing_files = self._request.kind == portal.OPEN and not self._folders
         return [
             place
-            for place in locations.places()
+            for place in places
             if not locations.in_trash(place.location)
             and (choosing_files or not locations.in_recent(place.location))
         ]
@@ -378,16 +408,24 @@ class Chooser(QDialog):
         self._update()
 
     def _on_path_entered(self, text):
-        target = locations.resolve_start(text)
-        if target.message:
-            self._say(target.message)
-            return
-        if locations.same(target.location, self._pane.location):
-            if target.select:
-                self._view.select_name(target.select)
-        else:
-            self.navigate(target.location, select=target.select)
-        self._view.setFocus()
+        """Go where was typed, once it is known what that is. Only the last path typed."""
+        self._entered += 1
+        entered = self._entered
+
+        def go(target):
+            if entered != self._entered:
+                return
+            if target.message:
+                self._say(target.message)
+                return
+            if locations.same(target.location, self._pane.location):
+                if target.select:
+                    self._view.select_name(target.select)
+            else:
+                self.navigate(target.location, select=target.select)
+            self._view.setFocus()
+
+        self._background.call(lambda: locations.resolve_start(text), go)
 
     def _on_volume_removed(self, root):
         location = self._pane.location
@@ -528,6 +566,9 @@ class Chooser(QDialog):
 
     def choose(self):
         """The button: answer with what is selected or named, or say why not."""
+        if self._looking:
+            # Pressed again while what it is to be is looked at
+            return
         if self._saving:
             self._save()
         elif self._request.kind == portal.SAVE_FILES:
@@ -554,34 +595,49 @@ class Chooser(QDialog):
             return
         self._respond(local)
 
+    def _look(self, work, then, failure):
+        """Do `work()` on the worker, then `then(result)` while the dialog is still open.
+        Choosing waits meanwhile."""
+
+        def done(result):
+            self._looking = False
+            if self.isVisible():
+                then(result)
+
+        def failed(error):
+            self._looking = False
+            if self.isVisible():
+                self._say(f"{failure}: {getattr(error, 'message', error)}.")
+
+        self._looking = True
+        self._background.call(work, done, failed)
+
     def _save(self):
         text = self.name.text().strip()
         if not text:
             return
         folder = self._pane.location
-        if text.startswith(("/", "~")):
-            target = locations.from_user_input(text)
-        else:
-            # A name, or a path from here: "sub/name.txt"
-            target = locations.below(folder, text)
-        if locations.is_folder(target):
+        self._look(
+            lambda: _look_at_name(folder, text), self._save_as, f"Could not save as “{text}”"
+        )
+
+    def _save_as(self, found):
+        what, target = found
+        into = locations.parent(target)
+        if what == _GO_IN:
             # A folder was named: the file's name is still to come
             self.navigate(target)
             self.name.clear()
             self.name.setFocus()
-            return
-        into = locations.parent(target)
-        if locations.local_path(target) is None or into is None:
+        elif what == _NOT_LOCAL:
             self._say("A file can only be saved on this computer.")
-            return
-        if not locations.is_folder(into):
+        elif what == _NO_FOLDER:
             self._say(f"There is no folder “{locations.display_path(into)}”.")
-            return
-        if locations.file_type(target) is not None:
-            name = locations.basename(target)
-            if ask_to_replace(self, [name], locations.display_name(into)) != REPLACE:
-                return
-        self._respond([target])
+        elif what == _FREE or (
+            ask_to_replace(self, [locations.basename(target)], locations.display_name(into))
+            == REPLACE
+        ):
+            self._respond([target])
 
     def _save_several(self):
         folder = self._chosen_folders()[0]
@@ -589,18 +645,33 @@ class Chooser(QDialog):
             self._say("Files can only be saved on this computer.")
             return
         names = list(self._request.names)
-        taken = [
-            name for name in names if locations.file_type(locations.child(folder, name)) is not None
-        ]
+        self._look(
+            lambda: [
+                name
+                for name in names
+                if locations.file_type(locations.child(folder, name)) is not None
+            ],
+            lambda taken: self._save_several_as(folder, names, taken),
+            "Could not save the files",
+        )
+
+    def _save_several_as(self, folder, names, taken):
         if taken:
             answer = ask_to_replace(self, taken, locations.display_name(folder), keep_both=True)
             if answer is None:
                 return
             if answer == KEEP_BOTH:
-                names = [
-                    free_name(folder, name, is_dir=False) if name in taken else name
-                    for name in names
-                ]
+                self._look(
+                    lambda: [
+                        free_name(folder, name, is_dir=False) if name in taken else name
+                        for name in names
+                    ],
+                    lambda free: self._respond(
+                        [locations.child(folder, name) for name in free], folder
+                    ),
+                    "Could not save the files",
+                )
+                return
         self._respond([locations.child(folder, name) for name in names], folder)
 
     def _respond(self, chosen, folder=None):
