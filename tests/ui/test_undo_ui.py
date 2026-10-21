@@ -63,16 +63,16 @@ def rename(window, old, new):
 def test_there_is_nothing_to_undo_at_first(tree, open_window):
     window = open_window(tree / "src")
 
-    assert window._undo.text() == "Undo"
-    assert not window._undo.isEnabled()
+    assert window._actions.undo.text() == "Undo"
+    assert not window._actions.undo.isEnabled()
     assert window.undo() is None
 
 
 def test_ctrl_z_takes_a_rename_back(qtbot, tree, open_window):
     window = open_window(tree / "src")
     rename(window, "a.txt", "notes.txt")
-    assert window._undo.isEnabled()
-    assert window._undo.text() == "Undo rename of “notes.txt”"
+    assert window._actions.undo.isEnabled()
+    assert window._actions.undo.text() == "Undo rename of “notes.txt”"
     # The offscreen platform gives no window back its focus when a dialog closes
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow, timeout=TIMEOUT)
@@ -82,7 +82,7 @@ def test_ctrl_z_takes_a_rename_back(qtbot, tree, open_window):
 
     assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
     assert window.statusBar().currentMessage() == "Undid the rename of “notes.txt”"
-    assert not window._undo.isEnabled() and window._undo.text() == "Undo"
+    assert not window._actions.undo.isEnabled() and window._actions.undo.text() == "Undo"
     # The file with its name back is the selected one
     qtbot.waitUntil(
         lambda: [info.name for info in window._view.selected_infos()] == ["a.txt"],
@@ -111,7 +111,7 @@ def test_a_rename_to_the_same_name_is_nothing_to_undo(tree, open_window):
 
     rename(window, "a.txt", "a.txt")
 
-    assert not window._undo.isEnabled()
+    assert not window._actions.undo.isEnabled()
 
 
 def test_a_rename_is_not_taken_back_over_what_has_the_old_name_now(tree, open_window):
@@ -139,7 +139,7 @@ def test_renaming_several_is_taken_back_as_one(qtbot, tree, open_window):
     dialog.accept()
     settle(window)
     assert names(tree / "src") == ["note 1.txt", "note 2.txt", "sub"]
-    assert window._undo.text() == "Undo rename of 2 items"
+    assert window._actions.undo.text() == "Undo rename of 2 items"
 
     window.undo()
     settle(window)
@@ -154,7 +154,7 @@ def test_a_new_folder_is_removed_while_it_is_empty(tree, open_window):
     dialog.edit.setText("Photos")
     dialog.accept()
     settle(window)
-    assert window._undo.text() == "Undo new “Photos”"
+    assert window._actions.undo.text() == "Undo new “Photos”"
 
     window.undo()
     settle(window)
@@ -200,7 +200,7 @@ def test_a_move_is_taken_back_by_a_job(qtbot, tree, open_window, jobs, wait_fina
     selected = window._selected_locations()
     wait_final(jobs, jobs.start(JobKind.MOVE, selected, gfile(tree / "dst"), origin=window))
     assert names(tree / "dst") == ["a.txt", "sub"]
-    assert window._undo.text() == "Undo move of 2 items"
+    assert window._actions.undo.text() == "Undo move of 2 items"
 
     undone = window.undo()
     assert job_model.heading(undone.job) == "Moving 2 items back"
@@ -210,7 +210,7 @@ def test_a_move_is_taken_back_by_a_job(qtbot, tree, open_window, jobs, wait_fina
     assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
     assert names(tree / "dst") == []
     # Taking back is not kept to be taken back: there is no redo
-    assert not window._undo.isEnabled()
+    assert not window._actions.undo.isEnabled()
     assert jobs.origin(back) is window
 
 
@@ -221,7 +221,7 @@ def test_a_copy_leaves_undo_as_it_was(tree, open_window, jobs, wait_final):
     a = gfile(tree / "src" / "a.txt")
     wait_final(jobs, jobs.start(JobKind.COPY, [a], gfile(tree / "dst"), origin=window))
 
-    assert window._undo.text() == "Undo rename of “c.txt”"
+    assert window._actions.undo.text() == "Undo rename of “c.txt”"
 
 
 def test_actions_are_taken_back_from_the_last_one(tree, open_window, jobs, wait_final):
@@ -232,7 +232,7 @@ def test_actions_are_taken_back_from_the_last_one(tree, open_window, jobs, wait_
 
     wait_final(jobs, window.undo().job)
     assert names(tree / "src") == ["b.txt", "notes.txt", "sub"]
-    assert window._undo.text() == "Undo rename of “notes.txt”"
+    assert window._actions.undo.text() == "Undo rename of “notes.txt”"
 
     window.undo()
     settle(window)
@@ -243,19 +243,19 @@ def test_what_one_window_did_another_can_take_back(tree, open_window):
     first, second = open_window(tree / "src"), open_window(tree / "dst")
     rename(first, "a.txt", "notes.txt")
 
-    assert second._undo.isEnabled()
-    assert second._undo.text() == "Undo rename of “notes.txt”"
+    assert second._actions.undo.isEnabled()
+    assert second._actions.undo.text() == "Undo rename of “notes.txt”"
     second.undo()
     settle(second)
 
     assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
-    assert not first._undo.isEnabled()
+    assert not first._actions.undo.isEnabled()
 
 
 def test_undo_is_in_the_folders_menu(tree, open_window):
     window = open_window(tree / "src")
 
-    assert window._undo in window._menu_for(None).actions()
+    assert window._actions.undo in window._menu_for(None).actions()
 
 
 def test_several_that_could_not_be_taken_back_are_listed_by_name(qtbot, tree, open_window):
@@ -319,11 +319,11 @@ def test_a_trash_is_taken_back_by_a_restore(
     select(window, "old.txt")
     wait_final(jobs, window.trash_selected())
     assert names(home_dir) == ["keep.txt"]
-    assert window._undo.text() == "Undo trash of “old.txt”"
+    assert window._actions.undo.text() == "Undo trash of “old.txt”"
 
     back = wait_final(jobs, window.undo().job)
 
     assert back.kind is JobKind.RESTORE and back.state is JobState.DONE
     assert names(home_dir) == ["keep.txt", "old.txt"]
     assert (home_dir / "old.txt").read_text() == "x"
-    assert not window._undo.isEnabled()
+    assert not window._actions.undo.isEnabled()

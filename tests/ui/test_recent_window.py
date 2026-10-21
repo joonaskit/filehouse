@@ -82,19 +82,19 @@ def test_a_window_without_a_recorder_still_opens_files(qtbot, tmp_path, jobs, op
 
 def test_the_switch_is_in_the_menu_of_the_folder_and_is_global(qtbot, window):
     assert settings.remember_opened()
-    assert not window._private.isChecked()
+    assert not window._actions.private.isChecked()
     menu = window._menu_for(None)
-    assert window._private in menu.actions()
+    assert window._actions.private in menu.actions()
 
-    window._private.trigger()
+    window._actions.private.trigger()
 
     assert not settings.remember_opened()
     # A window opened now starts with it on
     other = MainWindow(gfile(window._location.get_path()), jobs=window._jobs)
     qtbot.addWidget(other)
-    assert other._private.isChecked()
+    assert other._actions.private.isChecked()
 
-    window._private.trigger()
+    window._actions.private.trigger()
 
     assert settings.remember_opened()
 
@@ -114,11 +114,11 @@ def test_the_switch_keeps_the_file_out_of_the_lists(qtbot, tmp_path, jobs, opene
     report = window._model.info(window._model.row_for_name("report.pdf"))
     recent._plasma = lambda _app: True
 
-    window._private.trigger()
+    window._actions.private.trigger()
     window._on_item_activated(report)
     assert written == []
 
-    window._private.trigger()
+    window._actions.private.trigger()
     window._on_item_activated(report)
     assert len(written) == 1
 
@@ -129,25 +129,25 @@ def test_the_switch_keeps_the_file_out_of_the_lists(qtbot, tmp_path, jobs, opene
 def test_turning_it_on_says_so_and_shows_a_sign(qtbot, window):
     assert not window._private_button.isVisibleTo(window)
 
-    window._private.trigger()
+    window._actions.private.trigger()
 
     assert "not remembered" in window.statusBar().currentMessage()
     assert window._private_button.isVisibleTo(window)
-    assert window._private.isChecked()
+    assert window._actions.private.isChecked()
 
-    window._private.trigger()
+    window._actions.private.trigger()
 
     assert "remembered again" in window.statusBar().currentMessage()
     assert not window._private_button.isVisibleTo(window)
 
 
 def test_the_sign_ends_it_when_clicked(qtbot, window):
-    window._private.trigger()
+    window._actions.private.trigger()
 
     qtbot.mouseClick(window._private_button, Qt.MouseButton.LeftButton)
 
     assert settings.remember_opened()
-    assert not window._private.isChecked()
+    assert not window._actions.private.isChecked()
     assert not window._private_button.isVisibleTo(window)
 
 
@@ -156,14 +156,14 @@ def test_every_window_follows_the_one_setting(qtbot, window, tmp_path, jobs):
     qtbot.addWidget(other)
     other.show()
 
-    window._private.trigger()
+    window._actions.private.trigger()
 
-    assert other._private.isChecked()
+    assert other._actions.private.isChecked()
     assert other._private_button.isVisibleTo(other)
 
     other._private_button.click()
 
-    assert not window._private.isChecked()
+    assert not window._actions.private.isChecked()
     assert not window._private_button.isVisibleTo(window)
 
 
@@ -174,7 +174,7 @@ def test_a_window_opened_in_private_mode_shows_the_sign(qtbot, tmp_path, jobs):
     qtbot.addWidget(window)
     window.show()
 
-    assert window._private.isChecked()
+    assert window._actions.private.isChecked()
     assert window._private_button.isVisibleTo(window)
 
 

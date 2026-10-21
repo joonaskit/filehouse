@@ -1,7 +1,7 @@
 """One browser window: toolbar, sidebar, file list, operations panel and status bar."""
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeyEvent, QKeySequence
+from PySide6.QtGui import QAction, QCursor, QIcon, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -26,6 +26,7 @@ from filehouse.qt_models.job_model import JobModel
 from filehouse.qt_models.volumes import Volumes
 from filehouse.qt_models.workers import Background
 from filehouse.ui import clipboard, groups, menus, settings
+from filehouse.ui.actions import Actions
 from filehouse.ui.details_pane import DetailsPane
 from filehouse.ui.dialogs.name import ask_name
 from filehouse.ui.dialogs.prompter import Prompter
@@ -187,8 +188,6 @@ class MainWindow(QMainWindow):
         # Tabs, each with a folder or two side by side. `_tab` is the shown one and
         # `_pane` its active pane: the toolbar, the title, the details, the status bar
         # and every action are about it
-        self._action_icons = []  # (action, icon name, colour) to make them again
-        self._button_actions = []  # the ones a button shows, not only a menu
         self._tab_bar = TabBar()
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
         self._tab_bar.tabMoved.connect(self._on_tab_moved)
@@ -246,7 +245,9 @@ class MainWindow(QMainWindow):
         self._search_field.left.connect(self._to_the_list)
         self._search_field.editingFinished.connect(self._sync_search_field)
         self._create_actions()
-        self._sheet_details.close_requested.connect(lambda: self._show_details.setChecked(False))
+        self._sheet_details.close_requested.connect(
+            lambda: self._actions.show_details.setChecked(False)
+        )
 
         center = QWidget()
         center_layout = QVBoxLayout(center)
@@ -279,8 +280,8 @@ class MainWindow(QMainWindow):
         self._count_label = QLabel()
         # In a narrow window, in the corner under the rail: the details as a sheet
         self._details_button = QToolButton()
-        self._details_button.setDefaultAction(self._show_details)
-        self._button_actions.append(self._show_details)
+        self._details_button.setDefaultAction(self._actions.show_details)
+        self._actions.on_buttons.append(self._actions.show_details)
         self._details_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._details_button.setIconSize(QSize(style.px(18), style.px(18)))
         self._details_button.setFixedHeight(style.px(28))
@@ -292,10 +293,10 @@ class MainWindow(QMainWindow):
         self._job_status.clicked.connect(self._panel.toggle)
         # A sign that nothing is remembered, as long as it is so: a click ends it
         self._private_button = QToolButton()
-        self._button_actions.append(self._private)
+        self._actions.on_buttons.append(self._actions.private)
         self._draw_action_icons()
         self._private_button.setText("Private")
-        self._private_button.clicked.connect(self._private.trigger)
+        self._private_button.clicked.connect(self._actions.private.trigger)
         self._private_button.setToolTip(
             "Opened files are not remembered. Click to remember them again."
         )
@@ -327,221 +328,71 @@ class MainWindow(QMainWindow):
         self._view.setFocus()
 
     def _create_actions(self):
-        def action(text, icon, shortcuts, slot, colour="textPrimary"):
-            # Its icon comes with all the others, once it is known which are on buttons
-            item = QAction(text, self)
-            item.setShortcuts(shortcuts)
-            item.triggered.connect(slot)
-            self.addAction(item)
-            self._action_icons.append((item, icon, colour))
-            return item
-
-        # Backspace goes back, as in Dolphin
-        self._back = action(
-            "Back",
-            "go-previous",
-            [QKeySequence("Alt+Left"), QKeySequence("Backspace")],
-            self.go_back,
+        self._actions = actions = Actions(
+            self,
+            {
+                "back": self.go_back,
+                "forward": self.go_forward,
+                "up": self.go_up,
+                "edit_location": self._path_bar.edit,
+                "reload": self.reload,
+                "close": self.close_current,
+                "new_tab": self.new_tab,
+                "next_tab": lambda: self._step_tab(1),
+                "previous_tab": lambda: self._step_tab(-1),
+                "hidden": self._set_show_hidden,
+                "private": self._set_remember_opened,
+                "icons_mode": lambda: self.set_view_mode(ICONS),
+                "details_mode": lambda: self.set_view_mode(DETAILS),
+                "split_view": self.set_split,
+                "pane_toggle": self.set_details_pane,
+                "copy": self.copy,
+                "cut": self.cut,
+                "paste": self.paste,
+                "rename": self.rename,
+                "undo": self.undo,
+                "duplicate": self.duplicate,
+                "link": self.create_link,
+                "trash": self.trash_selected,
+                "delete": self.delete_selected,
+                "new_folder": self.new_folder,
+                "new_file": self.new_file,
+                "move_to": self.move_selected,
+                "extract_here": self.extract_here,
+                "extract_to": self.extract_to,
+                "compress": self.compress,
+                "copy_other": self.copy_to_other_pane,
+                "move_other": self.move_to_other_pane,
+                "copy_path": self.copy_path,
+                "terminal": lambda: self.open_terminal(),
+                "select_all": lambda: self._view.select_all(),
+                "select_matching": self.select_matching,
+                "invert": self.invert_selection,
+                "restore": self.restore_selected,
+                "empty_trash": self.empty_trash,
+                "properties": self.properties,
+                "close_details": lambda: self._actions.show_details.setChecked(False),
+                "preview": self.toggle_preview,
+                "close_preview_sheet": self._close_preview,
+                "next_page": lambda: self._turn_page(1),
+                "previous_page": lambda: self._turn_page(-1),
+                "forget": self.remove_from_recent,
+                "clear_recent": self.clear_recent,
+                "favourite": self.toggle_favourite,
+                "permissions": self._show_permissions_menu,
+                "settings": self.open_settings,
+                "folder_menu": self._show_folder_menu,
+                "search": self.start_search,
+            },
         )
-        self._forward = action("Forward", "go-next", [QKeySequence("Alt+Right")], self.go_forward)
-        self._up = action("Up", "go-up", [QKeySequence("Alt+Up")], self.go_up)
-        action("Edit location", "edit-entry", [QKeySequence("Ctrl+L")], self._path_bar.edit)
-        action("Reload", "view-refresh", [QKeySequence("F5")], self.reload)
-        # The tab, or the window when it is the last tab
-        action("Close", "window-close", [QKeySequence("Ctrl+W")], self.close_current)
-        self._new_tab = action("New tab", "tab-new", [QKeySequence("Ctrl+T")], self.new_tab)
-        action(
-            "Next tab",
-            "go-next",
-            [QKeySequence("Ctrl+Tab"), QKeySequence("Ctrl+PgDown")],
-            lambda: self._step_tab(1),
-        )
-        action(
-            "Previous tab",
-            "go-previous",
-            [QKeySequence("Ctrl+Shift+Tab"), QKeySequence("Ctrl+PgUp")],
-            lambda: self._step_tab(-1),
-        )
-        self._hidden = action(
-            "Show hidden files",
-            "view-hidden",
-            [QKeySequence("Ctrl+H")],
-            self._set_show_hidden,
-        )
-        self._hidden.setCheckable(True)
-        self._hidden.setChecked(self._proxy.show_hidden)
-        # For the user who does not want the desktop to follow what they open. A setting
-        # of the app, not of a window, as the browsers' private mode is not either
-        self._private = action(
-            "Don't remember opened files",
-            "view-private",
-            [],
-            self._set_remember_opened,
-        )
-        self._private.setCheckable(True)
-        self._private.setChecked(not settings.remember_opened())
-
-        # The same keys as Dolphin
-        self._icons_mode = action(
-            "Icons", "view-list-icons", [QKeySequence("Ctrl+1")], lambda: self.set_view_mode(ICONS)
-        )
-        self._details_mode = action(
-            "Details",
-            "view-list-details",
-            [QKeySequence("Ctrl+3")],
-            lambda: self.set_view_mode(DETAILS),
-        )
-        self._split_view = action(
-            "Split view", "view-split-left-right", [QKeySequence("F3")], self.set_split
-        )
-        self._split_view.setCheckable(True)
-        # Whether a wide window has the pane of details. The narrow window's details are
-        # a sheet, and have a button of their own
-        self._pane_toggle = action(
-            "Details pane", "view-right-close", [QKeySequence("F11")], self.set_details_pane
-        )
-        self._pane_toggle.setCheckable(True)
-        self._pane_toggle.setChecked(settings.details_pane())
+        actions.hidden.setChecked(self._proxy.show_hidden)
+        actions.private.setChecked(not settings.remember_opened())
+        actions.pane_toggle.setChecked(settings.details_pane())
         settings.changes.details_pane_changed.connect(self._on_details_pane_changed)
-        modes = QActionGroup(self)
-        for item in (self._icons_mode, self._details_mode):
-            item.setCheckable(True)
-            modes.addAction(item)
-        self._details_mode.setChecked(True)
-
-        keys = QKeySequence.StandardKey
-        self._copy = action("Copy", "edit-copy", QKeySequence.keyBindings(keys.Copy), self.copy)
-        # Not the platform's whole list for Cut: it includes Shift+Delete
-        self._cut = action("Cut", "edit-cut", [QKeySequence("Ctrl+X")], self.cut)
-        self._paste = action(
-            "Paste", "edit-paste", QKeySequence.keyBindings(keys.Paste), self.paste
-        )
-        self._rename = action("Rename…", "edit-rename", [QKeySequence("F2")], self.rename)
-        # The last rename, move, trash or new folder of any window: see JobModel.undo
-        self._undo = action("Undo", "edit-undo", [QKeySequence("Ctrl+Z")], self.undo)
         self._jobs.undo_changed.connect(self._update_undo)
         self._update_undo()
-        # A copy beside the file, and a link to it. Neither has a key: Ctrl+D is the
-        # favourites', and Dolphin has none for them either
-        self._duplicate = action("Duplicate", "edit-duplicate", [], self.duplicate)
-        self._link = action("Create link", "edit-link", [], self.create_link)
-        self._trash = action(
-            "Move to trash",
-            "user-trash",
-            [QKeySequence("Delete")],
-            self.trash_selected,
-            colour="danger",
-        )
-        self._delete = action(
-            "Delete permanently…",
-            "edit-delete",
-            [QKeySequence("Shift+Delete")],
-            self.delete_selected,
-            colour="danger",
-        )
-        self._new_folder = action(
-            "New folder…", "folder-new", [QKeySequence("Ctrl+Shift+N")], self.new_folder
-        )
-        self._new_file = action("New file…", "document-new", [], self.new_file)
-        self._move_to = action("Move to…", "document-export", [], self.move_selected)
-        # Archives: nothing is offered when libarchive is not installed
-        self._extract_here = action("Extract here", "archive-extract", [], self.extract_here)
-        self._extract_to = action("Extract to…", "archive-extract", [], self.extract_to)
-        self._compress = action("Compress…", "archive-insert", [], self.compress)
-        # Beside the other list, for the keyboard. Shift: F5 is Reload
-        self._copy_other = action(
-            "Copy to other pane", "edit-copy", [QKeySequence("Shift+F5")], self.copy_to_other_pane
-        )
-        self._move_other = action(
-            "Move to other pane",
-            "document-export",
-            [QKeySequence("Shift+F6")],
-            self.move_to_other_pane,
-        )
-        # The keys Dolphin has for these two
-        self._copy_path = action(
-            "Copy path", "edit-copy-path", [QKeySequence("Ctrl+Alt+C")], self.copy_path
-        )
-        self._terminal = action(
-            "Open terminal here",
-            "utilities-terminal",
-            [QKeySequence("Shift+F4")],
-            lambda: self.open_terminal(),
-        )
-        self._select_all = action(
-            "Select all",
-            "edit-select-all",
-            QKeySequence.keyBindings(keys.SelectAll),
-            lambda: self._view.select_all(),
-        )
-        # The keys Dolphin has for these two
-        self._select_matching = action(
-            "Select matching…", "edit-select", [QKeySequence("Ctrl+S")], self.select_matching
-        )
-        self._invert = action(
-            "Invert selection",
-            "edit-select-invert",
-            [QKeySequence("Ctrl+Shift+A")],
-            self.invert_selection,
-        )
-        self._restore = action("Restore", "edit-undo", [], self.restore_selected)
-        self._empty_trash = action("Empty trash…", "trash-empty", [], self.empty_trash)
-        self._properties = action(
-            "Properties", "document-properties", [QKeySequence("Alt+Return")], self.properties
-        )
-
-        # For the narrow window. Neither has a key of its own
-        self._show_details = action("Details", "documentinfo", [], lambda: None)
-        self._show_details.setCheckable(True)
         # Not `triggered`: the sheet's own button and Escape uncheck it too
-        self._show_details.toggled.connect(self._set_sheet_open)
-        self._close_details = action(
-            "Close details",
-            "window-close",
-            [QKeySequence("Escape")],
-            lambda: self._show_details.setChecked(False),
-        )
-        self._close_details.setEnabled(False)
-        # Space opens a larger look at the selection, and Space or Escape close it
-        self._preview_action = action(
-            "Preview", "view-preview", [QKeySequence("Space")], self.toggle_preview
-        )
-        # For the preview as a sheet, which takes no keys itself. Only while it is open,
-        # and the page keys only for a document: they are the list's otherwise
-        self._close_preview_sheet = action(
-            "Close preview", "window-close", [QKeySequence("Escape")], self._close_preview
-        )
-        self._next_page = action(
-            "Next page", "go-down", [QKeySequence("PgDown")], lambda: self._turn_page(1)
-        )
-        self._previous_page = action(
-            "Previous page", "go-up", [QKeySequence("PgUp")], lambda: self._turn_page(-1)
-        )
-        for item in (self._close_preview_sheet, self._next_page, self._previous_page):
-            item.setEnabled(False)
-        # In the recent files the Delete key takes the entry off the list
-        self._forget = action(
-            "Remove from recent files",
-            "edit-clear-history",
-            [QKeySequence("Delete")],
-            self.remove_from_recent,
-        )
-        self._forget.setEnabled(False)
-        self._clear_recent = action(
-            "Clear recent files…", "edit-clear-history", [], self.clear_recent
-        )
-        # The folder open here, or the one a menu is for, in the bar under the toolbar
-        self._favourite = action(
-            "Add to favourites", "bookmark-new", [QKeySequence("Ctrl+D")], self.toggle_favourite
-        )
-        self._permissions = action("Permissions", "object-locked", [], self._show_permissions_menu)
-        self._settings = action(
-            "Settings", "preferences-system", [QKeySequence("Ctrl+,")], self.open_settings
-        )
-        self._folder_menu = action(
-            "Folder menu", "view-more-horizontal", [], self._show_folder_menu
-        )
-        self._search = action("Search", "edit-find", [QKeySequence("Ctrl+F")], self.start_search)
+        actions.show_details.toggled.connect(self._set_sheet_open)
 
         # One row of rounded groups, over the panes they go with: back and forward over
         # the sidebar, the path and how the list is shown over the list, and search over
@@ -552,7 +403,7 @@ class MainWindow(QMainWindow):
         toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         # The first group is as wide as the sidebar under it, and the search field with
         # the settings button as wide as the details pane: see _align_toolbar
-        self._navigation_group = self._group(self._back, self._forward, self._up)
+        self._navigation_group = self._group(actions.back, actions.forward, actions.up)
         self._navigation_group.layout().addStretch(1)
         toolbar.addWidget(self._navigation_group)
         location = self._group()
@@ -560,7 +411,10 @@ class MainWindow(QMainWindow):
         location.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._toolbar_location = toolbar.addWidget(location)
         self._view_group = self._group(
-            self._details_mode, self._icons_mode, self._split_view, self._pane_toggle
+            actions.details_mode,
+            actions.icons_mode,
+            actions.split_view,
+            actions.pane_toggle,
         )
         toolbar.addWidget(self._view_group)
         # In a wide window the field is always there; in a narrow one it takes the
@@ -569,9 +423,9 @@ class MainWindow(QMainWindow):
         self._search_group.layout().addWidget(self._search_field)
         self._search_group.setFixedWidth(style.px(_SEARCH_WIDTH))
         self._toolbar_search = toolbar.addWidget(self._search_group)
-        self._toolbar_menu = toolbar.addWidget(self._group(self._search, self._folder_menu))
+        self._toolbar_menu = toolbar.addWidget(self._group(actions.search, actions.folder_menu))
         self._toolbar_menu.setVisible(False)
-        self._settings_group = self._group(self._settings)
+        self._settings_group = self._group(actions.settings)
         toolbar.addWidget(self._settings_group)
         self._toolbar = toolbar
         self.addToolBar(toolbar)
@@ -581,13 +435,9 @@ class MainWindow(QMainWindow):
             self._favourites.changed.connect(self._update_favourite_action)
 
     def _draw_action_icons(self):
-        """The icon of every action, in the colours of the theme in use. Most are shown
-        by menus only and are made in a menu's size: every size of every icon was most
-        of the time the window took to open."""
-        for item, icon, colour in self._action_icons:
-            menu = item not in self._button_actions
-            item.setIcon(style.icon(icon + "-symbolic", icon, colour=colour, menu=menu))
-        self._private_button.setIcon(self._private.icon())
+        """The icon of every action, in the colours of the theme in use."""
+        self._actions.draw_icons()
+        self._private_button.setIcon(self._actions.private.icon())
 
     def _retheme(self):
         """The theme changed while the window is open: icons are drawn in its colours."""
@@ -609,7 +459,7 @@ class MainWindow(QMainWindow):
 
     def _group(self, *actions):
         """A rounded group for the toolbar, holding an icon button per action."""
-        self._button_actions.extend(actions)
+        self._actions.on_buttons.extend(actions)
         return groups.group(*actions)
 
     def eventFilter(self, watched, event):
@@ -782,7 +632,7 @@ class MainWindow(QMainWindow):
         """Show two folders side by side, or one again: the active pane stays. The new
         pane shows `location`, or by default the folder of the active one."""
         if on == self.is_split or (on and self._narrow):
-            self._split_view.setChecked(self.is_split)
+            self._actions.split_view.setChecked(self.is_split)
             return
         if remember:
             settings.set_split(on)
@@ -794,7 +644,7 @@ class MainWindow(QMainWindow):
         else:
             self._remove_other_pane(self._tab)
         self._mark_active()
-        self._split_view.setChecked(on)
+        self._actions.split_view.setChecked(on)
         self._sync_details()
         self._update_state()
         self._view.setFocus()
@@ -809,7 +659,7 @@ class MainWindow(QMainWindow):
         gone.deleteLater()
 
     def _details_wanted(self):
-        return not self._narrow and not self.is_split and self._pane_toggle.isChecked()
+        return not self._narrow and not self.is_split and self._actions.pane_toggle.isChecked()
 
     def set_details_pane(self, show=None):
         """Show or hide the pane of details in a wide window. It is the app's setting,
@@ -822,7 +672,7 @@ class MainWindow(QMainWindow):
     def _on_details_pane_changed(self, show):
         """Changed here or in another window: it is one setting."""
         # The action is checked already when it was its own click that changed it
-        self._pane_toggle.setChecked(show)
+        self._actions.pane_toggle.setChecked(show)
         self._sync_details(animate=True)
         self._update_state()
 
@@ -917,7 +767,7 @@ class MainWindow(QMainWindow):
         self._tab = self._tabs[index]
         self._stack.setCurrentWidget(self._tab.splitter)
         self._mark_active()
-        self._split_view.setChecked(self.is_split)
+        self._actions.split_view.setChecked(self.is_split)
         self._sync_details()
         self._on_location_changed()
         self._view.setFocus()
@@ -947,7 +797,9 @@ class MainWindow(QMainWindow):
 
     def _sync_view_mode(self):
         """The two buttons say how the active pane shows its folder."""
-        (self._icons_mode if self._view.mode == ICONS else self._details_mode).setChecked(True)
+        (
+            self._actions.icons_mode if self._view.mode == ICONS else self._actions.details_mode
+        ).setChecked(True)
 
     # The tabs of last time
 
@@ -1004,7 +856,7 @@ class MainWindow(QMainWindow):
             pane.open_instead(locations.home())
 
     def set_show_hidden(self, show):
-        self._hidden.setChecked(show)
+        self._actions.hidden.setChecked(show)
         self._set_show_hidden(show)
 
     def _set_show_hidden(self, show):
@@ -1062,9 +914,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{locations.display_name(location)} — Files")
         self._path_bar.set_location(locations.segments(location), locations.display_path(location))
         self._sidebar.select(location)
-        self._back.setEnabled(self._pane.history.can_go_back)
-        self._forward.setEnabled(self._pane.history.can_go_forward)
-        self._up.setEnabled(locations.parent(location) is not None)
+        self._actions.back.setEnabled(self._pane.history.can_go_back)
+        self._actions.forward.setEnabled(self._pane.history.can_go_forward)
+        self._actions.up.setEnabled(locations.parent(location) is not None)
         self._update_state()
 
     def _on_volume_removed(self, root):
@@ -1106,53 +958,11 @@ class MainWindow(QMainWindow):
         self._sync_view_mode()
         infos = self._view.selected_infos()
         selected = len(infos)
-        in_trash = self._in_trash()
-        at_trash = self._at_trash()
-        # The trash and the recent files are for looking at, and for what is said below
-        read_only = self._read_only()
-        self._copy.setEnabled(selected > 0)
-        self._properties.setEnabled(True)
-        # What is in the trash can be restored or deleted, and nothing else
-        self._cut.setEnabled(selected > 0 and not read_only)
-        # In the trash the Delete key deletes for good (and asks first, as always)
-        for item in (self._trash, self._delete):
-            item.setEnabled(selected > 0 and (at_trash or not read_only))
-        # In the recent files it takes the entry off the list, not the file away
-        self._forget.setEnabled(selected > 0 and self._in_recent())
-        self._clear_recent.setEnabled(self._in_recent() and self._model.rowCount() > 0)
+        self._actions.update(
+            self._pane, infos, self._other_pane(), self._terminal_folder() is not None
+        )
         self._update_favourite_action()
-        self._rename.setEnabled(selected > 0 and not read_only)
-        self._move_to.setEnabled(selected > 0 and not read_only)
-        # Not of what is in the trash, and not into a list of what was used
-        for item in (self._duplicate, self._link):
-            item.setEnabled(selected > 0 and not read_only)
-        has_archive = not in_trash and any(is_archive(info) for info in infos)
-        self._extract_here.setEnabled(has_archive and not read_only)
-        self._extract_to.setEnabled(has_archive)
-        self._compress.setEnabled(selected > 0 and not read_only and archives.available())
-        self._permissions.setEnabled(selected > 0 and not read_only)
-        self._paste.setEnabled(bool(clipboard.get()[0]) and not read_only)
-        other = self._other_pane()
-        # Copying what is in the recent files is copying the files; moving them is not
-        # something a list of what was used should do
-        self._copy_other.setEnabled(
-            selected > 0 and not in_trash and other is not None and not other.read_only
-        )
-        self._move_other.setEnabled(
-            selected > 0 and not read_only and other is not None and not other.read_only
-        )
-        for item in (self._new_folder, self._new_file):
-            item.setEnabled(not read_only)
-        # A terminal starts in a folder of this computer: not in the trash or a remote place
-        self._terminal.setVisible(self._terminal_folder() is not None)
-        self._restore.setEnabled(
-            selected > 0 and all(info.original_path is not None for info in infos)
-        )
-        self._empty_trash.setEnabled(at_trash and self._model.rowCount() > 0)
-
         count = self._proxy.rowCount()
-        for item in (self._select_all, self._select_matching, self._invert):
-            item.setEnabled(count > 0)
         if self._error:
             text = ""
         elif self._model.loading:
@@ -1178,7 +988,6 @@ class MainWindow(QMainWindow):
         self._count_label.setText(text)
         self._sync_search_field()
         self._update_details(infos)
-        self._preview_action.setEnabled(selected > 0)
         self._update_preview(infos)
 
     @property
@@ -1197,7 +1006,7 @@ class MainWindow(QMainWindow):
         infos = self._view.selected_infos()
         if self._narrow:
             # One sheet at a time
-            self._show_details.setChecked(False)
+            self._actions.show_details.setChecked(False)
             self._show_in(self._sheet_preview, infos)
             self._set_preview_sheet_open(True)
         else:
@@ -1228,10 +1037,10 @@ class MainWindow(QMainWindow):
         """The keys of the preview as a sheet. Not while the preview window is up over
         it, in full screen: that window has the same keys, and they are its own then."""
         sheet = self._preview_sheet.is_open and not self._preview.isVisible()
-        self._close_preview_sheet.setEnabled(sheet)
+        self._actions.close_preview_sheet.setEnabled(sheet)
         pages = sheet and self._sheet_preview.page_count > 1
-        self._next_page.setEnabled(pages)
-        self._previous_page.setEnabled(pages)
+        self._actions.next_page.setEnabled(pages)
+        self._actions.previous_page.setEnabled(pages)
 
     def _turn_page(self, by):
         self._sheet_preview.turn_page(by)
@@ -1310,17 +1119,17 @@ class MainWindow(QMainWindow):
         if narrow:
             self._wide_sizes = self._splitter.sizes()
         else:
-            self._show_details.setChecked(False)
+            self._actions.show_details.setChecked(False)
         self._details_slide.set_shown(self._details_wanted(), animate=False)
         self._sidebar.set_rail(narrow)
         self._path_bar.set_short(narrow)
         for pane in self._all_panes():
             pane.view.set_compact(narrow)
-        self._split_view.setEnabled(not narrow)
-        self._button_for(self._split_view).setVisible(not narrow)
-        self._button_for(self._pane_toggle).setVisible(not narrow)
+        self._actions.split_view.setEnabled(not narrow)
+        self._button_for(self._actions.split_view).setVisible(not narrow)
+        self._button_for(self._actions.pane_toggle).setVisible(not narrow)
         self._job_status.set_compact(narrow)
-        self._button_for(self._forward).setVisible(not narrow)
+        self._button_for(self._actions.forward).setVisible(not narrow)
         self._toolbar_menu.setVisible(narrow)
         self._details_button.setVisible(narrow)
         if narrow:
@@ -1344,7 +1153,7 @@ class MainWindow(QMainWindow):
             # One sheet at a time
             self._set_preview_sheet_open(False)
         self._sheet.set_open(open_ and self._narrow, animate=self.isVisible())
-        self._close_details.setEnabled(self._sheet.is_open)
+        self._actions.close_details.setEnabled(self._sheet.is_open)
         self._update_state()
 
     # Search
@@ -1383,7 +1192,7 @@ class MainWindow(QMainWindow):
         self._toolbar_location.setVisible(not (self._narrow and in_use))
 
     def _show_folder_menu(self):
-        button = self._button_for(self._folder_menu)
+        button = self._button_for(self._actions.folder_menu)
         self._on_context_menu(None, button.mapToGlobal(button.rect().bottomLeft()))
 
     # Items
@@ -1465,9 +1274,9 @@ class MainWindow(QMainWindow):
             and not locations.in_trash(location)
             and not locations.in_recent(location)
         )
-        self._favourite.setEnabled(usable)
+        self._actions.favourite.setEnabled(usable)
         if usable:
-            self._favourite.setText(self._favourite_text(location))
+            self._actions.favourite.setText(self._favourite_text(location))
 
     def _favourite_text(self, location):
         found = self._favourites is not None and self._favourites.find(location)
@@ -1545,7 +1354,7 @@ class MainWindow(QMainWindow):
         )
         if not self._narrow:
             menu.addAction(
-                self._split_view.icon(),
+                self._actions.split_view.icon(),
                 "Open in split view",
                 lambda: self._open_location_in_split(location),
             )
@@ -1611,7 +1420,7 @@ class MainWindow(QMainWindow):
 
     def _on_remember_opened_changed(self, remember):
         """Changed here or in another window: it is one setting."""
-        self._private.setChecked(not remember)
+        self._actions.private.setChecked(not remember)
         self._private_button.setVisible(not remember)
 
     def _open_selected(self):
@@ -1634,11 +1443,11 @@ class MainWindow(QMainWindow):
         menu = menus.menu(self)
         if self._in_trash():
             if info is not None:
-                menu.addActions([self._restore, self._delete])
+                menu.addActions([self._actions.restore, self._actions.delete])
                 menu.addSeparator()
-                menu.addAction(self._properties)
+                menu.addAction(self._actions.properties)
             else:
-                menu.addAction(self._empty_trash)
+                menu.addAction(self._actions.empty_trash)
                 menu.addActions(self._selecting())
                 menu.addSeparator()
                 self._add_sort_and_view(menu)
@@ -1647,20 +1456,20 @@ class MainWindow(QMainWindow):
             return self._recent_menu(menu, info)
         if info is None:
             # The folder's own menu
-            menu.addActions([self._new_folder, self._new_file])
+            menu.addActions([self._actions.new_folder, self._actions.new_file])
             menu.addSeparator()
-            menu.addAction(self._undo)
-            menu.addAction(self._paste)
+            menu.addAction(self._actions.undo)
+            menu.addAction(self._actions.paste)
             menu.addActions(self._selecting())
             menu.addSeparator()
             self._add_sort_and_view(menu)
-            menu.addAction(self._hidden)
-            menu.addAction(self._private)
+            menu.addAction(self._actions.hidden)
+            menu.addAction(self._actions.private)
             menu.addSeparator()
-            menu.addAction(self._favourite)
-            menu.addActions([self._copy_path, self._terminal])
+            menu.addAction(self._actions.favourite)
+            menu.addActions([self._actions.copy_path, self._actions.terminal])
             self._add_open_in_manager(menu, self._location)
-            menu.addAction(self._properties)
+            menu.addAction(self._actions.properties)
             return menu
         target = locations.child(self._location, info.name)
         folder = self._location
@@ -1685,7 +1494,7 @@ class MainWindow(QMainWindow):
             )
             if not self._narrow:
                 menu.addAction(
-                    self._split_view.icon(),
+                    self._actions.split_view.icon(),
                     "Open in split view",
                     lambda: self._open_in_split(info),
                 )
@@ -1694,34 +1503,43 @@ class MainWindow(QMainWindow):
         self._add_open_in_manager(menu, folder)
         menu.addSeparator()
         if not info.is_dir:
-            menu.addAction(self._preview_action)
-        menu.addActions([self._cut, self._copy, self._paste])
+            menu.addAction(self._actions.preview)
+        menu.addActions([self._actions.cut, self._actions.copy, self._actions.paste])
         menu.addSeparator()
-        menu.addActions([self._rename, self._duplicate, self._link, self._move_to])
+        menu.addActions(
+            [
+                self._actions.rename,
+                self._actions.duplicate,
+                self._actions.link,
+                self._actions.move_to,
+            ]
+        )
         if is_archive(info) and not self._in_trash():
-            menu.addActions([self._extract_here, self._extract_to])
+            menu.addActions([self._actions.extract_here, self._actions.extract_to])
         if archives.available() and not self._read_only():
-            menu.addAction(self._compress)
+            menu.addAction(self._actions.compress)
         if self.is_split:
-            menu.addActions([self._copy_other, self._move_other])
-        menu.addActions([self._trash, self._delete])
+            menu.addActions([self._actions.copy_other, self._actions.move_other])
+        menu.addActions([self._actions.trash, self._actions.delete])
         menu.addSeparator()
         menu.addAction(self._select_type_action(menu, info))
-        menu.addAction(self._copy_path)
+        menu.addAction(self._actions.copy_path)
         if info.is_dir and self._favourites is not None:
             menu.addAction(
-                self._favourite.icon(),
+                self._actions.favourite.icon(),
                 self._favourite_text(target),
                 lambda: self.toggle_favourite(target),
             )
         if info.is_dir and self._terminal_folder(folder) is not None:
             # In the folder the menu is for, not the one it is listed in
             menu.addAction(
-                self._terminal.icon(), "Open terminal here", lambda: self.open_terminal(folder)
+                self._actions.terminal.icon(),
+                "Open terminal here",
+                lambda: self.open_terminal(folder),
             )
         menu.addSeparator()
         menu.addMenu(self._permissions_menu(menu))
-        menu.addAction(self._properties)
+        menu.addAction(self._actions.properties)
         return menu
 
     def _recent_menu(self, menu, info):
@@ -1731,9 +1549,9 @@ class MainWindow(QMainWindow):
             menu.addActions(self._selecting())
             menu.addSeparator()
             self._add_sort_and_view(menu)
-            menu.addAction(self._private)
+            menu.addAction(self._actions.private)
             menu.addSeparator()
-            menu.addAction(self._clear_recent)
+            menu.addAction(self._actions.clear_recent)
             return menu
         target = locations.entry_location(self._location, info)
         menu.addAction(
@@ -1750,20 +1568,20 @@ class MainWindow(QMainWindow):
         )
         menu.addSeparator()
         if not info.is_dir:
-            menu.addAction(self._preview_action)
-        menu.addActions([self._copy, self._copy_path])
+            menu.addAction(self._actions.preview)
+        menu.addActions([self._actions.copy, self._actions.copy_path])
         menu.addAction(self._select_type_action(menu, info))
         menu.addSeparator()
-        menu.addAction(self._forget)
-        menu.addAction(self._properties)
+        menu.addAction(self._actions.forget)
+        menu.addAction(self._actions.properties)
         return menu
 
     def _selecting(self):
         """The folder menu's entries for what is selected."""
-        return [self._select_all, self._select_matching, self._invert]
+        return [self._actions.select_all, self._actions.select_matching, self._actions.invert]
 
     def _select_type_action(self, menu, info):
-        item = QAction(self._select_all.icon(), "Select all of this type", menu)
+        item = QAction(self._actions.select_all.icon(), "Select all of this type", menu)
         item.triggered.connect(lambda: self.select_same_type(info))
         return item
 
@@ -1785,7 +1603,7 @@ class MainWindow(QMainWindow):
         """The presets, for the selection: each with the mode it gives, and a tick
         on the one the selection has already."""
         menu = menus.menu(parent, "Permissions")
-        menu.setIcon(self._permissions.icon())
+        menu.setIcon(self._actions.permissions.icon())
         infos = self._view.selected_infos()
         kinds = {info.is_dir for info in infos}
         for preset in permissions.PRESETS:
@@ -1843,15 +1661,15 @@ class MainWindow(QMainWindow):
         menu.addMenu(sort)
         view = menus.menu(menu, "View")
         view.setIcon(style.icon("view-grid-symbolic", "view-grid", menu=True))
-        view.addActions([self._details_mode, self._icons_mode])
+        view.addActions([self._actions.details_mode, self._actions.icons_mode])
         if settings.per_folder():
             # The view and the sort order that were chosen in this folder, given up
             default = view.addAction("Use the default here", self._pane.use_default_view)
             default.setEnabled(self._pane.has_own_view)
         view.addSeparator()
-        view.addAction(self._split_view)
-        view.addAction(self._pane_toggle)
-        view.addAction(self._new_tab)
+        view.addAction(self._actions.split_view)
+        view.addAction(self._actions.pane_toggle)
+        view.addAction(self._actions.new_tab)
         density = menus.menu(view, "Density")
         current = settings.density()
         for key, text in (("comfortable", "Comfortable"), ("compact", "Compact")):
@@ -2010,8 +1828,8 @@ class MainWindow(QMainWindow):
 
     def _update_undo(self):
         what = self._jobs.undo_text()
-        self._undo.setText(f"Undo {what}" if what else "Undo")
-        self._undo.setEnabled(what is not None)
+        self._actions.undo.setText(f"Undo {what}" if what else "Undo")
+        self._actions.undo.setEnabled(what is not None)
 
     def undo(self):
         """Take back the last rename, move, trash or new folder, of this window or of

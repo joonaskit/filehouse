@@ -49,8 +49,8 @@ def test_a_wide_window_has_the_wide_layout(window):
     assert window._details.isVisible()
     assert not window._sidebar.is_rail
     assert not window._details_button.isVisible()
-    assert button(window, window._forward).isVisible()
-    assert not button(window, window._folder_menu).isVisible()
+    assert button(window, window._actions.forward).isVisible()
+    assert not button(window, window._actions.folder_menu).isVisible()
 
 
 def test_below_the_width_the_layout_changes(qtbot, window, folder):
@@ -66,14 +66,16 @@ def test_below_the_width_the_layout_changes(qtbot, window, folder):
     # The breadcrumb names the folder and the one it is in
     assert window._path_bar.crumbs() == ["…", "Projects", "island"]
     # Back and up stay; forward and the actions make way, the folder menu gets a button
-    assert button(window, window._back).isVisible()
-    assert not button(window, window._forward).isVisible()
-    qtbot.waitUntil(lambda: button(window, window._folder_menu).isVisible(), timeout=TIMEOUT)
-    assert button(window, window._search).isVisible()
+    assert button(window, window._actions.back).isVisible()
+    assert not button(window, window._actions.forward).isVisible()
+    qtbot.waitUntil(
+        lambda: button(window, window._actions.folder_menu).isVisible(), timeout=TIMEOUT
+    )
+    assert button(window, window._actions.search).isVisible()
     # What is done to the selection is in its menu. The details have a button in the
     # corner under the rail
     assert window._details_button.isVisible()
-    assert window._details_button.defaultAction() is window._show_details
+    assert window._details_button.defaultAction() is window._actions.show_details
     # The list gives up the Modified column
     tree = window._view._tree
     assert tree.isColumnHidden(MODIFIED) and not tree.isColumnHidden(PERMISSIONS)
@@ -88,7 +90,9 @@ def test_the_window_does_not_get_narrower_than_its_toolbar(qtbot, window):
 
     assert window.width() >= style.px(460) and window.height() >= style.px(360)
     toolbar = window.findChild(QToolBar)
-    qtbot.waitUntil(lambda: button(window, window._folder_menu).isVisible(), timeout=TIMEOUT)
+    qtbot.waitUntil(
+        lambda: button(window, window._actions.folder_menu).isVisible(), timeout=TIMEOUT
+    )
     # Every group that is on show is wholly inside the window
     groups = [
         frame
@@ -105,15 +109,15 @@ def test_going_back_to_wide_restores_everything(qtbot, window):
     before = window._splitter.sizes()
     window.resize(NARROW, 600)
     window._view.select_name("run.sh")
-    window._show_details.setChecked(True)
+    window._actions.show_details.setChecked(True)
 
     window.resize(WIDE, 600)
 
     assert not window.is_narrow
     assert window._details.isVisible() and not window._sidebar.is_rail
     assert not window._details_button.isVisible() and not window._sheet.is_open
-    assert not window._show_details.isChecked()
-    assert button(window, window._forward).isVisible()
+    assert not window._actions.show_details.isChecked()
+    assert button(window, window._actions.forward).isVisible()
     assert not window._view._tree.isColumnHidden(MODIFIED)
     assert window._path_bar.crumbs()[0] != "…"
     assert window._splitter.sizes() == before
@@ -151,7 +155,7 @@ def test_the_sheet_shows_the_details_and_follows_the_selection(qtbot, window):
     window._view.select_name("run.sh")
     sheet, pane = window._sheet, window._sheet_details
 
-    button(window, window._show_details).click()
+    button(window, window._actions.show_details).click()
 
     assert sheet.is_open and sheet.isVisible()
     assert window._details_button.isChecked()
@@ -163,7 +167,7 @@ def test_the_sheet_shows_the_details_and_follows_the_selection(qtbot, window):
     qtbot.waitUntil(lambda: pane.name.toolTip() == "file03.txt", timeout=TIMEOUT)
 
     pane.close_button.click()
-    assert not sheet.is_open and not window._show_details.isChecked()
+    assert not sheet.is_open and not window._actions.show_details.isChecked()
     qtbot.waitUntil(lambda: not sheet.isVisible(), timeout=TIMEOUT)
     assert not window._details_button.isChecked()
 
@@ -171,13 +175,13 @@ def test_the_sheet_shows_the_details_and_follows_the_selection(qtbot, window):
 def test_escape_closes_the_sheet_and_does_nothing_else_without_one(qtbot, window):
     window.resize(NARROW, 600)
     window._view.select_name("run.sh")
-    assert not window._close_details.isEnabled()
+    assert not window._actions.close_details.isEnabled()
 
-    window._show_details.setChecked(True)
-    assert window._close_details.isEnabled()
-    window._close_details.trigger()
+    window._actions.show_details.setChecked(True)
+    assert window._actions.close_details.isEnabled()
+    window._actions.close_details.trigger()
 
-    assert not window._sheet.is_open and not window._close_details.isEnabled()
+    assert not window._sheet.is_open and not window._actions.close_details.isEnabled()
 
 
 def test_what_is_selected_stays_in_view_when_the_sheet_takes_the_room(qtbot, window):
@@ -190,7 +194,7 @@ def test_what_is_selected_stays_in_view_when_the_sheet_takes_the_room(qtbot, win
         return tree.viewport().rect().contains(tree.visualRect(tree.currentIndex()))
 
     assert in_view()
-    window._show_details.setChecked(True)
+    window._actions.show_details.setChecked(True)
 
     qtbot.waitUntil(lambda: window._sheet.height() > 100, timeout=TIMEOUT)
     qtbot.waitUntil(in_view, timeout=TIMEOUT)
@@ -204,7 +208,7 @@ def test_the_menu_button_shows_the_folder_menu(qtbot, window, monkeypatch):
     window.resize(NARROW, 600)
     window._view.select_name("run.sh")
 
-    button(window, window._folder_menu).click()
+    button(window, window._actions.folder_menu).click()
 
     assert shown == [(None, False)]
 
@@ -219,7 +223,13 @@ def test_a_narrow_window_has_no_bar_of_actions(qtbot, window):
     assert not [
         b
         for b in window.findChildren(QToolButton)
-        if b.defaultAction() in (window._copy, window._move_to, window._rename, window._trash)
+        if b.defaultAction()
+        in (
+            window._actions.copy,
+            window._actions.move_to,
+            window._actions.rename,
+            window._actions.trash,
+        )
     ]
     texts = [a.text() for a in window._menu_for(window._view.selected_infos()[0]).actions()]
     assert {"Copy", "Rename…", "Move to…", "Move to trash"} <= set(texts)

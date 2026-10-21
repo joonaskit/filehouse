@@ -232,7 +232,7 @@ def test_in_a_narrow_window_the_field_takes_the_place_of_the_path(qtbot, window)
     qtbot.waitUntil(lambda: not window._search_group.isVisible(), timeout=TIMEOUT)
     assert window._path_bar.isVisible()
 
-    window._search.trigger()
+    window._actions.search.trigger()
 
     qtbot.waitUntil(lambda: not window._path_bar.isVisible(), timeout=TIMEOUT)
     assert window._search_group.isVisible()
@@ -246,7 +246,7 @@ def test_in_a_narrow_window_the_field_takes_the_place_of_the_path(qtbot, window)
 
 def test_in_a_narrow_window_the_field_stays_while_a_search_is_on(qtbot, window):
     window.resize(NARROW, 600)
-    window._search.trigger()
+    window._actions.search.trigger()
     search(qtbot, window, "report")
 
     qtbot.keyClick(window._search_field, Qt.Key.Key_Down)

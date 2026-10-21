@@ -52,7 +52,7 @@ def path(pane):
 
 def test_it_starts_with_one_pane(window):
     assert not window.is_split
-    assert not window._split_view.isChecked()
+    assert not window._actions.split_view.isChecked()
     assert window._details.isVisible()
 
 
@@ -60,7 +60,7 @@ def test_the_toggle_opens_a_second_pane_in_the_same_folder(qtbot, window, tree):
     first, second = split(qtbot, window)
 
     assert window.is_split
-    assert window._split_view.isChecked()
+    assert window._actions.split_view.isChecked()
     assert path(second) == str(tree / "left")
     # The active one stays, and there is no room for the details
     assert window._pane is first
@@ -74,7 +74,7 @@ def test_the_key_toggles_it(qtbot, window):
 
     qtbot.keyClick(window, Qt.Key.Key_F3)
     assert not window.is_split
-    assert not window._split_view.isChecked()
+    assert not window._actions.split_view.isChecked()
 
 
 def test_each_pane_has_its_own_folder_history_and_selection(qtbot, tree, window):
@@ -100,14 +100,14 @@ def test_the_window_follows_the_active_pane(qtbot, tree, window):
     wait_loaded(qtbot, second)
 
     assert window.windowTitle() == "right — Files"
-    assert window._back.isEnabled()
+    assert window._actions.back.isEnabled()
     assert window._count_label.text() == "0 items"
 
     first.view.focused.emit()
 
     assert window._pane is first
     assert window.windowTitle() == "left — Files"
-    assert not window._back.isEnabled()
+    assert not window._actions.back.isEnabled()
     assert window._count_label.text() == "2 items"
 
 
@@ -142,7 +142,7 @@ def test_view_mode_and_hidden_files_apply_to_both(qtbot, window):
     first, second = split(qtbot, window)
 
     window.set_view_mode(settings.ICONS)
-    window._hidden.trigger()
+    window._actions.hidden.trigger()
 
     assert first.view.mode == second.view.mode == settings.ICONS
     assert first.proxy.show_hidden and second.proxy.show_hidden
@@ -173,7 +173,7 @@ def test_copy_to_the_other_pane(qtbot, tree, jobs, wait_final, window):
     first.view.focused.emit()
     first.view.select_name("a.txt")
 
-    assert window._copy_other.isEnabled()
+    assert window._actions.copy_other.isEnabled()
     job = wait_final(jobs, window.copy_to_other_pane())
 
     assert job.kind is JobKind.COPY
@@ -206,16 +206,16 @@ def test_nothing_to_move_to_the_folder_it_is_in(qtbot, jobs, window):
 
 def test_the_actions_need_a_split_and_a_selection(qtbot, window):
     window._pane.view.select_name("a.txt")
-    assert not window._copy_other.isEnabled()
-    assert not window._move_other.isEnabled()
+    assert not window._actions.copy_other.isEnabled()
+    assert not window._actions.move_other.isEnabled()
     assert window.copy_to_other_pane() is None
 
     window.set_split(True)
-    assert window._copy_other.isEnabled()
-    assert window._move_other.isEnabled()
+    assert window._actions.copy_other.isEnabled()
+    assert window._actions.move_other.isEnabled()
 
     window._pane.view.selection_model().clearSelection()
-    assert not window._copy_other.isEnabled()
+    assert not window._actions.copy_other.isEnabled()
 
 
 def test_a_drop_goes_to_the_pane_it_lands_on(qtbot, tree, jobs, wait_final, window):
@@ -243,14 +243,14 @@ def test_the_split_is_not_for_a_narrow_window(qtbot, window):
     qtbot.waitUntil(lambda: window.is_narrow, timeout=TIMEOUT)
 
     assert not window.is_split
-    assert not window._split_view.isEnabled()
+    assert not window._actions.split_view.isEnabled()
     window.set_split(True)
     assert not window.is_split
-    assert not window._split_view.isChecked()
+    assert not window._actions.split_view.isChecked()
 
     window.resize(WIDE, 600)
     qtbot.waitUntil(lambda: not window.is_narrow, timeout=TIMEOUT)
-    assert window._split_view.isEnabled()
+    assert window._actions.split_view.isEnabled()
     assert window._details.isVisible()
 
 
@@ -276,7 +276,7 @@ def test_the_split_is_remembered_for_the_next_window(qtbot, tree, jobs):
     second.show()
 
     assert second.is_split
-    assert second._split_view.isChecked()
+    assert second._actions.split_view.isChecked()
     assert [path(pane) for pane in second._panes] == [str(tree / "right")] * 2
 
     second.set_split(False)

@@ -67,7 +67,7 @@ def test_a_new_window_sorts_as_the_app_does(tree, open_window):
     window = open_window(tree / "code")
 
     assert shown(window) == (settings.ICONS, MODIFIED, DOWN)
-    assert window._icons_mode.isChecked()
+    assert window._actions.icons_mode.isChecked()
 
 
 def test_a_folder_keeps_what_was_chosen_in_it(qtbot, tree, open_window):
@@ -76,16 +76,16 @@ def test_a_folder_keeps_what_was_chosen_in_it(qtbot, tree, open_window):
     window._view.sort(MODIFIED, DOWN)
     go(qtbot, window, tree / "pictures")
     assert shown(window) == (settings.DETAILS, NAME, UP)
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
     go(qtbot, window, tree / "code")
 
     assert shown(window) == (settings.DETAILS, NAME, UP)
-    assert window._details_mode.isChecked()
+    assert window._actions.details_mode.isChecked()
     go(qtbot, window, tree / "downloads")
     assert shown(window) == (settings.DETAILS, MODIFIED, DOWN)
     go(qtbot, window, tree / "pictures")
     assert shown(window) == (settings.ICONS, NAME, UP)
-    assert window._icons_mode.isChecked()
+    assert window._actions.icons_mode.isChecked()
     # The app's own choice is as it was
     assert settings.view_mode() == settings.DETAILS and settings.sort() == ("name", False)
 
@@ -102,7 +102,7 @@ def test_a_click_on_a_column_is_a_choice_too(qtbot, tree, open_window):
 def test_it_is_remembered_between_runs_in_a_file_of_its_own(qtbot, tree, open_window):
     first = open_window(tree / "downloads")
     first._view.sort(SIZE, DOWN)
-    first._icons_mode.trigger()
+    first._actions.icons_mode.trigger()
     first.close()
     # As a new process reads it
     settings._folders = None
@@ -118,7 +118,7 @@ def test_it_is_remembered_between_runs_in_a_file_of_its_own(qtbot, tree, open_wi
 
 def test_only_what_was_chosen_is_the_folders_own(qtbot, tree, open_window):
     window = open_window(tree / "pictures")
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
 
     # The sort order was left alone there: it follows the app's
     settings.set_sort("size", True)
@@ -130,14 +130,14 @@ def test_use_the_default_here_gives_the_folders_choice_up(qtbot, tree, open_wind
     window = open_window(tree / "pictures")
     assert not window._pane.has_own_view
 
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
     window._view.sort(MODIFIED, DOWN)
     assert window._pane.has_own_view
 
     window._pane.use_default_view()
 
     assert shown(window) == (settings.DETAILS, NAME, UP)
-    assert window._details_mode.isChecked()
+    assert window._actions.details_mode.isChecked()
     assert not window._pane.has_own_view
     assert settings.folder_view(uri(tree / "pictures")) == {}
 
@@ -151,7 +151,7 @@ def test_the_view_menu_offers_the_way_back_only_where_folders_keep_theirs(tree, 
         return {action.text(): action for action in view.actions()}
 
     assert not view_entries()["Use the default here"].isEnabled()
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
     assert view_entries()["Use the default here"].isEnabled()
 
     settings.set_per_folder(False)
@@ -164,11 +164,11 @@ def test_with_one_view_for_all_a_change_is_everyones(qtbot, tree, open_window):
     other = open_window(tree / "code")
 
     window._view.sort(MODIFIED, DOWN)
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
 
     # The other window follows at once, and so does every folder gone to
     assert shown(other) == (settings.ICONS, MODIFIED, DOWN)
-    assert other._icons_mode.isChecked()
+    assert other._actions.icons_mode.isChecked()
     go(qtbot, window, tree / "pictures")
     assert shown(window) == (settings.ICONS, MODIFIED, DOWN)
     assert settings.sort() == ("modified", True) and settings.view_mode() == settings.ICONS
@@ -177,7 +177,7 @@ def test_with_one_view_for_all_a_change_is_everyones(qtbot, tree, open_window):
 
 def test_a_folders_own_view_waits_while_folders_do_not_keep_theirs(qtbot, tree, open_window):
     window = open_window(tree / "pictures")
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
 
     settings.set_per_folder(False)
     assert shown(window)[0] == settings.DETAILS
@@ -193,12 +193,12 @@ def test_the_same_folder_is_shown_the_same_way_in_every_pane(qtbot, tree, open_w
     second.navigate(gfile(tree / "code"))
 
     first.view.focused.emit()
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
 
     assert first.view.mode == settings.ICONS and second.view.mode == settings.DETAILS
     # The buttons say how the active pane shows its folder
     second.view.focused.emit()
-    assert window._details_mode.isChecked()
+    assert window._actions.details_mode.isChecked()
     second.navigate(gfile(tree / "pictures"))
     assert second.view.mode == settings.ICONS
 

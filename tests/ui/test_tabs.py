@@ -76,14 +76,14 @@ def test_each_tab_has_its_own_folder_and_history(qtbot, tree, window):
     wait_loaded(qtbot, window._pane)
 
     assert window.windowTitle() == "two — Files"
-    assert window._back.isEnabled()
+    assert window._actions.back.isEnabled()
     assert titles(window) == ["one", "two"]
 
     window._tab_bar.setCurrentIndex(0)
 
     assert window._tab is first
     assert window.windowTitle() == "one — Files"
-    assert not window._back.isEnabled()
+    assert not window._actions.back.isEnabled()
     assert window._count_label.text() == "2 items"
 
 
@@ -170,13 +170,13 @@ def test_a_tab_can_be_split_on_its_own(qtbot, window):
     window._tab_bar.setCurrentIndex(0)
 
     assert not window.is_split
-    assert not window._split_view.isChecked()
+    assert not window._actions.split_view.isChecked()
     assert window._details.isVisible()
 
     window._tab_bar.setCurrentIndex(1)
 
     assert window.is_split
-    assert window._split_view.isChecked()
+    assert window._actions.split_view.isChecked()
     assert not window._details.isVisible()
 
 
@@ -186,7 +186,7 @@ def test_view_mode_and_hidden_files_reach_every_tab(qtbot, window):
     open_tab(qtbot, window)
 
     window.set_view_mode(settings.ICONS)
-    window._hidden.trigger()
+    window._actions.hidden.trigger()
     later = open_tab(qtbot, window)
 
     for tab in (*window._tabs[:2], later):

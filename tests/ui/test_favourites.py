@@ -176,7 +176,7 @@ def test_a_window_without_favourites_has_no_group(qtbot, tree, jobs):
     qtbot.addWidget(window)
 
     assert "▾ Favourites" not in sidebar_names(window)
-    assert not window._favourite.isEnabled()
+    assert not window._actions.favourite.isEnabled()
     assert window.toggle_favourite() is None
 
 
@@ -239,19 +239,19 @@ def test_the_favourite_of_the_open_folder_is_highlighted(qtbot, window, favourit
 
 
 def test_the_key_adds_the_open_folder_and_again_takes_it_out(qtbot, window, favourites, tree):
-    assert window._favourite.text() == "Add to favourites"
+    assert window._actions.favourite.text() == "Add to favourites"
 
     qtbot.keyClick(window._view, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
 
     assert titles(favourites) == ["folders"]
     assert "added to the favourites" in window.statusBar().currentMessage()
-    assert window._favourite.text() == "Remove from favourites"
+    assert window._actions.favourite.text() == "Remove from favourites"
 
     qtbot.keyClick(window._view, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
 
     assert titles(favourites) == []
     assert "taken out" in window.statusBar().currentMessage()
-    assert window._favourite.text() == "Add to favourites"
+    assert window._actions.favourite.text() == "Add to favourites"
 
 
 def test_a_folder_of_the_list_has_its_own_entry(qtbot, window, favourites, tree):
@@ -272,7 +272,7 @@ def test_a_folder_of_the_list_has_its_own_entry(qtbot, window, favourites, tree)
 
 
 def test_the_menu_of_the_folder_has_it(qtbot, window):
-    assert window._favourite in window._menu_for(None).actions()
+    assert window._actions.favourite in window._menu_for(None).actions()
 
 
 def test_not_the_trash_or_the_recent_files(qtbot, window):
@@ -281,7 +281,7 @@ def test_not_the_trash_or_the_recent_files(qtbot, window):
     window.navigate(locations.recent())
     qtbot.waitUntil(lambda: not window._model.loading, timeout=TIMEOUT)
 
-    assert not window._favourite.isEnabled()
+    assert not window._actions.favourite.isEnabled()
     assert window.toggle_favourite() is None
 
 

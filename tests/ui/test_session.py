@@ -91,7 +91,7 @@ def test_they_are_opened_again(qtbot, tree, open_window):
     assert folders(window) == [["one"], ["two", "sub*"], ["three"]]
     assert window._tab is window._tabs[1]
     assert window._tab_bar.currentIndex() == 1 and window._tab_bar.isVisible()
-    assert window.is_split and window._split_view.isChecked()
+    assert window.is_split and window._actions.split_view.isChecked()
     assert window.windowTitle() == "sub — Files"
     # A pane that was opened again starts its own history
     assert not window._other_pane().history.can_go_back
