@@ -36,6 +36,7 @@ class JobKind(Enum):
     DELETE = "delete"
     EXTRACT = "extract"
     COMPRESS = "compress"
+    PERMISSIONS = "permissions"
 
 
 class JobState(Enum):
@@ -87,6 +88,7 @@ _VERBS = {
     JobKind.DELETE: "Deleted",
     JobKind.EXTRACT: "Extracted",
     JobKind.COMPRESS: "Compressed",
+    JobKind.PERMISSIONS: "Changed the permissions of",
 }
 
 

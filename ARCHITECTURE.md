@@ -119,7 +119,7 @@ filehouse/
 │   │       ├── conflicts.py     the questions a job asks, answers, names for "Keep both"
 │   │       ├── quick.py         new folder, new file, rename and links: immediate, no job
 │   │       ├── rename_many.py   several renames as one: the names, the check, all or none
-│   │       ├── permissions.py   the permission presets: immediate, no job
+│   │       ├── permissions.py   the permission presets, applied as a job (#63)
 │   │       ├── undo.py          what an action did, kept so that it can be taken back
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
@@ -131,7 +131,6 @@ filehouse/
 │   │   ├── thumbnails.py        freedesktop thumbnail cache: load, make, write back
 │   │   ├── volumes.py           drives and mounts from Gio.VolumeMonitor, mount and eject
 │   │   ├── measure.py           folder sizes on a worker thread
-│   │   ├── permissions.py       a permissions preset applied on a worker thread
 │   │   ├── details.py           one file's details on a worker thread
 │   │   ├── job_model.py         all jobs of the process, fed by worker threads; titles and texts
 │   │   └── workers.py           the thread pool jobs run on, and `Background`: what a window does at once
@@ -826,13 +825,13 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 
 **Done.** How it was built:
 
-- `core/operations/permissions.py` has the presets and `apply(preset, locations)`, which returns how many items were changed, how many were left alone by design, and an `OperationError` for each one that could not be changed. It carries on after a failure. It is not a job: it finishes at once, like rename. `qt_models/permissions.py` runs it on a worker thread, because a selection can be thousands of files.
+- `core/operations/permissions.py` has the presets and `PermissionsJob` (`JobKind.PERMISSIONS`, started with `JobModel.set_permissions`). It was first a call that finished at once, run on a thread of its own; a selection can be thousands of files, and then it had no progress, no cancel, and was in neither the panel nor the island (#63). As a job it is queued like any other, counts the items as it goes, stops between two items when cancelled ("Cancelled after 2 of 4 items"), asks Skip or Retry for an item that could not be changed and can retry the skipped ones as a job of their own. It ends "Changed the permissions of 3 items", "… of 1 file, folders left as they were" or "… of 2 of 3 items, 1 failed". It plans nothing: each item is one change. It is not taken back by Undo.
 - **Folders** (open question 2, decided) get the preset with the "open" bit wherever there is a "read" bit: Private 700, Shared 775, Read-only 555. "Make executable" says nothing about folders and leaves them alone; it is greyed out when only folders are selected.
 - **Only the items themselves.** Nothing inside a selected folder is changed. Applying a preset to everything in a folder would be a job of its own, with progress, cancel and partial failure, and is not built.
-- **Links are never followed**, as in every other operation: a link has no permissions of its own, so it is reported as an error and what it points to is not touched.
+- **Links are never followed**, as in every other operation: a link has no permissions of its own, so it is reported as an error, without a question (Retry would not help) and what it points to is not touched.
 - **Special bits.** A folder keeps set-group-id and sticky, which say who new files in it belong to and who may delete from it. A file loses set-user-id and set-group-id: such a file made writable by its group would be a hole.
 - **In the window.** A Permissions submenu in the file menu, and the lock button behind a line in the narrow window's action bar, which opens the same menu upwards. Each entry shows the mode it gives (the folder's mode when folders are selected, none when files and folders are selected together) and the one the selection already has is ticked.
-- **Afterwards** the status bar says what was changed. One failure is named in the status bar; several open the "What went wrong" list with every one of them by name. The list and the details pane update by themselves, through the folder's monitor.
+- **Afterwards** the panel says what was changed, as for any job, and a failed one keeps its row with the errors by name ("What went wrong"). The list and the details pane update by themselves, through the folder's monitor.
 - **The grid stays a display** (open question 3, decided). Permissions are changed through the presets only.
 
 **Left for later** here, and built since: search (see "Search") and Compress (see "Archives").

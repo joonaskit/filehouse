@@ -27,7 +27,6 @@ from filehouse.core.operations import JobKind, permissions, undo
 from filehouse.integration import desktop, style
 from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE
 from filehouse.qt_models.job_model import JobModel
-from filehouse.qt_models.permissions import PermissionChange
 from filehouse.qt_models.volumes import Volumes
 from filehouse.qt_models.workers import Background
 from filehouse.ui import clipboard, groups, menus, settings
@@ -2003,34 +2002,12 @@ class MainWindow(QMainWindow):
         return dialog
 
     def set_permissions(self, preset):
-        """Give the selection the permissions of `preset`. Only the items themselves:
-        nothing inside a selected folder is changed."""
+        """Give the selection the permissions of `preset`, as a job. Only the items
+        themselves: nothing inside a selected folder is changed."""
         selected = self._selected_locations()
         if not selected or self._read_only():
             return None
-        name = self._view.selected_infos()[0].display_name
-        change = PermissionChange(preset, selected, self)
-        change.done.connect(lambda outcome: self._on_permissions_set(outcome, len(selected), name))
-        change.done.connect(change.deleteLater)
-        return change
-
-    def _on_permissions_set(self, outcome, count, name):
-        what = f"“{name}”" if count == 1 else f"{count} items"
-        failed = len(outcome.errors)
-        if not failed:
-            text = f"Permissions of {what} changed"
-            if outcome.skipped:
-                # "Make executable" on a selection with folders in it
-                changed = "1 file" if outcome.changed == 1 else f"{outcome.changed} files"
-                text = f"Permissions of {changed} changed, folders left as they were"
-            self.statusBar().showMessage(text, _COPIED_MS)
-        elif failed == 1:
-            self._show_error(f"Could not change the permissions of {outcome.errors[0]}.")
-        else:
-            # Every one of them, by name
-            summary = f"Could not change the permissions of {failed} of {count} items."
-            self._show_error(summary)
-            ErrorDetails(SimpleNamespace(errors=outcome.errors, summary=summary), self).open()
+        return self._jobs.set_permissions(preset, selected, origin=self)
 
     def copy_path(self):
         """Put the paths of the selection on the clipboard as text, one per line.
