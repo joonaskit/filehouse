@@ -10,7 +10,7 @@ from ui_helpers import TIMEOUT, gfile
 from filehouse.core import archives
 from filehouse.core.operations import Answer, JobKind, JobState
 from filehouse.qt_models import job_model
-from filehouse.ui import main_window
+from filehouse.ui import file_actions
 from filehouse.ui.dialogs.compress import CompressDialog
 from filehouse.ui.dialogs.questions import PasswordBox
 from filehouse.ui.main_window import MainWindow
@@ -101,7 +101,7 @@ def test_extract_to_asks_for_the_folder(qtbot, window, tree, jobs, wait_final, m
         asked.append((title, start))
         return str(tree / "sub" / "into")
 
-    monkeypatch.setattr(main_window, "pick_folder", pick)
+    monkeypatch.setattr(file_actions, "pick_folder", pick)
     select(window, "pack.zip")
 
     (job,) = window.extract_to()
@@ -113,7 +113,7 @@ def test_extract_to_asks_for_the_folder(qtbot, window, tree, jobs, wait_final, m
 
 
 def test_extract_to_does_nothing_when_no_folder_is_picked(window, jobs, monkeypatch):
-    monkeypatch.setattr(main_window, "pick_folder", lambda *_: "")
+    monkeypatch.setattr(file_actions, "pick_folder", lambda *_: "")
     select(window, "pack.zip")
 
     assert window.extract_to() == []

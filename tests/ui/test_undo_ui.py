@@ -197,7 +197,8 @@ def test_a_new_file_is_removed_while_nothing_is_written_to_it(tree, open_window)
 def test_a_move_is_taken_back_by_a_job(qtbot, tree, open_window, jobs, wait_final):
     window = open_window(tree / "src")
     select(window, "a.txt", "sub")
-    wait_final(jobs, window._start(JobKind.MOVE, window._selected_locations(), gfile(tree / "dst")))
+    selected = window._selected_locations()
+    wait_final(jobs, jobs.start(JobKind.MOVE, selected, gfile(tree / "dst"), origin=window))
     assert names(tree / "dst") == ["a.txt", "sub"]
     assert window._undo.text() == "Undo move of 2 items"
 
@@ -217,9 +218,8 @@ def test_a_copy_leaves_undo_as_it_was(tree, open_window, jobs, wait_final):
     window = open_window(tree / "src")
     rename(window, "b.txt", "c.txt")
 
-    wait_final(
-        jobs, window._start(JobKind.COPY, [gfile(tree / "src" / "a.txt")], gfile(tree / "dst"))
-    )
+    a = gfile(tree / "src" / "a.txt")
+    wait_final(jobs, jobs.start(JobKind.COPY, [a], gfile(tree / "dst"), origin=window))
 
     assert window._undo.text() == "Undo rename of “c.txt”"
 
@@ -227,9 +227,8 @@ def test_a_copy_leaves_undo_as_it_was(tree, open_window, jobs, wait_final):
 def test_actions_are_taken_back_from_the_last_one(tree, open_window, jobs, wait_final):
     window = open_window(tree / "src")
     rename(window, "a.txt", "notes.txt")
-    wait_final(
-        jobs, window._start(JobKind.MOVE, [gfile(tree / "src" / "notes.txt")], gfile(tree / "dst"))
-    )
+    notes = gfile(tree / "src" / "notes.txt")
+    wait_final(jobs, jobs.start(JobKind.MOVE, [notes], gfile(tree / "dst"), origin=window))
 
     wait_final(jobs, window.undo().job)
     assert names(tree / "src") == ["b.txt", "notes.txt", "sub"]

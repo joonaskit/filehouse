@@ -21,7 +21,7 @@ from filehouse.core.operations import (
     quick,
 )
 from filehouse.qt_models import directory_model, job_model
-from filehouse.ui import clipboard, main_window, settings
+from filehouse.ui import clipboard, file_actions, main_window, settings
 from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.main_window import MainWindow
 
@@ -612,7 +612,7 @@ def picked(monkeypatch):
         return Picked.path
 
     Picked.asked = []
-    monkeypatch.setattr(main_window, "pick_folder", pick)
+    monkeypatch.setattr(file_actions, "pick_folder", pick)
     return Picked
 
 
