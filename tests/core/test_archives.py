@@ -13,7 +13,7 @@ from helpers import Recorder, gfile, leftovers, make_tree, read_tree
 
 from filehouse.core import archives
 from filehouse.core.operations import Answer, JobState, NameTaken, Password, Reply
-from filehouse.core.operations.archive import CompressJob, ExtractJob
+from filehouse.core.operations.archive import CompressJob, ExtractJob, _umask
 
 pytestmark = pytest.mark.skipif(not archives.available(), reason="libarchive is not installed")
 
@@ -135,7 +135,9 @@ def test_an_archive_with_one_folder_extracts_as_that_folder(tmp_path):
     }
     assert job.result.get_path() == str(dst / "top")
     assert (job.progress.files_done, job.progress.files_total) == (3, 3)
-    assert job.progress.bytes_done == job.progress.bytes_total == 6
+    # Counted in the archive's own bytes, as they are read
+    assert job.progress.bytes_done == job.progress.bytes_total == archive.stat().st_size
+    assert not leftovers(tmp_path)
 
 
 def test_an_archive_with_many_items_goes_into_a_folder_named_after_it(tmp_path):
@@ -370,7 +372,8 @@ def test_cancel_removes_only_the_file_being_written(tmp_path):
     job = extract(archive, dst, hook=hook)
 
     assert job.state is JobState.CANCELLED
-    assert job.summary == "Cancelled after 1 of 3 files"
+    # The archive is read once, so how many files it holds is not known before the end
+    assert job.summary == "Cancelled after 1 file"
     assert JobState.DONE not in job.seen.states
     # The finished file stays, the partial one is gone, and nothing else was touched
     assert sorted(os.listdir(dst / "top")) == ["1.bin"]
@@ -415,6 +418,142 @@ def test_full_progress_is_not_done(tmp_path):
     full = [index for index, p in enumerate(job.seen.progress) if p.fraction == 1.0]
     assert full and job.seen.progress[-1].fraction == 1.0
     assert job.seen.states[-1] is JobState.DONE and job.seen.states.count(JobState.DONE) == 1
+
+
+def test_an_archive_is_read_once(tmp_path, monkeypatch):
+    archive = make_tar(
+        tmp_path / "pack.tar.gz", [("top/1.bin", os.urandom(300_000)), ("top/2.txt", "two")]
+    )
+    dst = make_tree(tmp_path / "dst", {})
+    opened = []
+    reading = archives.reading
+
+    def counted(*args, **kwargs):
+        opened.append(args)
+        return reading(*args, **kwargs)
+
+    monkeypatch.setattr(archives, "reading", counted)
+
+    job = extract(archive, dst)
+
+    assert job.state is JobState.DONE
+    assert len(opened) == 1
+    assert job.summary == "Extracted 2 files"
+
+
+def test_progress_moves_while_the_archive_is_read(tmp_path):
+    archive = make_tar(
+        tmp_path / "pack.tar.gz",
+        [(f"top/{number}.bin", os.urandom(200_000)) for number in range(4)],
+    )
+    dst = make_tree(tmp_path / "dst", {})
+    running = []
+
+    def look(job):
+        if job.state is JobState.RUNNING:
+            running.append(job.progress.fraction)
+
+    job = extract(archive, dst, hook=look)
+
+    assert job.state is JobState.DONE
+    # Known from the start, and between the ends on the way rather than all at once
+    assert running and None not in running
+    assert any(0.1 < fraction < 0.9 for fraction in running)
+    assert running == sorted(running)
+
+
+def test_nothing_is_in_place_before_the_archive_is_read(tmp_path):
+    archive = make_tar(tmp_path / "pack.tar.gz", [("1.txt", "one"), ("2.txt", "two")])
+    dst = make_tree(tmp_path / "dst", {})
+    seen = []
+
+    def look(job):
+        if job.state is JobState.RUNNING:
+            seen.append(sorted(name for name in os.listdir(dst) if not name.startswith(".")))
+
+    job = extract(archive, dst, hook=look)
+
+    assert job.state is JobState.DONE
+    # Written in a hidden folder, which gets its name once everything is in it
+    assert seen and all(names == [] for names in seen)
+    assert read_tree(dst) == {"pack": {"1.txt": "one", "2.txt": "two"}}
+    assert stat.S_IMODE((dst / "pack").stat().st_mode) == 0o777 & ~_umask()
+    assert not leftovers(tmp_path)
+
+
+def test_a_cancelled_archive_of_several_items_keeps_what_is_complete_in_its_folder(tmp_path):
+    archive = make_tar(
+        tmp_path / "pack.tar.gz",
+        [("1.bin", b"first"), ("2.bin", os.urandom(600_000)), ("3.bin", b"x")],
+    )
+    dst = make_tree(tmp_path / "dst", {"pack": {"mine.txt": "keep me"}})
+
+    def hook(job):
+        if job.progress.current == "2.bin":
+            job.cancel()
+
+    job = extract(archive, dst, hook=hook)
+
+    assert job.state is JobState.CANCELLED
+    # Nobody is asked about the taken name once the job is cancelled: never replaced
+    assert read_tree(dst) == {"pack": {"mine.txt": "keep me"}, "pack (2)": {"1.bin": "first"}}
+    assert job.result.get_path() == str(dst / "pack (2)")
+    assert not leftovers(tmp_path)
+
+
+def test_a_damaged_archive_keeps_what_was_complete(tmp_path):
+    whole = make_tar(
+        tmp_path / "whole.tar.gz", [("top/1.bin", b"first"), ("top/2.bin", os.urandom(300_000))]
+    )
+    archive = tmp_path / "pack.tar.gz"
+    archive.write_bytes(whole.read_bytes()[:150_000])
+    dst = make_tree(tmp_path / "dst", {})
+
+    job = extract(archive, dst)
+
+    assert job.state is JobState.FAILED
+    assert job.summary == "Extracted 1 file, then stopped"
+    assert "damaged" in job.error.message
+    # Named where it would have been
+    assert job.error.path == str(dst / "top/2.bin")
+    assert read_tree(dst) == {"top": {"1.bin": "first"}}
+    assert not leftovers(tmp_path)
+
+
+def test_an_error_names_where_the_entry_went(tmp_path):
+    archive = make_tar(
+        tmp_path / "pack.tar.gz", [("1/pipe", ("fifo",)), ("1/a.txt", "a"), ("2.txt", "two")]
+    )
+    dst = make_tree(tmp_path / "dst", {"pack": {}})
+
+    job = extract(archive, dst, answering(Answer.KEEP_BOTH))
+
+    assert job.state is JobState.FAILED
+    assert job.error.path == str(dst / "pack (2)/1/pipe")
+    assert read_tree(dst) == {"pack": {}, "pack (2)": {"1": {"a.txt": "a"}, "2.txt": "two"}}
+
+
+def test_a_taken_name_with_nobody_to_ask_leaves_nothing_behind(tmp_path):
+    archive = make_tar(tmp_path / "pack.tar.gz", [("1.txt", "one"), ("2.txt", "two")])
+    dst = make_tree(tmp_path / "dst", {"pack": "mine"})
+
+    job = extract(archive, dst)
+
+    assert job.state is JobState.FAILED
+    assert job.error.message == "already exists"
+    assert read_tree(dst) == {"pack": "mine"}
+    assert not leftovers(tmp_path)
+
+
+def test_a_name_that_is_not_utf8_is_extracted_as_it_is(tmp_path):
+    name = b"caf\xe9.txt".decode("utf-8", "surrogateescape")
+    archive = make_tar(tmp_path / "pack.tar", [(name, "coffee")], mode="w")
+    dst = make_tree(tmp_path / "dst", {})
+
+    job = extract(archive, dst)
+
+    assert job.state is JobState.DONE
+    assert os.listdir(bytes(dst)) == [b"caf\xe9.txt"]
 
 
 # Password-protected archives
@@ -464,6 +603,26 @@ def test_cancelling_the_password_question_cancels_the_job(tmp_path, protected):
 
     assert job.state is JobState.CANCELLED
     assert read_tree(dst) == {}
+    assert not leftovers(tmp_path)
+
+
+def test_what_comes_before_the_first_protected_entry_is_not_written_twice(tmp_path):
+    import libarchive
+
+    archive = tmp_path / "secret.zip"
+    with libarchive.file_writer(
+        str(archive), "zip", options="zip:encryption=aes256", passphrase="open sesame"
+    ) as writer:
+        writer.add_file_from_memory("top/", 0, b"", filetype=stat.S_IFDIR, permission=0o755)
+        writer.add_file_from_memory("top/a.txt", 5, b"hello")
+    dst = make_tree(tmp_path / "dst", {})
+
+    job = extract(archive, dst, answering(Reply(Answer.PASSWORD, text="open sesame")))
+
+    assert job.state is JobState.DONE
+    assert not job.errors
+    assert read_tree(dst) == {"top": {"a.txt": "hello"}}
+    assert not leftovers(tmp_path)
 
 
 # Compressing
@@ -630,6 +789,39 @@ def test_nothing_readable_makes_no_archive(tmp_path):
 
     assert job.state is JobState.FAILED
     assert sorted(os.listdir(src)) == ["locked.txt"]
+
+
+def test_a_name_that_is_not_utf8_is_left_out_and_named(tmp_path):
+    src = make_tree(tmp_path / "work", {"src": {"a.txt": "aaa"}})
+    bad = os.path.join(bytes(src / "src"), b"caf\xe9.txt")
+    with open(bad, "wb") as file:
+        file.write(b"coffee")
+    os.mkdir(os.path.join(bytes(src / "src"), b"d\xe9j\xe0"))
+    with open(os.path.join(bytes(src / "src"), b"d\xe9j\xe0", b"in.txt"), "wb") as file:
+        file.write(b"inside")
+
+    job = compress([src / "src"], src, "pack.zip")
+
+    assert job.state is JobState.FAILED
+    assert job.summary == "Compressed 1 of 3 files, 2 left out"
+    assert {error.path for error in job.errors} == {
+        os.fsdecode(bad),
+        os.fsdecode(os.path.join(bytes(src / "src"), b"d\xe9j\xe0")),
+    }
+    assert all("not UTF-8" in error.message for error in job.errors)
+    with zipfile.ZipFile(src / "pack.zip") as opened:
+        assert sorted(opened.namelist()) == ["src/", "src/a.txt"]
+
+
+def test_a_link_that_points_at_a_name_that_is_not_utf8_is_left_out(tmp_path):
+    src = make_tree(tmp_path / "work", {"src": {"a.txt": "aaa"}})
+    os.symlink(b"caf\xe9.txt", os.path.join(bytes(src / "src"), b"way"))
+
+    job = compress([src / "src"], src, "pack.tar.gz", "tar.gz")
+
+    assert job.state is JobState.FAILED
+    assert job.error.path == str(src / "src/way")
+    assert unpacked(src / "pack.tar.gz", tmp_path / "check") == {"src": {"a.txt": "aaa"}}
 
 
 def test_an_archive_needs_a_name(tmp_path):
