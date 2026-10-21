@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from filehouse.core import archives, locations, search
 from filehouse.core.listing import mode_text
@@ -130,26 +131,21 @@ def quit_app():
 
 
 def session_to_open():
-    """The tabs of last time that can be opened now: a list of (the one or two folders
-    of a tab, which of them is the active one) and the tab in front, or None. A folder
-    that is gone is the nearest one above it that is there, and left out when none is."""
+    """The tabs of last time, to be opened again: a list of (the one or two folders of a
+    tab, which of them is the active one) and the tab in front, or None.
+
+    Nothing is looked at here: on a share that does not answer that could hold up the
+    start for long. A folder that turns out to be gone is dealt with once the window
+    has it, by `MainWindow`: the nearest one above it that is there, or none."""
     session = settings.session() if settings.restore_tabs() else None
     if session is None:
         return None
     tabs, front = session
-    opened = []
-    in_front = 0
-    for index, (uris, active) in enumerate(tabs):
-        folders = [locations.nearest_folder(locations.from_uri(uri)) for uri in uris]
-        if all(folder is None for folder in folders):
-            continue
-        if folders[0] is None or len(folders) == 1 or folders[1] is None:
-            # One of a split is gone: the tab is the other
-            folders = [next(folder for folder in folders if folder is not None)]
-        if index == front:
-            in_front = len(opened)
-        opened.append((folders, active if 0 <= active < len(folders) else 0))
-    return (opened, in_front) if opened else None
+    opened = [
+        ([locations.from_uri(uri) for uri in uris], active if 0 <= active < len(uris) else 0)
+        for uris, active in tabs
+    ]
+    return opened, front if 0 <= front < len(opened) else 0
 
 
 class MainWindow(QMainWindow):
@@ -970,7 +966,9 @@ class MainWindow(QMainWindow):
         return tabs, self._tabs.index(self._tab)
 
     def _open_session(self, tabs, front):
-        """Open the tabs of last time: the first is the one this window was made with."""
+        """Open the tabs of last time: the first is the one this window was made with.
+        A folder that turns out to be gone is the nearest one above it that is there;
+        with none, its pane or its tab goes (`_drop_gone`)."""
         wide = self.width() >= style.px(NARROW_BELOW)
         for index, (folders, active) in enumerate(tabs):
             if not wide:
@@ -984,7 +982,29 @@ class MainWindow(QMainWindow):
                 self.set_split(True, remember=False, location=folders[1])
                 if active == 1:
                     self._activate(self._other_pane())
+        for tab in self._tabs:
+            for pane in tab.panes:
+                pane.fall_back_if_gone(lambda pane=pane: self._drop_gone(pane))
         self._tab_bar.setCurrentIndex(front)
+
+    def _drop_gone(self, pane):
+        """Nothing is left of a folder of last time: the other pane of its split takes
+        the tab, or another tab takes its place. In the last tab, home."""
+        tab = next((tab for tab in self._tabs if pane in tab.panes), None)
+        if tab is None:
+            return
+        if len(tab.panes) > 1:
+            if tab.active is pane:
+                tab.active = next(other for other in tab.panes if other is not pane)
+            if tab is self._tab:
+                self.set_split(False, remember=False)
+            else:
+                self._remove_other_pane(tab)
+                self._update_tab_titles()
+        elif len(self._tabs) > 1:
+            self.close_tab(self._tabs.index(tab))
+        else:
+            pane.open_instead(locations.home())
 
     def set_show_hidden(self, show):
         self._hidden.setChecked(show)
@@ -2127,10 +2147,14 @@ class MainWindow(QMainWindow):
     def undo(self):
         """Take back the last rename, move, trash or new folder, of this window or of
         another. A move and a trash are taken back by a job, which says how it went
-        as any job does; the others at once, and what could not be done is named."""
-        undone = self._jobs.undo(origin=self)
-        if undone is None or undone.job is not None:
-            return undone
+        as any job does, and returned; the others on a worker, and what could not be
+        done is named once they are."""
+        return self._jobs.undo(origin=self, done=self._on_undone)
+
+    def _on_undone(self, undone):
+        if not isValid(self):
+            # Closed meanwhile: what was taken back stays taken back
+            return
         what = undone.record.describe()
         errors = list(undone.errors)
         if undone.changed:
@@ -2147,7 +2171,6 @@ class MainWindow(QMainWindow):
             summary = f"Could not undo the {what} for {len(errors)} of them."
             self._show_error(summary)
             ErrorDetails(SimpleNamespace(errors=errors, summary=summary), self).open()
-        return undone
 
     def _on_dropped(self, uris, folder_info, modifiers, position):
         """Files were dropped on the list, or on a folder in it."""

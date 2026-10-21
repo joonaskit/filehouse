@@ -8,9 +8,9 @@ from urllib.parse import unquote
 import pytest
 from PySide6.QtCore import Qt
 from shiboken6 import isValid
-from ui_helpers import TIMEOUT, gfile, settle
+from ui_helpers import TIMEOUT, gfile, off_the_ui_thread, settle
 
-from filehouse.core.operations import JobKind, JobState, job, trash
+from filehouse.core.operations import JobKind, JobState, job, trash, undo
 from filehouse.qt_models import job_model
 from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.main_window import MainWindow
@@ -78,6 +78,7 @@ def test_ctrl_z_takes_a_rename_back(qtbot, tree, open_window):
     qtbot.waitUntil(window.isActiveWindow, timeout=TIMEOUT)
 
     qtbot.keyClick(window._view._tree, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    settle(window)
 
     assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
     assert window.statusBar().currentMessage() == "Undid the rename of “notes.txt”"
@@ -87,6 +88,22 @@ def test_ctrl_z_takes_a_rename_back(qtbot, tree, open_window):
         lambda: [info.name for info in window._view.selected_infos()] == ["a.txt"],
         timeout=TIMEOUT,
     )
+
+
+def test_a_rename_is_taken_back_on_a_worker_and_not_the_window(qtbot, tree, open_window, stuck):
+    window = open_window(tree / "src")
+    rename(window, "a.txt", "notes.txt")
+    back = stuck(undo, "rename_back")
+
+    window.undo()
+    qtbot.wait(50)
+
+    assert names(tree / "src") == ["b.txt", "notes.txt", "sub"]
+    back.release()
+    settle(window)
+    assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
+    assert window.statusBar().currentMessage() == "Undid the rename of “notes.txt”"
+    assert off_the_ui_thread(back)
 
 
 def test_a_rename_to_the_same_name_is_nothing_to_undo(tree, open_window):
@@ -102,9 +119,9 @@ def test_a_rename_is_not_taken_back_over_what_has_the_old_name_now(tree, open_wi
     rename(window, "a.txt", "notes.txt")
     (tree / "src" / "a.txt").write_text("made since")
 
-    undone = window.undo()
+    window.undo()
+    settle(window)
 
-    assert [str(error) for error in undone.errors] == ["notes.txt: already exists"]
     assert window.statusBar().currentMessage() == (
         "Could not undo the rename of “notes.txt”: notes.txt: already exists."
     )
@@ -125,6 +142,7 @@ def test_renaming_several_is_taken_back_as_one(qtbot, tree, open_window):
     assert window._undo.text() == "Undo rename of 2 items"
 
     window.undo()
+    settle(window)
 
     assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
     assert (tree / "src" / "a.txt").read_text() == "aaa"
@@ -139,6 +157,7 @@ def test_a_new_folder_is_removed_while_it_is_empty(tree, open_window):
     assert window._undo.text() == "Undo new “Photos”"
 
     window.undo()
+    settle(window)
 
     assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
     assert window.statusBar().currentMessage() == "Undid the new “Photos”"
@@ -153,6 +172,7 @@ def test_a_new_folder_that_was_used_since_stays(tree, open_window):
     (tree / "src" / "Photos" / "holiday.jpg").write_text("x")
 
     window.undo()
+    settle(window)
 
     assert (tree / "src" / "Photos" / "holiday.jpg").read_text() == "x"
     assert window.statusBar().currentMessage() == (
@@ -169,6 +189,7 @@ def test_a_new_file_is_removed_while_nothing_is_written_to_it(tree, open_window)
     assert (tree / "src" / "todo.txt").exists()
 
     window.undo()
+    settle(window)
 
     assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
 
@@ -215,6 +236,7 @@ def test_actions_are_taken_back_from_the_last_one(tree, open_window, jobs, wait_
     assert window._undo.text() == "Undo rename of “notes.txt”"
 
     window.undo()
+    settle(window)
     assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
 
 
@@ -225,6 +247,7 @@ def test_what_one_window_did_another_can_take_back(tree, open_window):
     assert second._undo.isEnabled()
     assert second._undo.text() == "Undo rename of “notes.txt”"
     second.undo()
+    settle(second)
 
     assert names(tree / "src") == ["a.txt", "b.txt", "sub"]
     assert not first._undo.isEnabled()
@@ -249,6 +272,7 @@ def test_several_that_could_not_be_taken_back_are_listed_by_name(qtbot, tree, op
     (tree / "src" / "b.txt").write_text("made since")
 
     window.undo()
+    settle(window)
 
     details = window.findChild(ErrorDetails)
     assert details is not None

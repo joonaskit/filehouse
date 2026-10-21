@@ -15,6 +15,7 @@ from filehouse.core import locations
 from filehouse.core.operations import Job, JobKind, JobQueue, JobState, undo
 from filehouse.core.operations.archive import CompressJob, ExtractJob
 from filehouse.qt_models import workers
+from filehouse.qt_models.workers import Background
 
 # At most this often per job, apart from state changes
 _UPDATE_SECONDS = 0.1
@@ -76,6 +77,8 @@ class JobModel(QObject):
         self._queue = JobQueue(workers.spawn)
         # The actions that can be taken back, of every window: jobs belong to the process
         self._history = undo.History()
+        # Taking back a rename or a new folder: on a worker, after what was asked before
+        self._background = Background(self)
         self._reported.connect(self._on_reported)
         self._held.connect(self._on_held)
         self._asked.connect(self.question_asked)
@@ -149,9 +152,19 @@ class JobModel(QObject):
         record = self._history.peek()
         return record.describe() if record is not None else None
 
-    def undo(self, origin=None):
-        """Take back the last action that can be. Returns an `Undone`, or None when
-        there is none. What is taken back is not kept to be done again: there is no redo."""
+    @property
+    def busy(self):
+        """Whether a rename or a new folder is being taken back."""
+        return self._background.busy
+
+    def undo(self, origin=None, done=None):
+        """Take back the last action that can be. What is taken back is not kept to be
+        done again: there is no redo.
+
+        A move or a trash is taken back by a job: the `Undone` with it is returned. A
+        rename or something that was made is taken back on a worker, in turn after what
+        was asked for before it (the rename itself, say), and `done(Undone)` is called
+        once it is. Then, and when there is nothing to take back, None is returned."""
         record = self._history.pop()
         if record is None:
             return None
@@ -160,11 +173,19 @@ class JobModel(QObject):
             job = Job.undo_of(record, prompt=self._prompt, on_change=self._report)
             self._add(job, origin)
             return Undone(record, job=job)
-        if record.kind is undo.Kind.RENAME:
-            changed, errors = undo.rename_back(record)
-        else:
-            changed, errors = undo.remove_created(record)
-        return Undone(record, changed=tuple(changed), errors=tuple(errors))
+
+        def take_back():
+            if record.kind is undo.Kind.RENAME:
+                return undo.rename_back(record)
+            return undo.remove_created(record)
+
+        def finished(result):
+            changed, errors = result
+            if done is not None:
+                done(Undone(record, changed=tuple(changed), errors=tuple(errors)))
+
+        self._background.call(take_back, finished)
+        return None
 
     def cancel(self, job):
         job.cancel()

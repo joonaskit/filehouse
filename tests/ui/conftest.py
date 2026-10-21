@@ -72,3 +72,22 @@ def fresh_settings():
     settings.clear()
     yield
     settings.clear()
+
+
+@pytest.fixture
+def stuck(monkeypatch):
+    """`stuck(module, name)` puts a `Stuck` in place of a function, and returns it. Each
+    is let go at the end of the test, so that no worker is left waiting."""
+    from ui_helpers import Stuck
+
+    made = []
+
+    def make(module, name):
+        call = Stuck(getattr(module, name))
+        monkeypatch.setattr(module, name, call)
+        made.append(call)
+        return call
+
+    yield make
+    for call in made:
+        call.release()

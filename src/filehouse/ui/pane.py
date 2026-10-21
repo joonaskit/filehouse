@@ -6,6 +6,7 @@ from filehouse.core import locations
 from filehouse.core.history import History
 from filehouse.qt_models import columns
 from filehouse.qt_models.directory_model import DirectoryModel, DirectorySortProxy
+from filehouse.qt_models.workers import Background
 from filehouse.ui import settings
 from filehouse.ui.folder_view import FolderView
 
@@ -26,6 +27,10 @@ class Pane(QObject):
         self.history = History()
         self.location = None
         self.error = None
+        # A folder remembered from before, which is not looked at before it is shown:
+        # (it, what to do when nothing of it is left). See `fall_back_if_gone`
+        self._remembered = None
+        self._background = Background(self, in_turn=False)
         self._pending_select = None
         self._pending_names = set()
         # While the view is given the sort order of a folder: that is not a choice
@@ -93,7 +98,35 @@ class Pane(QObject):
         self.show(self.location)
         self.set_search(text)
 
+    def fall_back_if_gone(self, gone=None):
+        """The folder shown is one remembered from before (the tabs of last time), and
+        not looked at first: that can wait long on a share that does not answer. If it
+        cannot be listed, the nearest folder above it that is there takes its place, as
+        if that had been opened; `gone()` is called when there is none, and without it
+        the pane goes home."""
+        self._remembered = (self.location, gone)
+
+    def _fall_back(self, location, nearest, gone):
+        if self._closed or not locations.same(self.location, location):
+            # Moved on meanwhile
+            return
+        if nearest is None:
+            if gone is not None:
+                gone()
+            else:
+                self.open_instead(locations.home())
+        elif not locations.same(nearest, location):
+            self.open_instead(nearest)
+
+    def open_instead(self, location):
+        """Show `location` as if the pane had been opened there: with a history of its own."""
+        self.history = History()
+        self.history.visit(location)
+        self.show(location)
+
     def show(self, location, select=None):
+        if self._remembered is not None and not locations.same(location, self._remembered[0]):
+            self._remembered = None
         # A search is of the folder it was typed in: it ends with it
         self._search_timer.stop()
         self.search_text = ""
@@ -229,6 +262,7 @@ class Pane(QObject):
             self.changed.emit()
 
     def _on_loaded(self):
+        self._remembered = None
         self.select_pending()
         self.changed.emit()
 
@@ -255,6 +289,13 @@ class Pane(QObject):
     def _on_load_failed(self, message):
         self.error = message
         self.changed.emit()
+        remembered, self._remembered = self._remembered, None
+        if remembered is not None and locations.same(remembered[0], self.location):
+            location, gone = remembered
+            self._background.call(
+                lambda: locations.nearest_folder(location),
+                lambda nearest: self._fall_back(location, nearest, gone),
+            )
 
     def sync(self):
         """Bring the list in line with the model: a pending selection, and what it

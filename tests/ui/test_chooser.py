@@ -445,7 +445,10 @@ def test_where_it_starts_without_a_folder_from_the_app(qtbot, open_dialog, tree,
     # A folder that is gone: the nearest one above it that is there
     settings.set_chooser_folder(uri(tree / "docs" / "gone" / "deeper"))
     after = open_dialog(Asked(portal.OPEN))
-    assert after._pane.location.get_path() == str(tree / "docs")
+    # Found once the folder could not be listed, without a look at it first
+    qtbot.waitUntil(lambda: after._pane.location.get_path() == str(tree / "docs"), timeout=TIMEOUT)
+    # As if it had been opened there
+    assert not after._pane.history.can_go_back
 
 
 def test_the_sidebar_has_no_trash_and_recent_only_for_opening(qtbot, open_dialog, tree):
@@ -506,13 +509,23 @@ def test_a_new_folder_can_be_made_and_is_selected(qtbot, open_dialog, tree):
     name_dialog.edit.setText("fresh")
     name_dialog.accept()
 
-    assert (tree / "fresh").is_dir()
+    qtbot.waitUntil((tree / "fresh").is_dir, timeout=TIMEOUT)
     qtbot.waitUntil(
         lambda: [info.name for info in dialog._view.selected_infos()] == ["fresh"],
         timeout=TIMEOUT,
     )
     # Still the name that was offered: a folder does not name the file
     assert dialog.name.text() == "draft.txt"
+
+
+def test_a_new_folder_is_offered_a_name_that_is_free(qtbot, open_dialog, tree):
+    (tree / "New folder").mkdir()
+    dialog = open_dialog(Asked(portal.SAVE, folder=gfile(tree), name="draft.txt"))
+
+    name_dialog = dialog.new_folder()
+
+    qtbot.waitUntil(lambda: name_dialog.edit.text() == "New folder (2)", timeout=TIMEOUT)
+    name_dialog.reject()
 
 
 def test_the_preview_shows_what_is_selected(qtbot, open_dialog, tree):

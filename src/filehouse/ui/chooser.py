@@ -26,13 +26,14 @@ from PySide6.QtWidgets import (
 )
 
 from filehouse.core import locations
-from filehouse.core.errors import OperationError
 from filehouse.core.operations import quick
 from filehouse.core.operations.conflicts import free_name, split_extension
 from filehouse.integration import parent_window, portal, style
 from filehouse.qt_models.volumes import Volumes
+from filehouse.qt_models.workers import Background
 from filehouse.ui import groups, menus, settings
-from filehouse.ui.dialogs.name import NameDialog
+from filehouse.ui.dialogs.name import ask_name
+from filehouse.ui.file_actions import answer_later
 from filehouse.ui.pane import Pane
 from filehouse.ui.path_bar import PathBar
 from filehouse.ui.preview import PreviewWindow
@@ -88,6 +89,8 @@ class Chooser(QDialog):
         self.setWindowTitle(request.title or self._default_title())
 
         self._pane = Pane(settings.show_hidden(), self)
+        # What the dialog does to files itself (a new folder), off the UI thread
+        self._background = Background(self)
         view = self._view = self._pane.view
         view.set_for_choosing(request.kind == portal.OPEN and request.multiple)
         self._pane.changed.connect(self._update)
@@ -240,8 +243,10 @@ class Chooser(QDialog):
             name = name or select
         if folder is None and settings.chooser_folder():
             folder = locations.from_uri(settings.chooser_folder())
-        folder = locations.nearest_folder(folder) if folder is not None else None
         self._pane.navigate(folder or locations.home(), select)
+        if folder is not None:
+            # Not looked at first: one that is gone gives way to the nearest that is there
+            self._pane.fall_back_if_gone()
         if self.name is not None:
             self.name.setText(name)
             # Ready to be typed over, up to the extension
@@ -399,23 +404,23 @@ class Chooser(QDialog):
         self._view.setFocus()
 
     def new_folder(self):
+        """As in a window: made on a worker, and "New folder (2)" offered once known."""
         if self._pane.read_only:
             return None
-        folder = self._pane.location
+        pane = self._pane
+        folder = pane.location
 
-        def create(text):
-            try:
-                made = quick.create_folder(folder, text)
-            except OperationError as error:
-                return f"Could not create the folder: {error.message}."
-            self._pane.select_when_listed(folder, locations.basename(made))
-            return None
+        def apply(text):
+            return answer_later(
+                self._background,
+                dialog,
+                lambda: quick.create_folder(folder, text),
+                lambda made: pane.select_when_listed(folder, locations.basename(made)),
+                lambda reason: f"Could not create the folder: {reason}.",
+            )
 
-        dialog = NameDialog(
-            self, "New folder", "Name of the new folder:", quick.suggest_folder_name(folder), create
-        )
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.open()
+        dialog = ask_name(self, "New folder", "Name of the new folder:", quick.NEW_FOLDER, apply)
+        self._background.call(lambda: quick.suggest_folder_name(folder), dialog.suggest)
         return dialog
 
     def _on_context_menu(self, _info, position):
