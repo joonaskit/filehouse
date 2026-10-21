@@ -14,6 +14,7 @@ from PySide6.QtCore import QLocale, QObject, QTimer, Signal
 from filehouse.core import locations
 from filehouse.core.operations import Job, JobKind, JobQueue, JobState, undo
 from filehouse.core.operations.archive import CompressJob, ExtractJob
+from filehouse.core.operations.permissions import PermissionsJob
 from filehouse.qt_models import workers
 from filehouse.qt_models.workers import Background
 
@@ -33,6 +34,7 @@ ICONS = {
     JobKind.DELETE: "edit-delete",
     JobKind.EXTRACT: "archive-extract",
     JobKind.COMPRESS: "archive-insert",
+    JobKind.PERMISSIONS: "object-locked",
 }
 
 
@@ -135,6 +137,12 @@ class JobModel(QObject):
         job = CompressJob(
             sources, destination, name, format, prompt=self._prompt, on_change=self._report
         )
+        self._add(job, origin)
+        return job
+
+    def set_permissions(self, preset, sources, origin=None):
+        """Queue giving `sources` the permissions of `preset`, and return the job."""
+        job = PermissionsJob(preset, sources, prompt=self._prompt, on_change=self._report)
         self._add(job, origin)
         return job
 
@@ -310,6 +318,8 @@ def short_heading(job):
         return f"Compressing {what}"
     if job.kind is JobKind.DUPLICATE:
         return f"Duplicating {what}"
+    if job.kind is JobKind.PERMISSIONS:
+        return f"Changing the permissions of {what}"
     return f"{'Copying' if job.kind is JobKind.COPY else 'Moving'} {what}"
 
 

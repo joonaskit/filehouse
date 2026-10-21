@@ -20,7 +20,7 @@ from filehouse.core.operations import (
     permissions,
     quick,
 )
-from filehouse.qt_models import directory_model
+from filehouse.qt_models import directory_model, job_model
 from filehouse.ui import clipboard, main_window, settings
 from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.main_window import MainWindow
@@ -681,7 +681,9 @@ def preset_entries(window):
     }
 
 
-def test_a_preset_changes_the_selected_file_and_the_list_follows(qtbot, tree, open_window):
+def test_a_preset_changes_the_selected_file_and_the_list_follows(
+    qtbot, tree, open_window, jobs, wait_final
+):
     (tree / "src" / "a.txt").chmod(0o640)
     window = open_window(tree / "src")
     select(window, "a.txt")
@@ -694,13 +696,15 @@ def test_a_preset_changes_the_selected_file_and_the_list_follows(qtbot, tree, op
     ]
     assert not any(action.isChecked() for action in entries.values())
 
-    entries["Read-only"].trigger()
+    # A job like every other: queued, in the panel and the island
+    job = started_by(window, entries["Read-only"].trigger)
+    assert job_model.heading(job) == "Changing the permissions of “a.txt”"
+    assert job_model.ICONS[job.kind] == "object-locked"
+    wait_final(jobs, job)
 
-    qtbot.waitUntil(lambda: mode_of(tree / "src" / "a.txt") == 0o444, timeout=TIMEOUT)
-    qtbot.waitUntil(
-        lambda: window.statusBar().currentMessage() == "Permissions of “a.txt” changed",
-        timeout=TIMEOUT,
-    )
+    assert job.state is JobState.DONE
+    assert window._panel.row(job).title.text() == "Changed the permissions of 1 item"
+    assert mode_of(tree / "src" / "a.txt") == 0o444
     # The list hears of it from the folder's monitor, and the menu then ticks the preset
     qtbot.waitUntil(lambda: window._view.selected_infos()[0].mode == 0o444, timeout=TIMEOUT)
     assert preset_entries(window)["Read-only"].isChecked()
@@ -728,7 +732,7 @@ def test_folders_get_their_own_modes_and_nothing_inside_is_changed(qtbot, tree, 
     assert mode_of(tree / "src" / "sub" / "inside.txt") == 0o640
 
 
-def test_files_and_folders_together_each_get_theirs(qtbot, tree, open_window):
+def test_files_and_folders_together_each_get_theirs(qtbot, tree, open_window, jobs, wait_final):
     window = open_window(tree / "src")
     select(window, "a.txt", "sub")
     entries = preset_entries(window)
@@ -739,49 +743,44 @@ def test_files_and_folders_together_each_get_theirs(qtbot, tree, open_window):
     qtbot.waitUntil(lambda: mode_of(tree / "src" / "a.txt") == 0o664, timeout=TIMEOUT)
     qtbot.waitUntil(lambda: mode_of(tree / "src" / "sub") == 0o775, timeout=TIMEOUT)
 
-    preset_entries(window)["Make executable"].trigger()
-    qtbot.waitUntil(lambda: mode_of(tree / "src" / "a.txt") == 0o755, timeout=TIMEOUT)
-    qtbot.waitUntil(
-        lambda: (
-            window.statusBar().currentMessage()
-            == "Permissions of 1 file changed, folders left as they were"
-        ),
-        timeout=TIMEOUT,
-    )
+    job = wait_final(jobs, started_by(window, preset_entries(window)["Make executable"].trigger))
+    assert mode_of(tree / "src" / "a.txt") == 0o755
+    assert job.summary == "Changed the permissions of 1 file, folders left as they were"
     assert mode_of(tree / "src" / "sub") == 0o775
 
 
-def test_a_link_is_left_alone_and_the_window_says_why(qtbot, tree, open_window):
+def test_a_link_is_left_alone_and_the_window_says_why(qtbot, tree, open_window, jobs, wait_final):
     (tree / "src" / "a.txt").chmod(0o640)
     (tree / "src" / "link").symlink_to("a.txt")
     window = open_window(tree / "src")
     select(window, "link")
 
-    preset_entries(window)["Private"].trigger()
+    job = wait_final(jobs, started_by(window, preset_entries(window)["Private"].trigger))
 
-    qtbot.waitUntil(lambda: window.statusBar().currentMessage() != "", timeout=TIMEOUT)
-    assert window.statusBar().currentMessage() == (
-        "Could not change the permissions of link: a link has no permissions of its own."
-    )
+    # Not asked about: there is nothing to try again
+    assert jobs.prompter.current is None
+    row = window._panel.row(job)
+    assert row.title.text() == "Changed the permissions of 0 of 1 item, 1 failed"
+    assert row.text.text() == "link: a link has no permissions of its own"
+    assert not row.retry.isVisible()
     assert mode_of(tree / "src" / "a.txt") == 0o640
 
 
-def test_several_failures_are_all_listed_by_name(qtbot, tree, open_window):
+def test_several_failures_are_all_listed_by_name(qtbot, tree, open_window, jobs, wait_final):
     for name in ("one", "two"):
         (tree / "src" / name).symlink_to("a.txt")
     window = open_window(tree / "src")
     select(window, "one", "two", "b.txt")
 
-    preset_entries(window)["Private"].trigger()
+    job = wait_final(jobs, started_by(window, preset_entries(window)["Private"].trigger))
+    row = window._panel.row(job)
+    assert row.title.text() == "Changed the permissions of 1 of 3 items, 2 failed"
 
-    qtbot.waitUntil(lambda: window.findChild(ErrorDetails) is not None, timeout=TIMEOUT)
+    row.details.click()
     details = window.findChild(ErrorDetails)
     assert details.list.toPlainText() == (
         f"{tree / 'src' / 'one'}: a link has no permissions of its own\n"
         f"{tree / 'src' / 'two'}: a link has no permissions of its own"
-    )
-    assert window.statusBar().currentMessage() == (
-        "Could not change the permissions of 2 of 3 items."
     )
     # The one that could be changed was
     assert mode_of(tree / "src" / "b.txt") == 0o600
