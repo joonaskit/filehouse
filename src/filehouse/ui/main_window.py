@@ -1,12 +1,9 @@
 """One browser window: toolbar, sidebar, file list, operations panel and status bar."""
 
-from types import SimpleNamespace
-
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeyEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
-    QFileDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -19,11 +16,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from shiboken6 import isValid
 
 from filehouse.core import archives, locations, search
 from filehouse.core.listing import mode_text
-from filehouse.core.operations import JobKind, permissions, undo
+from filehouse.core.operations import JobKind, permissions
 from filehouse.integration import desktop, style
 from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE
 from filehouse.qt_models.job_model import JobModel
@@ -31,14 +27,12 @@ from filehouse.qt_models.volumes import Volumes
 from filehouse.qt_models.workers import Background
 from filehouse.ui import clipboard, groups, menus, settings
 from filehouse.ui.details_pane import DetailsPane
-from filehouse.ui.dialogs.compress import CompressDialog
-from filehouse.ui.dialogs.details import ErrorDetails
 from filehouse.ui.dialogs.name import ask_name
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
 from filehouse.ui.dialogs.select import SelectDialog
 from filehouse.ui.dialogs.settings import SettingsDialog
-from filehouse.ui.file_actions import FileActions, all_in
+from filehouse.ui.file_actions import FileActions, is_archive
 from filehouse.ui.folder_view import history_step
 from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
@@ -119,11 +113,6 @@ def ask_to_clear_recent(parent, count=None):
     return box.clickedButton() is clear
 
 
-def pick_folder(parent, title, start):
-    """Ask for a folder with the desktop's own dialog. Returns its path, or "" for none."""
-    return QFileDialog.getExistingDirectory(parent, title, start)
-
-
 def quit_app():
     """End the process, as closing the last window does: not when it is to stay."""
     if QApplication.quitOnLastWindowClosed():
@@ -183,6 +172,7 @@ class MainWindow(QMainWindow):
             self,
             jobs,
             pane=lambda: self._pane,
+            other_pane=self._other_pane,
             say=lambda text: self.statusBar().showMessage(text, _COPIED_MS),
             show_error=self._show_error,
         )
@@ -1136,7 +1126,7 @@ class MainWindow(QMainWindow):
         # Not of what is in the trash, and not into a list of what was used
         for item in (self._duplicate, self._link):
             item.setEnabled(selected > 0 and not read_only)
-        has_archive = not in_trash and any(self._is_archive(info) for info in infos)
+        has_archive = not in_trash and any(is_archive(info) for info in infos)
         self._extract_here.setEnabled(has_archive and not read_only)
         self._extract_to.setEnabled(has_archive)
         self._compress.setEnabled(selected > 0 and not read_only and archives.available())
@@ -1708,7 +1698,7 @@ class MainWindow(QMainWindow):
         menu.addActions([self._cut, self._copy, self._paste])
         menu.addSeparator()
         menu.addActions([self._rename, self._duplicate, self._link, self._move_to])
-        if self._is_archive(info) and not self._in_trash():
+        if is_archive(info) and not self._in_trash():
             menu.addActions([self._extract_here, self._extract_to])
         if archives.available() and not self._read_only():
             menu.addAction(self._compress)
@@ -1876,39 +1866,19 @@ class MainWindow(QMainWindow):
     def _selected_locations(self):
         return self._pane.selected_locations()
 
-    def _start(self, kind, sources, destination=None):
-        return self._jobs.start(kind, sources, destination, origin=self)
-
     def copy(self):
-        self._to_clipboard(cut=False)
+        self._file_actions.to_clipboard(cut=False)
 
     def cut(self):
-        self._to_clipboard(cut=True)
-
-    def _to_clipboard(self, cut):
-        selected = self._selected_locations()
-        if selected:
-            clipboard.put([locations.uri(location) for location in selected], cut)
+        self._file_actions.to_clipboard(cut=True)
 
     def paste(self):
         """Copy what is on the clipboard into this folder, or move it if it was cut."""
-        uris, cut = clipboard.get()
-        if not uris or self._read_only():
-            return None
-        sources = [locations.from_uri(uri) for uri in uris]
-        if cut:
-            # A cut is used up by its paste
-            clipboard.clear()
-            if all_in(sources, self._location):
-                return None
-        return self._start(JobKind.MOVE if cut else JobKind.COPY, sources, self._location)
+        return self._file_actions.paste()
 
     def duplicate(self):
         """A copy of each selected item beside itself, named as "Keep both" names it."""
-        selected = self._selected_locations()
-        if not selected or self._read_only():
-            return None
-        return self._start(JobKind.DUPLICATE, selected)
+        return self._file_actions.duplicate()
 
     def create_link(self):
         """A symbolic link to each selected item, beside it."""
@@ -1955,43 +1925,19 @@ class MainWindow(QMainWindow):
         if self._in_recent():
             # The Delete key takes the entry off the list
             return self.remove_from_recent()
-        if self._in_trash():
-            # Already there: the Delete key means delete for good, which asks first
-            return self.delete_selected()
-        selected = self._selected_locations()
-        return self._start(JobKind.TRASH, selected) if selected else None
+        return self._file_actions.trash()
 
     def delete_selected(self):
         """Delete for good. The job asks for confirmation before it touches anything."""
-        if self._in_recent():
-            return None
-        if self._in_trash() and not self._at_trash():
-            # The trash only deletes whole items, not what is inside a trashed folder
-            return None
-        selected = self._selected_locations()
-        return self._start(JobKind.DELETE, selected) if selected else None
+        return self._file_actions.delete()
 
     def restore_selected(self):
         """Put the selected trashed items back where they were."""
-        infos = [info for info in self._view.selected_infos() if info.original_path is not None]
-        if not infos:
-            return None
-        return self._jobs.start(
-            JobKind.RESTORE,
-            [locations.child(self._location, info.name) for info in infos],
-            origin=self,
-            targets=[locations.from_path(info.original_path) for info in infos],
-        )
+        return self._file_actions.restore()
 
     def empty_trash(self):
         """Delete everything in the trash for good. The job asks first, with the count."""
-        if not self._at_trash() or not self._model.rowCount():
-            return None
-        everything = [
-            locations.child(self._location, self._model.info(row).name)
-            for row in range(self._model.rowCount())
-        ]
-        return self._start(JobKind.DELETE, everything)
+        return self._file_actions.empty_trash()
 
     def properties(self):
         """Show the properties of the selection, or of this folder when nothing is selected."""
@@ -2002,12 +1948,8 @@ class MainWindow(QMainWindow):
         return dialog
 
     def set_permissions(self, preset):
-        """Give the selection the permissions of `preset`, as a job. Only the items
-        themselves: nothing inside a selected folder is changed."""
-        selected = self._selected_locations()
-        if not selected or self._read_only():
-            return None
-        return self._jobs.set_permissions(preset, selected, origin=self)
+        """Give the selection the permissions of `preset`, as a job."""
+        return self._file_actions.set_permissions(preset)
 
     def copy_path(self):
         """Put the paths of the selection on the clipboard as text, one per line.
@@ -2032,102 +1974,28 @@ class MainWindow(QMainWindow):
 
     def move_selected(self):
         """Move the selection to a folder that is picked in a dialog."""
-        selected = self._selected_locations()
-        if not selected or self._read_only():
-            return None
-        start = locations.local_path(self._location) or locations.local_path(locations.home())
-        path = pick_folder(self, "Move to", start)
-        if not path:
-            return None
-        target = locations.from_path(path)
-        if all_in(selected, target):
-            # Already there
-            return None
-        return self._start(JobKind.MOVE, selected, target)
+        return self._file_actions.move_to()
 
     # Archives
 
-    @staticmethod
-    def _is_archive(info):
-        return not info.is_dir and archives.can_extract(info.content_type)
-
-    def _selected_archives(self):
-        return [
-            locations.entry_location(self._location, info)
-            for info in self._view.selected_infos()
-            if self._is_archive(info)
-        ]
-
     def extract_here(self):
         """Extract the selected archives beside themselves, a job each."""
-        if self._read_only() or self._in_trash():
-            return []
-        return self._extract(self._location)
+        return self._file_actions.extract_here()
 
     def extract_to(self):
         """Extract the selected archives into a folder that is picked in a dialog."""
-        selected = self._selected_archives()
-        if not selected or self._in_trash():
-            return []
-        start = locations.local_path(self._location) or locations.local_path(locations.home())
-        path = pick_folder(self, "Extract to", start)
-        return self._extract(locations.from_path(path)) if path else []
-
-    def _extract(self, destination):
-        return [
-            self._jobs.extract(archive, destination, origin=self)
-            for archive in self._selected_archives()
-        ]
+        return self._file_actions.extract_to()
 
     def compress(self):
         """Compress the selection into an archive in this folder, after asking for its
         name and kind."""
-        selected = self._selected_locations()
-        if not selected or self._read_only() or not archives.available():
-            return None
-        folder = self._location
-        names = [locations.basename(location) for location in selected]
-        what = f"“{names[0]}”" if len(names) == 1 else f"{len(names)} items"
-
-        def apply(text, format):
-            name = text.strip()
-            if not name or "/" in name or name in (".", ".."):
-                return "The archive needs a name, without “/”."
-            extension = archives.format_for(format).extension
-            if not name.endswith(extension):
-                name += extension
-            self._jobs.compress(selected, folder, name, format, origin=self)
-            return None
-
-        dialog = CompressDialog(
-            self,
-            what,
-            archives.FORMATS,
-            lambda format: archives.archive_name(names, locations.basename(folder), format),
-            apply,
-        )
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.open()
-        return dialog
+        return self._file_actions.compress()
 
     def copy_to_other_pane(self):
-        return self._transfer(JobKind.COPY)
+        return self._file_actions.to_other_pane(JobKind.COPY)
 
     def move_to_other_pane(self):
-        return self._transfer(JobKind.MOVE)
-
-    def _transfer(self, kind):
-        """Copy or move the selection into the folder of the other pane."""
-        other = self._other_pane()
-        selected = self._selected_locations()
-        if other is None or not selected or self._in_trash() or other.read_only:
-            return None
-        if kind is JobKind.MOVE and self._read_only():
-            return None
-        if kind is JobKind.MOVE and all_in(selected, other.location):
-            # Already there
-            return None
-        return self._start(kind, selected, other.location)
+        return self._file_actions.to_other_pane(JobKind.MOVE)
 
     def new_file(self):
         return self._file_actions.new_file()
@@ -2147,31 +2015,8 @@ class MainWindow(QMainWindow):
 
     def undo(self):
         """Take back the last rename, move, trash or new folder, of this window or of
-        another. A move and a trash are taken back by a job, which says how it went
-        as any job does, and returned; the others on a worker, and what could not be
-        done is named once they are."""
-        return self._jobs.undo(origin=self, done=self._on_undone)
-
-    def _on_undone(self, undone):
-        if not isValid(self):
-            # Closed meanwhile: what was taken back stays taken back
-            return
-        what = undone.record.describe()
-        errors = list(undone.errors)
-        if undone.changed:
-            self._pane.search_again()
-            if len(undone.changed) == 1 and undone.record.kind is undo.Kind.RENAME:
-                now = undone.changed[0]
-                self._pane.select_when_listed(locations.parent(now), locations.basename(now))
-        if not errors:
-            self.statusBar().showMessage(f"Undid the {what}", _COPIED_MS)
-        elif len(errors) == 1:
-            self._show_error(f"Could not undo the {what}: {errors[0]}.")
-        else:
-            # Every one of them, by name
-            summary = f"Could not undo the {what} for {len(errors)} of them."
-            self._show_error(summary)
-            ErrorDetails(SimpleNamespace(errors=errors, summary=summary), self).open()
+        another. A move and a trash are taken back by a job, which is returned."""
+        return self._file_actions.undo()
 
     def _on_dropped(self, uris, folder_info, modifiers, position):
         """Files were dropped on the list, or on a folder in it."""
