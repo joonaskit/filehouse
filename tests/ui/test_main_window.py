@@ -49,12 +49,12 @@ def test_title_names_the_folder(qtbot, tree):
 def test_title_for_home_and_root(qtbot):
     window = open_window(qtbot, "/")
     assert window.windowTitle() == "/ — Files"
-    assert not window._up.isEnabled()
+    assert not window._actions.up.isEnabled()
 
 
 def test_up_back_and_forward(qtbot, tree):
     window = open_window(qtbot, tree / "Downloads" / "sub")
-    assert not window._back.isEnabled()
+    assert not window._actions.back.isEnabled()
 
     window.go_up()
     wait_loaded(qtbot, window)
@@ -65,7 +65,7 @@ def test_up_back_and_forward(qtbot, tree):
 
     window.go_back()
     assert current_path(window) == str(tree / "Downloads" / "sub")
-    assert window._forward.isEnabled()
+    assert window._actions.forward.isEnabled()
 
     window.go_forward()
     assert current_path(window) == str(tree / "Downloads")
@@ -82,7 +82,7 @@ def test_activating_a_folder_enters_it(qtbot, tree):
     window = open_window(qtbot, tree / "Downloads")
     info = window._model.info(window._model.row_for_name("sub"))
 
-    window._on_item_activated(info)
+    window.open_entry(info)
     wait_loaded(qtbot, window)
 
     assert current_path(window) == str(tree / "Downloads" / "sub")
@@ -146,7 +146,7 @@ def test_hidden_files_toggle(qtbot, tree):
     window = open_window(qtbot, tree / "Downloads")
     assert window._count_label.text() == "2 items"
 
-    window._hidden.trigger()
+    window._actions.hidden.trigger()
 
     assert window._count_label.text() == "3 items"
 
@@ -229,7 +229,7 @@ def test_breadcrumbs_fit_in_the_path_bar_and_match_the_icon_buttons(qtbot, tree)
     back = next(
         button
         for button in window.findChildren(QToolButton)
-        if button.defaultAction() is window._back
+        if button.defaultAction() is window._actions.back
     )
 
     assert crumbs
@@ -245,7 +245,7 @@ def test_select_all_selects_what_is_shown(qtbot, tree):
     (tree / "Downloads" / ".secret").write_text("")
     window = open_window(qtbot, tree / "Downloads")
 
-    window._select_all.trigger()
+    window._actions.select_all.trigger()
 
     assert [info.name for info in window._view.selected_infos()] == ["sub", "report.pdf"]
     assert window._count_label.text() == "2 items · 2 selected"
@@ -255,7 +255,7 @@ def test_select_all_works_in_the_icons_too(qtbot, tree):
     window = open_window(qtbot, tree / "Downloads")
     window.set_view_mode("icons")
 
-    window._select_all.trigger()
+    window._actions.select_all.trigger()
 
     assert window._view.selected_count() == 2
 
@@ -277,7 +277,7 @@ def test_folder_menu_sorts_the_list(qtbot, tree):
     os.utime(tree / "Downloads" / "report.pdf", (1_000_000, 1_000_000))
     window = open_window(qtbot, tree / "Downloads")
     menu = QMenu(window)
-    window._add_sort_and_view(menu)
+    window._menus.add_sort_and_view(menu)
     sort = submenu(menu, "Sort by")
     assert entry(sort, "Name").isChecked() and entry(sort, "Ascending").isChecked()
     assert not entry(sort, "Modified").isChecked()
@@ -294,7 +294,7 @@ def test_folder_menu_sorts_the_list(qtbot, tree):
 
     # A menu made now shows the new order, and can turn it around
     menu = QMenu(window)
-    window._add_sort_and_view(menu)
+    window._menus.add_sort_and_view(menu)
     sort = submenu(menu, "Sort by")
     assert entry(sort, "Modified").isChecked() and entry(sort, "Descending").isChecked()
     entry(sort, "Ascending").trigger()
@@ -307,7 +307,7 @@ def test_folder_menu_changes_the_view(qtbot, tree):
 
     window = open_window(qtbot, tree / "Downloads")
     menu = QMenu(window)
-    window._add_sort_and_view(menu)
+    window._menus.add_sort_and_view(menu)
 
     entry(submenu(menu, "View"), "Icons").trigger()
 
@@ -337,7 +337,7 @@ def test_details_pane_follows_the_selection(qtbot, tree):
     qtbot.waitUntil(lambda: pane.name.toolTip() == "report.pdf", timeout=5000)
     assert pane.open_button.isVisible()
 
-    window._select_all.trigger()
+    window._actions.select_all.trigger()
     qtbot.waitUntil(lambda: pane.name.toolTip() == "2 items", timeout=5000)
 
     window._view.selection_model().clear()
@@ -385,11 +385,11 @@ def test_settings_open_with_the_shortcut_and_follow_hidden_files(qtbot, tree, mo
     monkeypatch.setattr(SettingsDialog, "exec", lambda self: opened.append(self))
     window = open_window(qtbot, tree / "Downloads")
 
-    window._settings.trigger()
+    window._actions.settings.trigger()
     window.set_show_hidden(True)
 
     assert len(opened) == 1
-    assert window._hidden.isChecked()
+    assert window._actions.hidden.isChecked()
     assert window._proxy.show_hidden
 
 
@@ -453,10 +453,10 @@ def test_the_details_pane_can_be_hidden_and_comes_back(qtbot, tree, home_dir):
     window = open_window(qtbot, tree / "Downloads")
     window.resize(1100, 600)
     window.show()
-    assert window._details.isVisible() and window._pane_toggle.isChecked()
+    assert window._details.isVisible() and window._actions.pane_toggle.isChecked()
     list_width = window._view.width()
 
-    window._pane_toggle.trigger()
+    window._actions.pane_toggle.trigger()
 
     assert not window._details.isVisible() and not settings.details_pane()
     # The list has the width the pane had
@@ -476,13 +476,13 @@ def test_the_details_pane_slides_away_and_back(qtbot, tree, home_dir, monkeypatc
     width = window._details.width()
     minimum = window._details.minimumWidth()
 
-    window._pane_toggle.trigger()
+    window._actions.pane_toggle.trigger()
 
     # On its way out: still there to see
     assert window._details.isVisible()
     qtbot.waitUntil(lambda: not window._details.isVisible(), timeout=5000)
 
-    window._pane_toggle.trigger()
+    window._actions.pane_toggle.trigger()
 
     assert window._details.isVisible() and window._details.width() < width
     qtbot.waitUntil(lambda: window._details.width() == width, timeout=5000)
@@ -530,7 +530,7 @@ def test_the_hide_switch_is_the_same_in_every_window_and_remembered(qtbot, tree,
 
     first.set_details_pane(False)
 
-    assert not second._details.isVisible() and not second._pane_toggle.isChecked()
+    assert not second._details.isVisible() and not second._actions.pane_toggle.isChecked()
     assert not settings.details_pane()
     third = open_window(qtbot, tree / "Downloads")
     third.resize(1100, 600)
@@ -586,12 +586,14 @@ def test_the_pane_button_and_key_are_there_only_in_a_wide_window(qtbot, tree, ho
     window = open_window(qtbot, tree / "Downloads")
     window.resize(1100, 600)
     window.show()
-    assert window._button_for(window._pane_toggle).isVisible()
-    assert window._pane_toggle.shortcut().toString() == "F11"
+    assert window._button_for(window._actions.pane_toggle).isVisible()
+    assert window._actions.pane_toggle.shortcut().toString() == "F11"
 
     window.resize(500, 600)
 
-    qtbot.waitUntil(lambda: not window._button_for(window._pane_toggle).isVisible(), timeout=5000)
+    qtbot.waitUntil(
+        lambda: not window._button_for(window._actions.pane_toggle).isVisible(), timeout=5000
+    )
 
 
 def test_an_action_on_a_button_has_its_icon_in_the_buttons_size(qtbot, tmp_path, monkeypatch):
@@ -609,7 +611,7 @@ def test_an_action_on_a_button_has_its_icon_in_the_buttons_size(qtbot, tmp_path,
     assert len(buttons) > 8
     for button in buttons + [window._private_button]:
         assert largest(button.icon()) >= button.iconSize().width(), button.toolTip()
-    in_menus = [a for a in window.actions() if a not in window._button_actions]
+    in_menus = [a for a in window.actions() if a not in window._actions.on_buttons]
     assert len(in_menus) > 20
     menu_side = window.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize)
     for item in in_menus:

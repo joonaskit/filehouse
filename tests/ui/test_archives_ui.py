@@ -59,23 +59,23 @@ def info(window, name):
 
 def test_an_archive_can_be_extracted_from_its_menu_and_other_files_cannot(window):
     select(window, "pack.zip")
-    archive = window._menu_for(info(window, "pack.zip")).actions()
+    archive = window._menus.for_entry(info(window, "pack.zip")).actions()
     select(window, "notes.txt")
-    other = window._menu_for(info(window, "notes.txt")).actions()
+    other = window._menus.for_entry(info(window, "notes.txt")).actions()
 
-    assert window._extract_here in archive and window._extract_to in archive
-    assert window._extract_here not in other and window._extract_to not in other
-    assert window._compress in archive and window._compress in other
-    assert not window._extract_here.isEnabled()
+    assert window._actions.extract_here in archive and window._actions.extract_to in archive
+    assert window._actions.extract_here not in other and window._actions.extract_to not in other
+    assert window._actions.compress in archive and window._actions.compress in other
+    assert not window._actions.extract_here.isEnabled()
 
 
 def test_nothing_is_offered_without_libarchive(window, monkeypatch):
     monkeypatch.setattr(archives, "libarchive", None)
     select(window, "pack.zip")
 
-    actions = window._menu_for(info(window, "pack.zip")).actions()
+    actions = window._menus.for_entry(info(window, "pack.zip")).actions()
 
-    assert window._extract_here not in actions and window._compress not in actions
+    assert window._actions.extract_here not in actions and window._actions.compress not in actions
     assert window.compress() is None and window.extract_here() == []
 
 

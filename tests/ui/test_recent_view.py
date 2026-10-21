@@ -146,7 +146,7 @@ def test_the_latest_comes_first_and_the_sort_comes_back(qtbot, window):
 
 def test_opening_an_entry_opens_the_file_and_tells_the_lists(qtbot, window, places):
     go_recent(qtbot, window)
-    window._on_item_activated(window._model.info(window._model.row_for_name("id2")))
+    window.open_entry(window._model.info(window._model.row_for_name("id2")))
 
     assert [target.get_path() for target in window.opened] == [str(places / "new.txt")]
     assert window.recent.added == ["new.txt"]
@@ -155,7 +155,7 @@ def test_opening_an_entry_opens_the_file_and_tells_the_lists(qtbot, window, plac
 def test_opening_a_folder_of_the_list_goes_there(qtbot, window, places):
     go_recent(qtbot, window)
 
-    window._on_item_activated(window._model.info(window._model.row_for_name("id4")))
+    window.open_entry(window._model.info(window._model.row_for_name("id4")))
 
     assert window._location.get_path() == str(places / "sub")
 
@@ -164,19 +164,19 @@ def test_it_is_for_looking_at(qtbot, window):
     go_recent(qtbot, window)
     window._view.select_name("id2")
 
-    assert window._copy.isEnabled()
-    assert window._forget.isEnabled()
+    assert window._actions.copy.isEnabled()
+    assert window._actions.forget.isEnabled()
     for action in (
-        window._cut,
-        window._rename,
-        window._move_to,
-        window._trash,
-        window._delete,
-        window._paste,
-        window._new_folder,
-        window._new_file,
-        window._permissions,
-        window._move_other,
+        window._actions.cut,
+        window._actions.rename,
+        window._actions.move_to,
+        window._actions.trash,
+        window._actions.delete,
+        window._actions.paste,
+        window._actions.new_folder,
+        window._actions.new_file,
+        window._actions.permissions,
+        window._actions.move_other,
     ):
         assert not action.isEnabled(), action.text()
 
@@ -251,7 +251,7 @@ def test_show_in_folder_goes_to_the_file(qtbot, window, places):
 
 def test_the_menu_of_an_entry(qtbot, window):
     go_recent(qtbot, window)
-    menu = window._menu_for(window._model.info(window._model.row_for_name("id3")))
+    menu = window._menus.for_entry(window._model.info(window._model.row_for_name("id3")))
 
     texts = [action.text() for action in menu.actions() if action.text()]
 
@@ -266,7 +266,7 @@ def test_the_menu_of_an_entry(qtbot, window):
 
 def test_the_menu_of_the_list_has_no_new_or_paste(qtbot, window):
     go_recent(qtbot, window)
-    texts = [action.text() for action in window._menu_for(None).actions() if action.text()]
+    texts = [action.text() for action in window._menus.for_entry(None).actions() if action.text()]
 
     assert "Select all" in texts
     assert "New folder…" not in texts
@@ -355,7 +355,7 @@ def asked(monkeypatch):
 def test_the_list_can_be_cleared_after_asking(qtbot, window, asked, places):
     go_recent(qtbot, window)
 
-    assert window._clear_recent.isEnabled()
+    assert window._actions.clear_recent.isEnabled()
     assert window.clear_recent()
 
     assert asked["asked"] == [4]
@@ -374,7 +374,7 @@ def test_saying_no_clears_nothing(qtbot, window, asked):
 
 
 def test_there_is_nothing_to_clear_elsewhere_or_in_an_empty_list(qtbot, window, asked):
-    assert not window._clear_recent.isEnabled()
+    assert not window._actions.clear_recent.isEnabled()
     assert not window.clear_recent()
 
     window.state["entries"] = []
@@ -382,7 +382,7 @@ def test_there_is_nothing_to_clear_elsewhere_or_in_an_empty_list(qtbot, window, 
     qtbot.waitUntil(lambda: not window._model.loading, timeout=TIMEOUT)
     window._update_state()
 
-    assert not window._clear_recent.isEnabled()
+    assert not window._actions.clear_recent.isEnabled()
     assert not window.clear_recent()
     assert asked["asked"] == []
 
@@ -390,8 +390,10 @@ def test_there_is_nothing_to_clear_elsewhere_or_in_an_empty_list(qtbot, window, 
 def test_it_is_in_the_menu_of_the_list_and_nowhere_else(qtbot, window):
     go_recent(qtbot, window)
 
-    assert window._clear_recent in window._menu_for(None).actions()
-    assert window._clear_recent not in window._menu_for(window._model.info(0)).actions()
+    assert window._actions.clear_recent in window._menus.for_entry(None).actions()
+    assert (
+        window._actions.clear_recent not in window._menus.for_entry(window._model.info(0)).actions()
+    )
     window.go_back()
     qtbot.waitUntil(lambda: not window._model.loading, timeout=TIMEOUT)
-    assert window._clear_recent not in window._menu_for(None).actions()
+    assert window._actions.clear_recent not in window._menus.for_entry(None).actions()

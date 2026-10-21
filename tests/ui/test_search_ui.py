@@ -131,7 +131,7 @@ def test_a_result_that_is_a_folder_opens_as_that_folder(qtbot, window, tree):
     search(qtbot, window, "old")
     window._view.select_name("docs/old")
 
-    window._on_item_activated(window._view.selected_infos()[0])
+    window.open_entry(window._view.selected_infos()[0])
     qtbot.waitUntil(lambda: not window._model.loading, timeout=TIMEOUT)
 
     assert locations.local_path(window._location) == str(tree / "docs" / "old")
@@ -143,7 +143,7 @@ def test_show_in_folder_goes_to_where_a_result_is(qtbot, window, tree):
     info = window._model.info(window._model.row_for_name("docs/old/report-draft.txt"))
     window._view.select_name(info.name)
 
-    menu = window._menu_for(info)
+    menu = window._menus.for_entry(info)
     assert "Show in folder" in [action.text() for action in menu.actions()]
     window.show_in_folder(info)
     qtbot.waitUntil(lambda: not window._model.loading, timeout=TIMEOUT)
@@ -159,7 +159,9 @@ def test_an_entry_of_the_folder_itself_has_no_show_in_folder(qtbot, window):
     search(qtbot, window, "report")
     info = window._model.info(window._model.row_for_name("report.txt"))
 
-    assert "Show in folder" not in [action.text() for action in window._menu_for(info).actions()]
+    assert "Show in folder" not in [
+        action.text() for action in window._menus.for_entry(info).actions()
+    ]
 
 
 def test_the_actions_act_on_the_file_where_it_is(qtbot, window, tree, jobs, wait_final):
@@ -232,7 +234,7 @@ def test_in_a_narrow_window_the_field_takes_the_place_of_the_path(qtbot, window)
     qtbot.waitUntil(lambda: not window._search_group.isVisible(), timeout=TIMEOUT)
     assert window._path_bar.isVisible()
 
-    window._search.trigger()
+    window._actions.search.trigger()
 
     qtbot.waitUntil(lambda: not window._path_bar.isVisible(), timeout=TIMEOUT)
     assert window._search_group.isVisible()
@@ -246,7 +248,7 @@ def test_in_a_narrow_window_the_field_takes_the_place_of_the_path(qtbot, window)
 
 def test_in_a_narrow_window_the_field_stays_while_a_search_is_on(qtbot, window):
     window.resize(NARROW, 600)
-    window._search.trigger()
+    window._actions.search.trigger()
     search(qtbot, window, "report")
 
     qtbot.keyClick(window._search_field, Qt.Key.Key_Down)

@@ -97,25 +97,32 @@ def uris(*paths):
 def test_actions_follow_the_selection_and_the_clipboard(qtbot, tree, open_window):
     clipboard.clear()
     window = open_window(tree / "src")
-    edits = (window._copy, window._cut, window._trash, window._delete)
-    assert not any(action.isEnabled() for action in (*edits, window._rename, window._paste))
+    edits = (
+        window._actions.copy,
+        window._actions.cut,
+        window._actions.trash,
+        window._actions.delete,
+    )
+    assert not any(
+        action.isEnabled() for action in (*edits, window._actions.rename, window._actions.paste)
+    )
 
     select(window, "a.txt")
-    assert all(action.isEnabled() for action in (*edits, window._rename))
+    assert all(action.isEnabled() for action in (*edits, window._actions.rename))
 
     # Several can be renamed too, in a dialog of their own
     select(window, "a.txt", "b.txt")
-    assert all(action.isEnabled() for action in (*edits, window._rename))
+    assert all(action.isEnabled() for action in (*edits, window._actions.rename))
 
-    window._copy.trigger()
-    assert window._paste.isEnabled()
+    window._actions.copy.trigger()
+    assert window._actions.paste.isEnabled()
 
 
 def test_copy_and_cut_put_uris_on_the_clipboard_as_dolphin_does(qtbot, tree, open_window):
     window = open_window(tree / "src")
     select(window, "a.txt", "sub")
 
-    window._copy.trigger()
+    window._actions.copy.trigger()
     data = QApplication.clipboard().mimeData()
     assert data.hasFormat("text/uri-list")
     assert sorted(url.toLocalFile() for url in data.urls()) == [
@@ -124,7 +131,7 @@ def test_copy_and_cut_put_uris_on_the_clipboard_as_dolphin_does(qtbot, tree, ope
     ]
     assert not data.hasFormat(clipboard.CUT_MIME)
 
-    window._cut.trigger()
+    window._actions.cut.trigger()
     data = QApplication.clipboard().mimeData()
     assert bytes(data.data(clipboard.CUT_MIME)) == b"1"
     assert len(data.urls()) == 2
@@ -133,7 +140,7 @@ def test_copy_and_cut_put_uris_on_the_clipboard_as_dolphin_does(qtbot, tree, ope
 def test_copy_and_paste(qtbot, tree, open_window, jobs, wait_final):
     window = open_window(tree / "src")
     select(window, "a.txt", "b.txt")
-    window._copy.trigger()
+    window._actions.copy.trigger()
     go(qtbot, window, tree / "dst")
 
     job = wait_final(jobs, window.paste())
@@ -144,13 +151,13 @@ def test_copy_and_paste(qtbot, tree, open_window, jobs, wait_final):
     # The view follows the folder without a reload
     qtbot.waitUntil(lambda: listed(window) == ["a.txt", "b.txt"], timeout=TIMEOUT)
     # What was copied can be pasted again
-    assert window._paste.isEnabled()
+    assert window._actions.paste.isEnabled()
 
 
 def test_cut_and_paste_moves_and_uses_up_the_clipboard(qtbot, tree, open_window, jobs, wait_final):
     window = open_window(tree / "src")
     select(window, "a.txt")
-    window._cut.trigger()
+    window._actions.cut.trigger()
     go(qtbot, window, tree / "dst")
 
     job = wait_final(jobs, window.paste())
@@ -165,7 +172,7 @@ def test_cut_and_paste_moves_and_uses_up_the_clipboard(qtbot, tree, open_window,
 def test_cut_and_paste_in_the_same_folder_does_nothing(qtbot, tree, open_window, jobs):
     window = open_window(tree / "src")
     select(window, "a.txt")
-    window._cut.trigger()
+    window._actions.cut.trigger()
 
     assert window.paste() is None
     assert jobs.jobs == []
@@ -478,7 +485,7 @@ def test_a_folder_made_after_its_dialog_closed_can_still_be_taken_back(
     settle(window)
 
     assert (tree / "src" / "Photos").is_dir()
-    assert window._undo.text() == "Undo new “Photos”"
+    assert window._actions.undo.text() == "Undo new “Photos”"
 
 
 def test_a_name_typed_before_the_suggestion_comes_stays(qtbot, tree, open_window, stuck):
@@ -544,7 +551,7 @@ def test_copy_path_puts_the_paths_on_the_clipboard_as_text(qtbot, tree, open_win
     assert QApplication.clipboard().text() == str(tree / "src" / "a.txt")
 
     select(window, "a.txt", "sub")
-    window._copy_path.trigger()
+    window._actions.copy_path.trigger()
     assert QApplication.clipboard().text() == f"{tree / 'src' / 'sub'}\n{tree / 'src' / 'a.txt'}"
     assert window.statusBar().currentMessage() == "2 paths copied"
     # Text, not files: pasting it here does nothing
@@ -564,12 +571,12 @@ def terminal(monkeypatch):
 
 def test_open_terminal_here_starts_it_in_this_folder(qtbot, tree, open_window, terminal):
     window = open_window(tree / "src")
-    assert window._terminal.isVisible()
+    assert window._actions.terminal.isVisible()
 
-    window._terminal.trigger()
+    window._actions.terminal.trigger()
 
     assert terminal == [str(tree / "src")]
-    texts = [action.text() for action in window._menu_for(None).actions()]
+    texts = [action.text() for action in window._menus.for_entry(None).actions()]
     assert "Open terminal here" in texts and "Copy path" in texts
 
 
@@ -577,13 +584,13 @@ def test_the_menu_of_a_folder_opens_the_terminal_in_that_folder(qtbot, tree, ope
     window = open_window(tree / "src")
     by_name = {info.name: info for info in (window._model.info(row) for row in range(3))}
 
-    folder_menu = window._menu_for(by_name["sub"])
+    folder_menu = window._menus.for_entry(by_name["sub"])
     entry = next(a for a in folder_menu.actions() if a.text() == "Open terminal here")
     entry.trigger()
     assert terminal == [str(tree / "src" / "sub")]
 
     # A file has no "here"
-    file_menu = window._menu_for(by_name["a.txt"])
+    file_menu = window._menus.for_entry(by_name["a.txt"])
     assert "Open terminal here" not in [a.text() for a in file_menu.actions()]
     assert "Copy path" in [a.text() for a in file_menu.actions()]
 
@@ -594,8 +601,8 @@ def test_without_a_terminal_there_is_no_entry_for_one(qtbot, tree, open_window, 
     monkeypatch.setattr(desktop, "default_terminal", lambda: None)
     window = open_window(tree / "src")
 
-    assert not window._terminal.isVisible()
-    visible = [a.text() for a in window._menu_for(None).actions() if a.isVisible()]
+    assert not window._actions.terminal.isVisible()
+    visible = [a.text() for a in window._menus.for_entry(None).actions() if a.isVisible()]
     assert "Open terminal here" not in visible
 
 
@@ -635,11 +642,11 @@ def test_move_to_does_nothing_when_no_folder_is_picked_or_it_is_this_one(
     qtbot, tree, open_window, jobs, picked
 ):
     window = open_window(tree / "src")
-    assert not window._move_to.isEnabled()
+    assert not window._actions.move_to.isEnabled()
     assert window.move_selected() is None and picked.asked == []
 
     select(window, "a.txt")
-    assert window._move_to.isEnabled()
+    assert window._actions.move_to.isEnabled()
     assert window.move_selected() is None  # the dialog was closed
 
     picked.path = str(tree / "src")
@@ -677,7 +684,7 @@ def mode_of(path):
 def preset_entries(window):
     return {
         action.text().partition("\t")[0]: action
-        for action in window._permissions_menu(window).actions()
+        for action in window._menus.permissions(window).actions()
     }
 
 
@@ -789,16 +796,16 @@ def test_several_failures_are_all_listed_by_name(qtbot, tree, open_window, jobs,
 
 def test_permissions_need_a_selection_and_are_in_the_file_menu(qtbot, tree, open_window):
     window = open_window(tree / "src")
-    assert not window._permissions.isEnabled()
+    assert not window._actions.permissions.isEnabled()
     assert window.set_permissions(permissions.PRESETS[0]) is None
 
     select(window, "a.txt")
-    assert window._permissions.isEnabled()
-    menu = window._menu_for(window._view.selected_infos()[0])
+    assert window._actions.permissions.isEnabled()
+    menu = window._menus.for_entry(window._view.selected_infos()[0])
     titles = [action.menu().title() for action in menu.actions() if action.menu()]
     assert "Permissions" in titles
     # Not in the folder's own menu
-    folder_titles = [a.menu().title() for a in window._menu_for(None).actions() if a.menu()]
+    folder_titles = [a.menu().title() for a in window._menus.for_entry(None).actions() if a.menu()]
     assert "Permissions" not in folder_titles
 
 
@@ -1287,15 +1294,15 @@ def test_hidden_files_and_view_mode_are_remembered(qtbot, tree, open_window):
     # One view for every folder: with a view per folder, see test_folder_views.py
     settings.set_per_folder(False)
     first = open_window(tree / "src")
-    assert first._view.mode == settings.DETAILS and not first._hidden.isChecked()
+    assert first._view.mode == settings.DETAILS and not first._actions.hidden.isChecked()
 
-    first._hidden.trigger()
-    first._icons_mode.trigger()
+    first._actions.hidden.trigger()
+    first._actions.icons_mode.trigger()
     second = open_window(tree / "dst")
 
-    assert second._hidden.isChecked() and second._proxy.show_hidden
+    assert second._actions.hidden.isChecked() and second._proxy.show_hidden
     assert second._view.mode == settings.ICONS
-    assert second._icons_mode.isChecked() and not second._details_mode.isChecked()
+    assert second._actions.icons_mode.isChecked() and not second._actions.details_mode.isChecked()
 
 
 def test_window_size_is_remembered_when_it_closes(qtbot, tree, open_window):
@@ -1316,7 +1323,7 @@ def test_changing_the_view_mode_keeps_the_selection(qtbot, tree, open_window):
     select(window, "a.txt", "sub")
     view = window._view
 
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
 
     assert view._stack.currentWidget() is view._grid
     assert [info.name for info in view.selected_infos()] == ["sub", "a.txt"]
@@ -1327,7 +1334,7 @@ def test_changing_the_view_mode_keeps_the_selection(qtbot, tree, open_window):
     view._grid.selectionModel().clearSelection()
     view._grid.setCurrentIndex(window._proxy.index(1, 0))
     assert view.selected_count() == 1
-    assert window._rename.isEnabled()
+    assert window._actions.rename.isEnabled()
 
     qtbot.keyClick(window, Qt.Key.Key_3, Qt.KeyboardModifier.ControlModifier)
     assert view._stack.currentWidget() is view._tree
@@ -1339,7 +1346,7 @@ def test_an_empty_folder_shows_its_message_in_both_modes(qtbot, tree, open_windo
     view = window._view
     assert view._stack.currentWidget() is view._message
 
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
     assert view._stack.currentWidget() is view._message
 
     (tree / "dst" / "new.txt").write_text("x")
@@ -1348,9 +1355,9 @@ def test_an_empty_folder_shows_its_message_in_both_modes(qtbot, tree, open_windo
 
 def test_operations_work_from_the_icons(qtbot, tree, open_window, jobs, wait_final):
     window = open_window(tree / "src")
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
     select(window, "a.txt")
-    window._copy.trigger()
+    window._actions.copy.trigger()
     go(qtbot, window, tree / "dst")
 
     wait_final(jobs, window.paste())
@@ -1395,13 +1402,18 @@ def test_the_trash_offers_restore_and_delete_and_nothing_else(qtbot, tree, bin_,
     window = open_window(bin_)
     assert window.windowTitle() == "Trash — Files"
 
-    off = (window._cut, window._paste, window._rename, window._new_folder)
+    off = (
+        window._actions.cut,
+        window._actions.paste,
+        window._actions.rename,
+        window._actions.new_folder,
+    )
     assert not any(action.isEnabled() for action in off)
-    assert window._empty_trash.isEnabled()
-    assert not window._restore.isEnabled() and not window._delete.isEnabled()
+    assert window._actions.empty_trash.isEnabled()
+    assert not window._actions.restore.isEnabled() and not window._actions.delete.isEnabled()
 
     select(window, "report.pdf")
-    assert window._restore.isEnabled() and window._delete.isEnabled()
+    assert window._actions.restore.isEnabled() and window._actions.delete.isEnabled()
     assert not any(action.isEnabled() for action in off)
     assert window.paste() is None and window.new_folder() is None and window.rename() is None
 
@@ -1419,7 +1431,7 @@ def test_restore_puts_the_selection_back(qtbot, tree, bin_, open_window, jobs, w
     assert names(tree / "src" / "album") == ["a.jpg"]
     qtbot.waitUntil(lambda: listed(window) == [], timeout=TIMEOUT)
     assert window._view._message.text() == "The trash is empty"
-    assert not window._empty_trash.isEnabled()
+    assert not window._actions.empty_trash.isEnabled()
 
 
 def test_restore_asks_when_something_is_in_the_way(
@@ -1492,7 +1504,7 @@ def test_empty_trash_can_be_called_off(
 def test_empty_trash_is_only_for_the_trash(qtbot, tree, open_window, jobs):
     window = open_window(tree / "src")
 
-    assert not window._empty_trash.isEnabled()
+    assert not window._actions.empty_trash.isEnabled()
     assert window.empty_trash() is None
     assert window.restore_selected() is None
     assert jobs.jobs == []
@@ -1504,9 +1516,9 @@ def test_inside_a_trashed_folder_nothing_can_be_restored_or_deleted(
     window = open_window(bin_ / "album")
     select(window, "a.jpg")
 
-    assert not window._restore.isEnabled() and not window._delete.isEnabled()
+    assert not window._actions.restore.isEnabled() and not window._actions.delete.isEnabled()
     assert window.delete_selected() is None and window.trash_selected() is None
-    assert not window._empty_trash.isEnabled()
+    assert not window._actions.empty_trash.isEnabled()
     assert jobs.jobs == []
 
 
@@ -1526,7 +1538,7 @@ def test_a_drop_on_the_trash_trashes(qtbot, home_dir, tree, bin_, open_window, j
 def test_a_file_in_the_trash_is_not_opened(qtbot, tree, bin_, open_window):
     window = open_window(bin_)
 
-    window._on_item_activated(window._model.info(window._model.row_for_name("report.pdf")))
+    window.open_entry(window._model.info(window._model.row_for_name("report.pdf")))
 
     assert "Restore" in window.statusBar().currentMessage()
 

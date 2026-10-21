@@ -44,7 +44,7 @@ def loaded(qtbot, window):
 
 def test_it_is_closed_until_asked(window):
     assert not window._preview.isVisible()
-    assert not window._preview_action.isEnabled()
+    assert not window._actions.preview.isEnabled()
 
 
 def test_space_opens_the_preview_of_the_selected_picture(qtbot, window):
@@ -668,9 +668,9 @@ def test_the_sheet_follows_the_selection_and_closes_with_escape_or_its_button(qt
     sheet = window._sheet_preview
     qtbot.waitUntil(lambda: sheet._text.toPlainText() == "hello\nworld\n", timeout=TIMEOUT)
 
-    assert window._close_preview_sheet.isEnabled()
-    window._close_preview_sheet.trigger()
-    assert not window.preview_is_open and not window._close_preview_sheet.isEnabled()
+    assert window._actions.close_preview_sheet.isEnabled()
+    window._actions.close_preview_sheet.trigger()
+    assert not window.preview_is_open and not window._actions.close_preview_sheet.isEnabled()
 
     window.toggle_preview()
     sheet.close_button.click()
@@ -680,14 +680,14 @@ def test_the_sheet_follows_the_selection_and_closes_with_escape_or_its_button(qt
 def test_one_sheet_at_a_time(qtbot, window):
     window.resize(NARROW, 600)
     window._view.select_name("a.png")
-    window._show_details.setChecked(True)
+    window._actions.show_details.setChecked(True)
     assert window._sheet.is_open
 
     window.toggle_preview()
     assert window._preview_sheet.is_open and not window._sheet.is_open
-    assert not window._show_details.isChecked()
+    assert not window._actions.show_details.isChecked()
 
-    window._show_details.setChecked(True)
+    window._actions.show_details.setChecked(True)
     assert window._sheet.is_open and not window._preview_sheet.is_open
 
 
@@ -725,17 +725,17 @@ def test_in_the_sheet_the_page_keys_turn_pages_only_for_a_document(qtbot, window
     window.resize(NARROW, 600)
     window._view.select_name("a.png")
     window.toggle_preview()
-    assert not window._next_page.isEnabled()
+    assert not window._actions.next_page.isEnabled()
 
     window._view.select_name("paper.pdf")
     page_shown(qtbot, window._sheet_preview, 1)
-    assert window._next_page.isEnabled() and window._previous_page.isEnabled()
+    assert window._actions.next_page.isEnabled() and window._actions.previous_page.isEnabled()
 
-    window._next_page.trigger()
+    window._actions.next_page.trigger()
     page_shown(qtbot, window._sheet_preview, 2)
 
     window.toggle_preview()
-    assert not window._next_page.isEnabled()
+    assert not window._actions.next_page.isEnabled()
 
 
 # Space while a name is being typed at the list

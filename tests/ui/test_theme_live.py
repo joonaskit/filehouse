@@ -171,7 +171,7 @@ def test_the_icons_of_an_open_window_are_drawn_again(qapp, qtbot, tmp_path, icon
     close = window._tab_bar.tabButton(0, window._tab_bar.ButtonPosition.RightSide)
     place = window._sidebar.item(1)
     place_name = place.text()
-    before = pixel_colour(window._back.icon()), pixel_colour(close.icon())
+    before = pixel_colour(window._actions.back.icon()), pixel_colour(close.icon())
     tile = place.icon().pixmap(QSize(28, 28)).toImage().pixelColor(14, 14).name()
     assert before == ("#ffffff", "#ffffff")
 
@@ -189,8 +189,8 @@ def test_the_icons_of_an_open_window_are_drawn_again(qapp, qtbot, tmp_path, icon
         live=True,
     )
 
-    assert pixel_colour(window._back.icon()) == "#202020"
-    assert pixel_colour(window._up.icon()) == "#202020"
+    assert pixel_colour(window._actions.back.icon()) == "#202020"
+    assert pixel_colour(window._actions.up.icon()) == "#202020"
     assert pixel_colour(close.icon()) == "#202020"
     # The sidebar is filled again: its rows are new
     place = window._sidebar.item(window._sidebar.row_of(place_name))

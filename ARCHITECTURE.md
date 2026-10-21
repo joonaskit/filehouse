@@ -149,7 +149,9 @@ filehouse/
 │   │   ├── notifications.py     a desktop notification for a job that ends with no window visible
 │   │   └── desktop.py           open, open with, file manager hand-off, the terminal
 │   └── ui/
-│       ├── main_window.py
+│       ├── main_window.py       layout, tabs and panes, navigation, preview, the narrow window
+│       ├── actions.py           the window's actions: text, icon, keys, when each can be used
+│       ├── context_menus.py     the menus of an entry or folder, a place, a favourite (#64)
 │       ├── file_actions.py      what a window does to files: new file and folder, rename,
 │       │                        links, drops, paste, trash and delete, move to, archives,
 │       │                        permissions and undo (#64); their file work on a worker, in

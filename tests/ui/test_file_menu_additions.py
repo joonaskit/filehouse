@@ -53,7 +53,7 @@ def names(path):
 
 
 def menu_texts(window, info):
-    return [action.text() for action in window._menu_for(info).actions()]
+    return [action.text() for action in window._menus.for_entry(info).actions()]
 
 
 def info_of(window, name):
@@ -83,11 +83,11 @@ def test_duplicate_is_a_job_that_copies_beside(qtbot, tree, window, jobs, wait_f
 
 
 def test_duplicate_and_link_are_in_the_menu_of_a_file_and_follow_the_selection(window):
-    assert not window._duplicate.isEnabled() and not window._link.isEnabled()
+    assert not window._actions.duplicate.isEnabled() and not window._actions.link.isEnabled()
 
     select(window, "notes.txt")
 
-    assert window._duplicate.isEnabled() and window._link.isEnabled()
+    assert window._actions.duplicate.isEnabled() and window._actions.link.isEnabled()
     texts = menu_texts(window, info_of(window, "notes.txt"))
     assert texts[texts.index("Rename…") :][:4] == [
         "Rename…",
@@ -347,23 +347,23 @@ def test_nothing_matching_cannot_be_chosen(window):
 def test_invert_selection(window):
     select(window, "album", "notes.txt")
 
-    window._invert.trigger()
+    window._actions.invert.trigger()
 
     assert selected(window) == ["Holiday 2024.JPG", "IMG_1.jpg", "IMG_2.jpg"]
-    window._invert.trigger()
+    window._actions.invert.trigger()
     assert selected(window) == ["album", "notes.txt"]
 
 
 def test_inverting_nothing_selects_all_and_the_other_way_round(window):
-    window._invert.trigger()
+    window._actions.invert.trigger()
     assert len(selected(window)) == 5
 
-    window._invert.trigger()
+    window._actions.invert.trigger()
     assert selected(window) == []
 
 
 def test_invert_works_in_the_icons_too(window):
-    window._icons_mode.trigger()
+    window._actions.icons_mode.trigger()
     select(window, "album")
 
     window.invert_selection()
@@ -391,8 +391,8 @@ def test_the_menus_have_the_selecting_entries(window):
         "Invert selection",
     ]
     assert "Select all of this type" in menu_texts(window, info_of(window, "notes.txt"))
-    assert window._select_matching.shortcut().toString() == "Ctrl+S"
-    assert window._invert.shortcut().toString() == "Ctrl+Shift+A"
+    assert window._actions.select_matching.shortcut().toString() == "Ctrl+S"
+    assert window._actions.invert.shortcut().toString() == "Ctrl+Shift+A"
 
 
 def test_only_what_is_shown_is_selected(qtbot, tree, window):
