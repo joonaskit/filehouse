@@ -153,8 +153,8 @@ def test_a_middle_click_opens_a_folder_in_a_tab_behind(qtbot, tree, window):
 
 
 def test_the_context_menu_of_a_folder_offers_a_tab(qtbot, tree, window):
-    folder = window._menu_for(window._model.info(window._model.row_for_name("sub")))
-    file = window._menu_for(window._model.info(window._model.row_for_name("a.txt")))
+    folder = window._menus.for_entry(window._model.info(window._model.row_for_name("sub")))
+    file = window._menus.for_entry(window._model.info(window._model.row_for_name("a.txt")))
 
     assert "Open in new tab" in [action.text() for action in folder.actions()]
     assert "Open in new tab" not in [action.text() for action in file.actions()]

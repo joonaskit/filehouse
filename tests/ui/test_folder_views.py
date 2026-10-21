@@ -146,7 +146,7 @@ def test_the_view_menu_offers_the_way_back_only_where_folders_keep_theirs(tree, 
     window = open_window(tree / "pictures")
 
     def view_entries():
-        menu = window._menu_for(None)
+        menu = window._menus.for_entry(None)
         view = next(action.menu() for action in menu.actions() if action.text() == "View")
         return {action.text(): action for action in view.actions()}
 

@@ -231,17 +231,17 @@ def test_a_narrow_window_has_no_bar_of_actions(qtbot, window):
             window._actions.trash,
         )
     ]
-    texts = [a.text() for a in window._menu_for(window._view.selected_infos()[0]).actions()]
+    texts = [a.text() for a in window._menus.for_entry(window._view.selected_infos()[0]).actions()]
     assert {"Copy", "Rename…", "Move to…", "Move to trash"} <= set(texts)
 
 
 def test_menus_are_made_without_being_shown(qtbot, window):
-    folder_menu = window._menu_for(None)
+    folder_menu = window._menus.for_entry(None)
     texts = [action.text() for action in folder_menu.actions() if action.text()]
     assert texts[:5] == ["New folder…", "New file…", "Undo", "Paste", "Select all"]
 
     window._view.select_name("run.sh")
-    file_menu = window._menu_for(window._view.selected_infos()[0])
+    file_menu = window._menus.for_entry(window._view.selected_infos()[0])
     assert "Rename…" in [action.text() for action in file_menu.actions()]
 
 

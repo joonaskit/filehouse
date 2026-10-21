@@ -8,6 +8,7 @@ from ui_helpers import TIMEOUT, gfile, settle
 
 from filehouse.core.operations import JobKind
 from filehouse.integration import style
+from filehouse.qt_models.directory_model import NAME, SIZE
 from filehouse.ui import main_window, settings
 from filehouse.ui.main_window import MainWindow
 
@@ -157,12 +158,12 @@ def test_the_sort_order_goes_with_the_folder_of_each_pane(qtbot, window, tree):
     second.navigate(gfile(tree / "right"))
     wait_loaded(qtbot, second)
 
-    first.view.sort(main_window.SIZE, Qt.SortOrder.DescendingOrder)
+    first.view.sort(SIZE, Qt.SortOrder.DescendingOrder)
 
-    assert second.view.sort_column() == main_window.NAME
+    assert second.view.sort_column() == NAME
     # The same folder is shown the same way in both
     second.navigate(gfile(tree / "left"))
-    assert second.view.sort_column() == main_window.SIZE
+    assert second.view.sort_column() == SIZE
     assert second.view.sort_order() == Qt.SortOrder.DescendingOrder
 
 
@@ -305,8 +306,8 @@ def test_a_folder_opens_in_split_view_from_its_menu_and_a_file_does_not(qtbot, t
     (tree / "left" / "sub").mkdir()
     qtbot.waitUntil(lambda: window._model.row_for_name("sub") >= 0, timeout=TIMEOUT)
 
-    folder = [a.text() for a in window._menu_for(folder_info(window, "sub")).actions()]
-    file = [a.text() for a in window._menu_for(folder_info(window, "a.txt")).actions()]
+    folder = [a.text() for a in window._menus.for_entry(folder_info(window, "sub")).actions()]
+    file = [a.text() for a in window._menus.for_entry(folder_info(window, "a.txt")).actions()]
 
     # Right below Open in new tab
     assert folder[folder.index("Open in new tab") + 1] == "Open in split view"
@@ -320,7 +321,7 @@ def test_it_splits_the_window_and_shows_the_folder_in_the_new_pane(qtbot, tree, 
     first = window._pane
     assert not window.is_split
 
-    window._open_in_split(folder_info(window, "sub"))
+    window.open_in_split(folder_info(window, "sub"))
 
     assert window.is_split
     # The list the folder was chosen in stays where it was, and stays the active one
@@ -339,7 +340,7 @@ def test_a_window_that_is_split_already_opens_it_in_the_other_pane(qtbot, tree, 
     qtbot.waitUntil(lambda: window._model.row_for_name("sub") >= 0, timeout=TIMEOUT)
     window.set_split(True)
     other = window._other_pane()
-    window._open_in_split(folder_info(window, "sub"))
+    window.open_in_split(folder_info(window, "sub"))
 
     assert window._other_pane() is other
     assert other.location.get_path() == str(tree / "left" / "sub")
@@ -359,7 +360,7 @@ def test_the_other_pane_can_be_the_one_it_is_opened_from(qtbot, tree, window):
     qtbot.waitUntil(lambda: right.model.row_for_name("sub") >= 0, timeout=TIMEOUT)
     left = window._other_pane()
 
-    window._open_in_split(right.model.info(right.model.row_for_name("sub")))
+    window.open_in_split(right.model.info(right.model.row_for_name("sub")))
 
     assert window._pane is right
     assert left.location.get_path() == str(tree / "left" / "sub")
@@ -370,8 +371,8 @@ def test_a_narrow_window_has_no_split_to_open_it_in(qtbot, tree, window):
     qtbot.waitUntil(lambda: window._model.row_for_name("sub") >= 0, timeout=TIMEOUT)
     window.resize(NARROW, 600)
 
-    actions = [a.text() for a in window._menu_for(folder_info(window, "sub")).actions()]
-    window._open_in_split(folder_info(window, "sub"))
+    actions = [a.text() for a in window._menus.for_entry(folder_info(window, "sub")).actions()]
+    window.open_in_split(folder_info(window, "sub"))
 
     assert "Open in split view" not in actions
     assert not window.is_split

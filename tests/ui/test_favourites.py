@@ -9,7 +9,7 @@ from ui_helpers import TIMEOUT, gfile, off_the_ui_thread, settle
 from filehouse.core.operations import JobKind
 from filehouse.integration import places
 from filehouse.qt_models.favourites import Favourites
-from filehouse.ui import main_window as main_window_module
+from filehouse.ui import menus
 from filehouse.ui import sidebar as sidebar_module
 from filehouse.ui.main_window import MainWindow
 
@@ -257,22 +257,22 @@ def test_the_key_adds_the_open_folder_and_again_takes_it_out(qtbot, window, favo
 def test_a_folder_of_the_list_has_its_own_entry(qtbot, window, favourites, tree):
     info = window._model.info(window._model.row_for_name("alpha"))
 
-    menu = window._menu_for(info)
+    menu = window._menus.for_entry(info)
     texts = [a.text() for a in menu.actions()]
     assert "Add to favourites" in texts
 
     next(a for a in menu.actions() if a.text() == "Add to favourites").trigger()
 
     assert titles(favourites) == ["alpha"]
-    texts = [a.text() for a in window._menu_for(info).actions()]
+    texts = [a.text() for a in window._menus.for_entry(info).actions()]
     assert "Remove from favourites" in texts
     # A file has none
     file = window._model.info(window._model.row_for_name("note.txt"))
-    assert not any("favourites" in a.text() for a in window._menu_for(file).actions())
+    assert not any("favourites" in a.text() for a in window._menus.for_entry(file).actions())
 
 
 def test_the_menu_of_the_folder_has_it(qtbot, window):
-    assert window._actions.favourite in window._menu_for(None).actions()
+    assert window._actions.favourite in window._menus.for_entry(None).actions()
 
 
 def test_not_the_trash_or_the_recent_files(qtbot, window):
@@ -406,9 +406,9 @@ def pick(window, favourite, text, monkeypatch):
         menu.exec = lambda position: shown.append(menu) or None
         return menu
 
-    real = main_window_module.menus.menu
-    monkeypatch.setattr(main_window_module.menus, "menu", build)
-    window._show_favourite_menu(favourite, QPoint(0, 0))
+    real = menus.menu
+    monkeypatch.setattr(menus, "menu", build)
+    window._menus.show_favourite(favourite, QPoint(0, 0))
     menu = shown[0]
     return menu, next(a for a in menu.actions() if a.text() == text)
 
@@ -617,16 +617,16 @@ def test_its_menu_has_no_split_in_a_narrow_window(qtbot, window, favourites, tre
     favourites.add(gfile(tree / "alpha"))
     window.resize(500, 600)
     shown = []
-    real = main_window_module.menus.menu
+    real = menus.menu
 
     def build(parent, title=None):
         menu = real(parent, title) if title else real(parent)
         menu.exec = lambda position: shown.append(menu) or None
         return menu
 
-    monkeypatch.setattr(main_window_module.menus, "menu", build)
+    monkeypatch.setattr(menus, "menu", build)
 
-    window._show_favourite_menu(favourites.items[0], QPoint(0, 0))
+    window._menus.show_favourite(favourites.items[0], QPoint(0, 0))
 
     assert "Open in split view" not in [a.text() for a in shown[0].actions()]
 

@@ -255,7 +255,7 @@ def test_what_one_window_did_another_can_take_back(tree, open_window):
 def test_undo_is_in_the_folders_menu(tree, open_window):
     window = open_window(tree / "src")
 
-    assert window._actions.undo in window._menu_for(None).actions()
+    assert window._actions.undo in window._menus.for_entry(None).actions()
 
 
 def test_several_that_could_not_be_taken_back_are_listed_by_name(qtbot, tree, open_window):

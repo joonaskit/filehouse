@@ -576,7 +576,7 @@ def test_open_terminal_here_starts_it_in_this_folder(qtbot, tree, open_window, t
     window._actions.terminal.trigger()
 
     assert terminal == [str(tree / "src")]
-    texts = [action.text() for action in window._menu_for(None).actions()]
+    texts = [action.text() for action in window._menus.for_entry(None).actions()]
     assert "Open terminal here" in texts and "Copy path" in texts
 
 
@@ -584,13 +584,13 @@ def test_the_menu_of_a_folder_opens_the_terminal_in_that_folder(qtbot, tree, ope
     window = open_window(tree / "src")
     by_name = {info.name: info for info in (window._model.info(row) for row in range(3))}
 
-    folder_menu = window._menu_for(by_name["sub"])
+    folder_menu = window._menus.for_entry(by_name["sub"])
     entry = next(a for a in folder_menu.actions() if a.text() == "Open terminal here")
     entry.trigger()
     assert terminal == [str(tree / "src" / "sub")]
 
     # A file has no "here"
-    file_menu = window._menu_for(by_name["a.txt"])
+    file_menu = window._menus.for_entry(by_name["a.txt"])
     assert "Open terminal here" not in [a.text() for a in file_menu.actions()]
     assert "Copy path" in [a.text() for a in file_menu.actions()]
 
@@ -602,7 +602,7 @@ def test_without_a_terminal_there_is_no_entry_for_one(qtbot, tree, open_window, 
     window = open_window(tree / "src")
 
     assert not window._actions.terminal.isVisible()
-    visible = [a.text() for a in window._menu_for(None).actions() if a.isVisible()]
+    visible = [a.text() for a in window._menus.for_entry(None).actions() if a.isVisible()]
     assert "Open terminal here" not in visible
 
 
@@ -684,7 +684,7 @@ def mode_of(path):
 def preset_entries(window):
     return {
         action.text().partition("\t")[0]: action
-        for action in window._permissions_menu(window).actions()
+        for action in window._menus.permissions(window).actions()
     }
 
 
@@ -801,11 +801,11 @@ def test_permissions_need_a_selection_and_are_in_the_file_menu(qtbot, tree, open
 
     select(window, "a.txt")
     assert window._actions.permissions.isEnabled()
-    menu = window._menu_for(window._view.selected_infos()[0])
+    menu = window._menus.for_entry(window._view.selected_infos()[0])
     titles = [action.menu().title() for action in menu.actions() if action.menu()]
     assert "Permissions" in titles
     # Not in the folder's own menu
-    folder_titles = [a.menu().title() for a in window._menu_for(None).actions() if a.menu()]
+    folder_titles = [a.menu().title() for a in window._menus.for_entry(None).actions() if a.menu()]
     assert "Permissions" not in folder_titles
 
 
@@ -1538,7 +1538,7 @@ def test_a_drop_on_the_trash_trashes(qtbot, home_dir, tree, bin_, open_window, j
 def test_a_file_in_the_trash_is_not_opened(qtbot, tree, bin_, open_window):
     window = open_window(bin_)
 
-    window._on_item_activated(window._model.info(window._model.row_for_name("report.pdf")))
+    window.open_entry(window._model.info(window._model.row_for_name("report.pdf")))
 
     assert "Restore" in window.statusBar().currentMessage()
 

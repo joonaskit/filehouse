@@ -82,7 +82,7 @@ def test_activating_a_folder_enters_it(qtbot, tree):
     window = open_window(qtbot, tree / "Downloads")
     info = window._model.info(window._model.row_for_name("sub"))
 
-    window._on_item_activated(info)
+    window.open_entry(info)
     wait_loaded(qtbot, window)
 
     assert current_path(window) == str(tree / "Downloads" / "sub")
@@ -277,7 +277,7 @@ def test_folder_menu_sorts_the_list(qtbot, tree):
     os.utime(tree / "Downloads" / "report.pdf", (1_000_000, 1_000_000))
     window = open_window(qtbot, tree / "Downloads")
     menu = QMenu(window)
-    window._add_sort_and_view(menu)
+    window._menus.add_sort_and_view(menu)
     sort = submenu(menu, "Sort by")
     assert entry(sort, "Name").isChecked() and entry(sort, "Ascending").isChecked()
     assert not entry(sort, "Modified").isChecked()
@@ -294,7 +294,7 @@ def test_folder_menu_sorts_the_list(qtbot, tree):
 
     # A menu made now shows the new order, and can turn it around
     menu = QMenu(window)
-    window._add_sort_and_view(menu)
+    window._menus.add_sort_and_view(menu)
     sort = submenu(menu, "Sort by")
     assert entry(sort, "Modified").isChecked() and entry(sort, "Descending").isChecked()
     entry(sort, "Ascending").trigger()
@@ -307,7 +307,7 @@ def test_folder_menu_changes_the_view(qtbot, tree):
 
     window = open_window(qtbot, tree / "Downloads")
     menu = QMenu(window)
-    window._add_sort_and_view(menu)
+    window._menus.add_sort_and_view(menu)
 
     entry(submenu(menu, "View"), "Icons").trigger()
 

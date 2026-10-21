@@ -53,7 +53,7 @@ def names(path):
 
 
 def menu_texts(window, info):
-    return [action.text() for action in window._menu_for(info).actions()]
+    return [action.text() for action in window._menus.for_entry(info).actions()]
 
 
 def info_of(window, name):

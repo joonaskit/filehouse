@@ -1,7 +1,7 @@
 """One browser window: toolbar, sidebar, file list, operations panel and status bar."""
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QCursor, QIcon, QKeyEvent
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
@@ -17,23 +17,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from filehouse.core import archives, locations, search
+from filehouse.core import locations, search
 from filehouse.core.listing import mode_text
-from filehouse.core.operations import JobKind, permissions
+from filehouse.core.operations import JobKind
 from filehouse.integration import desktop, style
-from filehouse.qt_models.directory_model import MODIFIED, NAME, SIZE
 from filehouse.qt_models.job_model import JobModel
 from filehouse.qt_models.volumes import Volumes
 from filehouse.qt_models.workers import Background
-from filehouse.ui import clipboard, groups, menus, settings
+from filehouse.ui import clipboard, groups, settings
 from filehouse.ui.actions import Actions
+from filehouse.ui.context_menus import ContextMenus
 from filehouse.ui.details_pane import DetailsPane
 from filehouse.ui.dialogs.name import ask_name
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
 from filehouse.ui.dialogs.select import SelectDialog
 from filehouse.ui.dialogs.settings import SettingsDialog
-from filehouse.ui.file_actions import FileActions, is_archive
+from filehouse.ui.file_actions import FileActions
 from filehouse.ui.folder_view import history_step
 from filehouse.ui.job_status import JobStatus
 from filehouse.ui.operations_panel import OperationsPanel
@@ -59,12 +59,6 @@ _COPIED_MS = 2500
 NARROW_BELOW = 800
 # The least the narrow layout needs, unscaled: its toolbar side by side, a few rows
 _MINIMUM_SIZE = (460, 360)
-# What "Sort by" offers, with the order each starts in: the newest and the largest first
-_SORTS = (
-    ("Name", NAME, Qt.SortOrder.AscendingOrder),
-    ("Modified", MODIFIED, Qt.SortOrder.DescendingOrder),
-    ("Size", SIZE, Qt.SortOrder.DescendingOrder),
-)
 DETAILS, ICONS = settings.DETAILS, settings.ICONS
 
 KEEP_RUNNING, CANCEL_ALL, STAY_OPEN = range(3)
@@ -175,7 +169,7 @@ class MainWindow(QMainWindow):
             pane=lambda: self._pane,
             other_pane=self._other_pane,
             say=lambda text: self.statusBar().showMessage(text, _COPIED_MS),
-            show_error=self._show_error,
+            show_error=self.show_error,
         )
         self._recent = recent
         self._favourites = favourites
@@ -199,15 +193,13 @@ class MainWindow(QMainWindow):
 
         self._volumes = Volumes(self)
         self._volumes.removed.connect(self._on_volume_removed)
-        self._volumes.failed.connect(self._show_error)
+        self._volumes.failed.connect(self.show_error)
         # Every special folder that is set, and the ones that are not there taken out
         # once that is known
         self._sidebar = Sidebar(locations.places_as_set(), self._volumes, self._favourites)
         self._background.call(locations.places, self._sidebar.set_places)
         self._sidebar.place_activated.connect(self.navigate)
         self._sidebar.new_tab_requested.connect(lambda place: self.new_tab(place, activate=False))
-        self._sidebar.favourite_menu_requested.connect(self._show_favourite_menu)
-        self._sidebar.place_menu_requested.connect(self._show_place_menu)
         self._sidebar.files_dropped.connect(self._on_dropped_on_place)
         self._sidebar.folders_dropped.connect(self._add_dropped_folders)
         self._panel = OperationsPanel(self._jobs)
@@ -245,6 +237,11 @@ class MainWindow(QMainWindow):
         self._search_field.left.connect(self._to_the_list)
         self._search_field.editingFinished.connect(self._sync_search_field)
         self._create_actions()
+        self._menus = ContextMenus(
+            self, self._actions, lambda: self._pane, self._sidebar, self._favourites
+        )
+        self._sidebar.favourite_menu_requested.connect(self._menus.show_favourite)
+        self._sidebar.place_menu_requested.connect(self._menus.show_place)
         self._sheet_details.close_requested.connect(
             lambda: self._actions.show_details.setChecked(False)
         )
@@ -379,7 +376,7 @@ class MainWindow(QMainWindow):
                 "forget": self.remove_from_recent,
                 "clear_recent": self.clear_recent,
                 "favourite": self.toggle_favourite,
-                "permissions": self._show_permissions_menu,
+                "permissions": lambda: self._menus.show_permissions(),
                 "settings": self.open_settings,
                 "folder_menu": self._show_folder_menu,
                 "search": self.start_search,
@@ -590,10 +587,10 @@ class MainWindow(QMainWindow):
         pane.location_changed.connect(lambda _location: self._on_pane_moved(pane))
         pane.proxy.dataChanged.connect(self._update_details_soon)
         view.focused.connect(lambda: self._activate(pane))
-        view.item_activated.connect(for_this_pane(self._on_item_activated))
+        view.item_activated.connect(for_this_pane(self.open_entry))
         view.context_menu_requested.connect(for_this_pane(self._on_context_menu))
         view.dropped.connect(for_this_pane(self._on_dropped))
-        view.open_in_tab.connect(for_this_pane(self._open_in_new_tab))
+        view.open_in_tab.connect(for_this_pane(self.open_in_new_tab))
         view.history_requested.connect(for_this_pane(self._go_in_history))
         view.set_compact(self._narrow)
         if tab.active is None:
@@ -715,15 +712,15 @@ class MainWindow(QMainWindow):
             self._tab_bar.setCurrentIndex(self._tabs.index(tab))
         return tab
 
-    def _open_in_new_tab(self, info):
+    def open_in_new_tab(self, info):
         """A folder of the list, in a tab behind this one."""
         self.new_tab(locations.entry_location(self._location, info), activate=False)
 
-    def _open_in_split(self, info):
+    def open_in_split(self, info):
         """A folder of the list, in the other pane."""
-        self._open_location_in_split(locations.entry_location(self._location, info))
+        self.open_location_in_split(locations.entry_location(self._location, info))
 
-    def _open_location_in_split(self, target):
+    def open_location_in_split(self, target):
         """A folder in the other pane: the window is split first if it is not. The pane
         the choice was made in stays the active one. It is not a choice of how new
         windows open, as F3 is."""
@@ -929,7 +926,7 @@ class MainWindow(QMainWindow):
         for pane in gone:
             pane.navigate(locations.home())
         if gone:
-            self._show_error("The drive this window was showing is gone.")
+            self.show_error("The drive this window was showing is gone.")
 
     def _on_path_entered(self, text):
         """Go where was typed, once it is known what that is. Only the last path typed."""
@@ -959,7 +956,7 @@ class MainWindow(QMainWindow):
         infos = self._view.selected_infos()
         selected = len(infos)
         self._actions.update(
-            self._pane, infos, self._other_pane(), self._terminal_folder() is not None
+            self._pane, infos, self._other_pane(), self.terminal_folder() is not None
         )
         self._update_favourite_action()
         count = self._proxy.rowCount()
@@ -1209,15 +1206,15 @@ class MainWindow(QMainWindow):
     def _at_trash(self):
         return self._pane.at_trash
 
-    def _on_item_activated(self, info):
+    def open_entry(self, info):
         target = locations.entry_location(self._location, info)
         if info.is_dir:
             self.navigate(target)
         elif self._in_trash():
-            self._show_error(f"Restore “{info.display_name}” to open it.")
+            self.show_error(f"Restore “{info.display_name}” to open it.")
         else:
             self._remember_opened(target, info.content_type)
-            desktop.open_default(target, self._show_error)
+            desktop.open_default(target, self.show_error)
 
     def remove_from_recent(self):
         """Take the selected entries off the list of recent files. The files stay."""
@@ -1276,9 +1273,9 @@ class MainWindow(QMainWindow):
         )
         self._actions.favourite.setEnabled(usable)
         if usable:
-            self._actions.favourite.setText(self._favourite_text(location))
+            self._actions.favourite.setText(self.favourite_text(location))
 
-    def _favourite_text(self, location):
+    def favourite_text(self, location):
         found = self._favourites is not None and self._favourites.find(location)
         return "Remove from favourites" if found else "Add to favourites"
 
@@ -1295,7 +1292,7 @@ class MainWindow(QMainWindow):
         ):
             return None
         if not self._favourites.available:
-            self._show_error("Open Dolphin once: the favourites live in its list of places.")
+            self.show_error("Open Dolphin once: the favourites live in its list of places.")
             return None
         name = locations.display_name(location)
         found = self._favourites.find(location)
@@ -1306,7 +1303,7 @@ class MainWindow(QMainWindow):
             done = self._favourites.add(location, index=index)
             message = f"“{name}” added to the favourites"
         if not done:
-            self._show_error(f"Could not change the favourites: {name}.")
+            self.show_error(f"Could not change the favourites: {name}.")
             return None
         self.statusBar().showMessage(message, _COPIED_MS)
         return found is None
@@ -1329,55 +1326,6 @@ class MainWindow(QMainWindow):
             lambda: [location for location in dropped if locations.is_folder(location)], add
         )
 
-    def _show_place_menu(self, entry, position):
-        menu = menus.menu(self)
-        self._add_open_actions(menu, entry.location)
-        if getattr(entry, "can_eject", False):
-            menu.addSeparator()
-            menu.addAction(
-                style.icon("media-eject-symbolic", "media-eject", menu=True),
-                entry.eject_label,
-                lambda: self._sidebar.eject(entry),
-            )
-        menu.exec(position)
-
-    def _add_open_actions(self, menu, location):
-        menu.addAction(
-            style.icon("document-open-symbolic", "document-open", menu=True),
-            "Open",
-            lambda: self.navigate(location),
-        )
-        menu.addAction(
-            style.icon("tab-new-symbolic", "tab-new", menu=True),
-            "Open in new tab",
-            lambda: self.new_tab(location, activate=False),
-        )
-        if not self._narrow:
-            menu.addAction(
-                self._actions.split_view.icon(),
-                "Open in split view",
-                lambda: self._open_location_in_split(location),
-            )
-
-    def _show_favourite_menu(self, favourite, position):
-        menu = menus.menu(self)
-        self._add_open_actions(menu, favourite.location)
-        menu.addSeparator()
-        menu.addAction("Rename…", lambda: self.rename_favourite(favourite))
-        items = self._favourites.items
-        index = items.index(favourite) if favourite in items else -1
-        up = menu.addAction("Move up", lambda: self._favourites.move(favourite, -1))
-        up.setEnabled(index > 0)
-        down = menu.addAction("Move down", lambda: self._favourites.move(favourite, 1))
-        down.setEnabled(0 <= index < len(items) - 1)
-        menu.addSeparator()
-        menu.addAction(
-            style.icon("edit-delete-symbolic", "edit-delete", colour="danger", menu=True),
-            "Remove from favourites",
-            lambda: self._favourites.remove(favourite),
-        )
-        menu.exec(position)
-
     def rename_favourite(self, favourite):
         def apply(text):
             text = text.strip()
@@ -1395,9 +1343,9 @@ class MainWindow(QMainWindow):
             apply,
         )
 
-    def _open_with(self, app, target, content_type):
+    def open_with(self, app, target, content_type):
         self._remember_opened(target, content_type)
-        desktop.open_with(app, target, self._show_error)
+        desktop.open_with(app, target, self.show_error)
 
     def _remember_opened(self, target, content_type):
         """Tell the desktop's lists of recent files, unless the user would rather not."""
@@ -1411,7 +1359,7 @@ class MainWindow(QMainWindow):
             _COPIED_MS,
         )
 
-    def _set_density(self, density):
+    def set_density(self, density):
         """Sizes are set when the widgets are made, so it applies at the next start."""
         settings.set_density(density)
         self.statusBar().showMessage(
@@ -1426,258 +1374,18 @@ class MainWindow(QMainWindow):
     def _open_selected(self):
         infos = self._view.selected_infos()
         if len(infos) == 1:
-            self._on_item_activated(infos[0])
+            self.open_entry(infos[0])
 
-    def _show_error(self, message):
+    def show_error(self, message):
         self.statusBar().showMessage(message, _MESSAGE_MS)
 
     def _on_context_menu(self, info, position, above=False):
         """The menu of an entry, or of the folder for None. `above` puts the menu's
         bottom at `position` instead of its top."""
-        menu = self._menu_for(info)
+        menu = self._menus.for_entry(info)
         if above:
             position = QPoint(position.x(), position.y() - menu.sizeHint().height())
         menu.exec(position)
-
-    def _menu_for(self, info):
-        menu = menus.menu(self)
-        if self._in_trash():
-            if info is not None:
-                menu.addActions([self._actions.restore, self._actions.delete])
-                menu.addSeparator()
-                menu.addAction(self._actions.properties)
-            else:
-                menu.addAction(self._actions.empty_trash)
-                menu.addActions(self._selecting())
-                menu.addSeparator()
-                self._add_sort_and_view(menu)
-            return menu
-        if self._in_recent():
-            return self._recent_menu(menu, info)
-        if info is None:
-            # The folder's own menu
-            menu.addActions([self._actions.new_folder, self._actions.new_file])
-            menu.addSeparator()
-            menu.addAction(self._actions.undo)
-            menu.addAction(self._actions.paste)
-            menu.addActions(self._selecting())
-            menu.addSeparator()
-            self._add_sort_and_view(menu)
-            menu.addAction(self._actions.hidden)
-            menu.addAction(self._actions.private)
-            menu.addSeparator()
-            menu.addAction(self._actions.favourite)
-            menu.addActions([self._actions.copy_path, self._actions.terminal])
-            self._add_open_in_manager(menu, self._location)
-            menu.addAction(self._actions.properties)
-            return menu
-        target = locations.child(self._location, info.name)
-        folder = self._location
-        menu.addAction(
-            style.icon("document-open-symbolic", "document-open", menu=True),
-            "Open",
-            lambda: self._on_item_activated(info),
-        )
-        if info.folder:
-            # A result of a search, from a folder below this one
-            menu.addAction(
-                style.icon("folder-open-symbolic", "folder-open", menu=True),
-                "Show in folder",
-                lambda: self.show_in_folder(info),
-            )
-        if info.is_dir:
-            folder = target
-            menu.addAction(
-                style.icon("tab-new-symbolic", "tab-new", menu=True),
-                "Open in new tab",
-                lambda: self._open_in_new_tab(info),
-            )
-            if not self._narrow:
-                menu.addAction(
-                    self._actions.split_view.icon(),
-                    "Open in split view",
-                    lambda: self._open_in_split(info),
-                )
-        else:
-            self._add_open_with(menu, info, target)
-        self._add_open_in_manager(menu, folder)
-        menu.addSeparator()
-        if not info.is_dir:
-            menu.addAction(self._actions.preview)
-        menu.addActions([self._actions.cut, self._actions.copy, self._actions.paste])
-        menu.addSeparator()
-        menu.addActions(
-            [
-                self._actions.rename,
-                self._actions.duplicate,
-                self._actions.link,
-                self._actions.move_to,
-            ]
-        )
-        if is_archive(info) and not self._in_trash():
-            menu.addActions([self._actions.extract_here, self._actions.extract_to])
-        if archives.available() and not self._read_only():
-            menu.addAction(self._actions.compress)
-        if self.is_split:
-            menu.addActions([self._actions.copy_other, self._actions.move_other])
-        menu.addActions([self._actions.trash, self._actions.delete])
-        menu.addSeparator()
-        menu.addAction(self._select_type_action(menu, info))
-        menu.addAction(self._actions.copy_path)
-        if info.is_dir and self._favourites is not None:
-            menu.addAction(
-                self._actions.favourite.icon(),
-                self._favourite_text(target),
-                lambda: self.toggle_favourite(target),
-            )
-        if info.is_dir and self._terminal_folder(folder) is not None:
-            # In the folder the menu is for, not the one it is listed in
-            menu.addAction(
-                self._actions.terminal.icon(),
-                "Open terminal here",
-                lambda: self.open_terminal(folder),
-            )
-        menu.addSeparator()
-        menu.addMenu(self._permissions_menu(menu))
-        menu.addAction(self._actions.properties)
-        return menu
-
-    def _recent_menu(self, menu, info):
-        """What a file of the recent files can do: be opened, found, copied or looked at,
-        and be taken off the list."""
-        if info is None:
-            menu.addActions(self._selecting())
-            menu.addSeparator()
-            self._add_sort_and_view(menu)
-            menu.addAction(self._actions.private)
-            menu.addSeparator()
-            menu.addAction(self._actions.clear_recent)
-            return menu
-        target = locations.entry_location(self._location, info)
-        menu.addAction(
-            style.icon("document-open-symbolic", "document-open", menu=True),
-            "Open",
-            lambda: self._on_item_activated(info),
-        )
-        if not info.is_dir:
-            self._add_open_with(menu, info, target)
-        menu.addAction(
-            style.icon("folder-open-symbolic", "folder-open", menu=True),
-            "Show in folder",
-            lambda: self.show_in_folder(info),
-        )
-        menu.addSeparator()
-        if not info.is_dir:
-            menu.addAction(self._actions.preview)
-        menu.addActions([self._actions.copy, self._actions.copy_path])
-        menu.addAction(self._select_type_action(menu, info))
-        menu.addSeparator()
-        menu.addAction(self._actions.forget)
-        menu.addAction(self._actions.properties)
-        return menu
-
-    def _selecting(self):
-        """The folder menu's entries for what is selected."""
-        return [self._actions.select_all, self._actions.select_matching, self._actions.invert]
-
-    def _select_type_action(self, menu, info):
-        item = QAction(self._actions.select_all.icon(), "Select all of this type", menu)
-        item.triggered.connect(lambda: self.select_same_type(info))
-        return item
-
-    def _add_open_with(self, menu, info, target):
-        apps = desktop.apps_for_type(info.content_type)
-        if not apps:
-            return
-        open_with = menus.menu(menu, "Open with")
-        open_with.setIcon(style.icon("view-grid-symbolic", "view-grid", menu=True))
-        menu.addMenu(open_with)
-        for app in apps:
-            open_with.addAction(
-                QIcon.fromTheme(app.icon) if app.icon else QIcon(),
-                app.name,
-                lambda app=app: self._open_with(app, target, info.content_type),
-            )
-
-    def _permissions_menu(self, parent):
-        """The presets, for the selection: each with the mode it gives, and a tick
-        on the one the selection has already."""
-        menu = menus.menu(parent, "Permissions")
-        menu.setIcon(self._actions.permissions.icon())
-        infos = self._view.selected_infos()
-        kinds = {info.is_dir for info in infos}
-        for preset in permissions.PRESETS:
-            modes = {preset.mode_for(is_dir) for is_dir in kinds}
-            text = preset.label
-            if len(modes) == 1 and None not in modes:
-                # Files and folders together get different modes: then the name says enough
-                text += f"\t{next(iter(modes)):o}"
-            item = menu.addAction(text, lambda preset=preset: self.set_permissions(preset))
-            # Nothing to do for a preset that leaves every selected item alone
-            item.setEnabled(modes != {None})
-            item.setCheckable(True)
-            item.setChecked(
-                bool(infos)
-                and all(
-                    info.mode is not None and (info.mode & 0o777) == preset.mode_for(info.is_dir)
-                    for info in infos
-                )
-            )
-        return menu
-
-    def _show_permissions_menu(self):
-        if not self._view.selected_infos() or self._read_only():
-            return
-        self._permissions_menu(self).exec(QCursor.pos())
-
-    def _add_open_in_manager(self, menu, folder):
-        manager = desktop.file_manager()
-        if manager is not None:
-            menu.addAction(
-                style.icon("folder-open-symbolic", "folder-open", menu=True),
-                f"Open folder in {manager.name}",
-                lambda: desktop.open_with(manager, folder, self._show_error),
-            )
-
-    def _add_sort_and_view(self, menu):
-        """The folder menu's entries for how the list is shown."""
-        column, order = self._view.sort_column(), self._view.sort_order()
-        sort = menus.menu(menu, "Sort by")
-        sort.setIcon(style.icon("view-sort-symbolic", "view-sort", menu=True))
-        for text, sorts_by, first_order in _SORTS:
-            item = sort.addAction(
-                text, lambda by=sorts_by, first=first_order: self._view.sort(by, first)
-            )
-            item.setCheckable(True)
-            item.setChecked(sorts_by == column)
-        sort.addSeparator()
-        for text, way in (
-            ("Ascending", Qt.SortOrder.AscendingOrder),
-            ("Descending", Qt.SortOrder.DescendingOrder),
-        ):
-            item = sort.addAction(text, lambda way=way: self._view.sort(column, way))
-            item.setCheckable(True)
-            item.setChecked(way == order)
-        menu.addMenu(sort)
-        view = menus.menu(menu, "View")
-        view.setIcon(style.icon("view-grid-symbolic", "view-grid", menu=True))
-        view.addActions([self._actions.details_mode, self._actions.icons_mode])
-        if settings.per_folder():
-            # The view and the sort order that were chosen in this folder, given up
-            default = view.addAction("Use the default here", self._pane.use_default_view)
-            default.setEnabled(self._pane.has_own_view)
-        view.addSeparator()
-        view.addAction(self._actions.split_view)
-        view.addAction(self._actions.pane_toggle)
-        view.addAction(self._actions.new_tab)
-        density = menus.menu(view, "Density")
-        current = settings.density()
-        for key, text in (("comfortable", "Comfortable"), ("compact", "Compact")):
-            item = density.addAction(text, lambda key=key: self._set_density(key))
-            item.setCheckable(True)
-            item.setChecked(key == current)
-        view.addMenu(density)
-        menu.addMenu(view)
 
     # File operations
 
@@ -1777,7 +1485,7 @@ class MainWindow(QMainWindow):
         what = "Path" if len(selected) == 1 else f"{len(selected)} paths"
         self.statusBar().showMessage(f"{what} copied", _COPIED_MS)
 
-    def _terminal_folder(self, folder=None):
+    def terminal_folder(self, folder=None):
         """The path a terminal would start in, or None when it can't: no terminal
         installed, or a folder that is not on this computer's file systems."""
         folder = folder or self._location
@@ -1786,9 +1494,9 @@ class MainWindow(QMainWindow):
         return locations.local_path(folder)
 
     def open_terminal(self, folder=None):
-        path = self._terminal_folder(folder)
+        path = self.terminal_folder(folder)
         if path is not None:
-            desktop.open_terminal(path, self._show_error)
+            desktop.open_terminal(path, self.show_error)
 
     def move_selected(self):
         """Move the selection to a folder that is picked in a dialog."""

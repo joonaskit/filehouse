@@ -45,7 +45,7 @@ def info(window, name):
 
 
 def test_an_opened_file_is_told_with_its_type(window, opened):
-    window._on_item_activated(info(window, "report.pdf"))
+    window.open_entry(info(window, "report.pdf"))
 
     assert window.recent.added == [("report.pdf", "application/pdf")]
     assert [target.get_basename() for target in opened] == ["report.pdf"]
@@ -56,14 +56,14 @@ def test_open_with_tells_it_too(window, opened):
         name = "Viewer"
 
     target = gfile(window._location.get_path() + "/report.pdf")
-    window._open_with(App(), target, "application/pdf")
+    window.open_with(App(), target, "application/pdf")
 
     assert window.recent.added == [("report.pdf", "application/pdf")]
     assert [t.get_basename() for t in opened] == ["report.pdf"]
 
 
 def test_a_folder_that_is_opened_is_not_told(window, opened):
-    window._on_item_activated(info(window, "folder"))
+    window.open_entry(info(window, "folder"))
 
     assert window.recent.added == []
     assert opened == []
@@ -75,7 +75,7 @@ def test_a_window_without_a_recorder_still_opens_files(qtbot, tmp_path, jobs, op
     qtbot.addWidget(window)
     qtbot.waitUntil(lambda: not window._model.loading, timeout=TIMEOUT)
 
-    window._on_item_activated(window._model.info(window._model.row_for_name("report.pdf")))
+    window.open_entry(window._model.info(window._model.row_for_name("report.pdf")))
 
     assert [target.get_basename() for target in opened] == ["report.pdf"]
 
@@ -83,7 +83,7 @@ def test_a_window_without_a_recorder_still_opens_files(qtbot, tmp_path, jobs, op
 def test_the_switch_is_in_the_menu_of_the_folder_and_is_global(qtbot, window):
     assert settings.remember_opened()
     assert not window._actions.private.isChecked()
-    menu = window._menu_for(None)
+    menu = window._menus.for_entry(None)
     assert window._actions.private in menu.actions()
 
     window._actions.private.trigger()
@@ -115,11 +115,11 @@ def test_the_switch_keeps_the_file_out_of_the_lists(qtbot, tmp_path, jobs, opene
     recent._plasma = lambda _app: True
 
     window._actions.private.trigger()
-    window._on_item_activated(report)
+    window.open_entry(report)
     assert written == []
 
     window._actions.private.trigger()
-    window._on_item_activated(report)
+    window.open_entry(report)
     assert len(written) == 1
 
 
