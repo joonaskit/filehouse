@@ -1078,6 +1078,33 @@ def test_a_question_opens_the_panel_and_a_closed_panel_stays_closed(
     assert not window._panel.isVisible()
 
 
+def test_two_unanswered_questions_hold_up_no_other_job(
+    qtbot, tree, open_window, jobs, wait_final, wait_question, home_dir
+):
+    # Two copies that ask what to do about a file that is there, and nobody answers
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (tree / "dst" / name).write_text("old")
+    window = open_window(tree / "dst")
+    clipboard.put(uris(tree / "src" / "a.txt"), cut=False)
+    first = window.paste()
+    wait_question(jobs)
+    clipboard.put(uris(tree / "src" / "b.txt"), cut=False)
+    second = window.paste()
+    qtbot.waitUntil(lambda: second.state is JobState.WAITING, timeout=TIMEOUT)
+
+    # A move to the trash still runs, and does not show "Waiting to start"
+    select(window, "c.txt")
+    trashed = wait_final(jobs, started_by(window, window.trash_selected))
+    assert trashed.state is JobState.DONE
+    assert not (tree / "dst" / "c.txt").exists()
+    assert first.state is JobState.WAITING and second.state is JobState.WAITING
+
+    for job in (first, second):
+        wait_question(jobs).button_for(Answer.SKIP).click()
+        wait_final(jobs, job)
+    assert (tree / "dst" / "a.txt").read_text() == "old"
+
+
 @needs_permissions
 def test_a_failure_opens_the_panel_in_every_window(
     qtbot, tree, open_window, jobs, wait_final, wait_question
