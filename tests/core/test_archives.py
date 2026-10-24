@@ -7,12 +7,15 @@ import os
 import stat
 import tarfile
 import zipfile
+from pathlib import Path
 
 import pytest
-from helpers import Recorder, gfile, leftovers, make_tree, read_tree
+from gi.repository import Gio, GLib
+from helpers import Recorder, gfile, leftovers, make_tree, not_supported, read_tree
 
 from filehouse.core import archives
 from filehouse.core.operations import Answer, JobState, NameTaken, Password, Reply
+from filehouse.core.operations import archive as archive_job
 from filehouse.core.operations.archive import CompressJob, ExtractJob, _umask
 
 pytestmark = pytest.mark.skipif(not archives.available(), reason="libarchive is not installed")
@@ -853,3 +856,165 @@ def test_what_a_new_archive_is_called(names, folder, expected):
 )
 def test_what_the_folder_of_an_archive_is_called(name, expected):
     assert archives.folder_name(name) == expected
+
+
+# Where the destination cannot rename (MTP, some WebDAV): what was made is copied into place
+
+
+@pytest.fixture
+def no_rename(monkeypatch):
+    monkeypatch.setattr(archive_job, "_move", not_supported)
+
+
+def failing_copy(monkeypatch, name, code):
+    """Copying `name` into place fails with `code`; everything else is copied."""
+    real = archive_job._copy_new
+
+    def copy_new(source, target):
+        if target.get_basename() == name:
+            raise GLib.Error.new_literal(Gio.io_error_quark(), "it failed", code)
+        return real(source, target)
+
+    monkeypatch.setattr(archive_job, "_copy_new", copy_new)
+
+
+def test_an_archive_with_one_folder_is_copied_out_where_nothing_renames(tmp_path, no_rename):
+    archive = make_zip(
+        tmp_path / "pack.zip", {"top/a.txt": "aaa", "top/sub/b.txt": "bb", "top/sub/c.txt": "c"}
+    )
+    dst = make_tree(tmp_path / "dst", {"mine.txt": "keep me"})
+
+    job = extract(archive, dst)
+
+    assert job.state is JobState.DONE
+    assert job.summary == "Extracted 3 files"
+    assert read_tree(dst) == {
+        "mine.txt": "keep me",
+        "top": {"a.txt": "aaa", "sub": {"b.txt": "bb", "c.txt": "c"}},
+    }
+    assert job.result.get_path() == str(dst / "top")
+    assert not leftovers(tmp_path)
+
+
+def test_an_archive_of_many_items_is_copied_into_its_folder_where_nothing_renames(
+    tmp_path, no_rename
+):
+    archive = make_tar(tmp_path / "photos.tar.gz", [("1.txt", "one"), ("2.txt", "two")])
+    dst = make_tree(tmp_path / "dst", {})
+
+    job = extract(archive, dst)
+
+    assert job.state is JobState.DONE
+    assert read_tree(dst) == {"photos": {"1.txt": "one", "2.txt": "two"}}
+    assert stat.S_IMODE((dst / "photos").stat().st_mode) == 0o777 & ~_umask()
+    assert not leftovers(tmp_path)
+
+
+def test_a_file_from_an_archive_is_copied_out_where_nothing_renames(tmp_path, no_rename):
+    archive = make_zip(tmp_path / "pack.zip", {"report.txt": "text"})
+    dst = make_tree(tmp_path / "dst", {})
+
+    job = extract(archive, dst)
+
+    assert job.state is JobState.DONE
+    assert read_tree(dst) == {"report.txt": "text"}
+    assert not leftovers(tmp_path)
+
+
+def test_a_taken_name_is_not_copied_onto_where_nothing_renames(tmp_path, no_rename):
+    archive = make_tar(tmp_path / "pack.tar.gz", [("1.txt", "one"), ("2.txt", "two")])
+    dst = make_tree(tmp_path / "dst", {"pack": {"mine.txt": "keep me"}})
+
+    job = extract(archive, dst, answering(Answer.KEEP_BOTH))
+
+    assert job.state is JobState.DONE
+    assert read_tree(dst) == {
+        "pack": {"mine.txt": "keep me"},
+        "pack (2)": {"1.txt": "one", "2.txt": "two"},
+    }
+    assert not leftovers(tmp_path)
+
+
+def test_what_cannot_be_copied_out_is_left_out_and_named(tmp_path, no_rename, monkeypatch):
+    archive = make_zip(
+        tmp_path / "pack.zip", {"top/a.txt": "aaa", "top/sub/b.txt": "bb", "top/sub/c.txt": "c"}
+    )
+    dst = make_tree(tmp_path / "dst", {})
+    failing_copy(monkeypatch, "b.txt", Gio.IOErrorEnum.PERMISSION_DENIED)
+
+    job = extract(archive, dst)
+
+    assert job.state is JobState.FAILED
+    assert job.summary == "Extracted 2 of 3 files, 1 left out"
+    assert job.error.path == str(dst / "top/sub/b.txt")
+    assert read_tree(dst) == {"top": {"a.txt": "aaa", "sub": {"c.txt": "c"}}}
+    assert not leftovers(tmp_path)
+
+
+def test_no_space_stops_copying_out_and_keeps_what_was_copied(tmp_path, no_rename, monkeypatch):
+    archive = make_zip(tmp_path / "pack.zip", {"top/a.txt": "aaa", "top/z.txt": "zzz"})
+    dst = make_tree(tmp_path / "dst", {})
+    failing_copy(monkeypatch, "z.txt", Gio.IOErrorEnum.NO_SPACE)
+
+    job = extract(archive, dst)
+
+    assert job.state is JobState.FAILED
+    assert job.error.path == str(dst / "top/z.txt")
+    assert read_tree(dst) == {"top": {"a.txt": "aaa"}}
+    assert job.result.get_path() == str(dst / "top")
+    assert not leftovers(tmp_path)
+
+
+def test_a_new_archive_is_copied_into_place_where_nothing_renames(tmp_path, no_rename):
+    src = make_tree(tmp_path / "work", {"a.txt": "aaa"})
+
+    job = compress([src / "a.txt"], src, "pack.zip")
+
+    assert job.state is JobState.DONE
+    assert job.result.get_path() == str(src / "pack.zip")
+    assert unpacked(src / "pack.zip", tmp_path / "check") == {"a.txt": "aaa"}
+    assert not leftovers(tmp_path)
+
+
+def test_an_archive_name_taken_at_the_last_moment_asks_where_nothing_renames(tmp_path, no_rename):
+    src = make_tree(tmp_path / "work", {"a.txt": "aaa"})
+
+    def appear(job):
+        if job.progress.files_done == 1 and not (src / "pack.zip").exists():
+            (src / "pack.zip").write_text("somebody else's")
+
+    job = compress([src / "a.txt"], src, "pack.zip", "zip", answering(Answer.KEEP_BOTH), appear)
+
+    assert job.state is JobState.DONE
+    assert (src / "pack.zip").read_text() == "somebody else's"
+    assert zipfile.is_zipfile(src / "pack (2).zip")
+    assert not leftovers(tmp_path)
+
+
+def test_an_archive_that_cannot_be_copied_into_place_leaves_nothing(
+    tmp_path, no_rename, monkeypatch
+):
+    src = make_tree(tmp_path / "work", {"a.txt": "aaa"})
+    failing_copy(monkeypatch, "pack.zip", Gio.IOErrorEnum.NO_SPACE)
+
+    job = compress([src / "a.txt"], src, "pack.zip")
+
+    assert job.state is JobState.FAILED
+    assert job.error.path == str(src / "pack.zip")
+    assert read_tree(src) == {"a.txt": "aaa"}
+    assert not leftovers(tmp_path)
+
+
+def test_a_partial_copy_into_place_is_removed(tmp_path, monkeypatch):
+    src = make_tree(tmp_path / "src", {"a.txt": "aaa"})
+    target = gfile(tmp_path / "copy.txt")
+
+    def half_copy(self, dest, *_args):
+        Path(dest.get_path()).write_text("a")
+        not_supported()
+
+    monkeypatch.setattr(Gio.File, "copy", half_copy, raising=False)
+
+    with pytest.raises(GLib.Error):
+        archive_job._copy_new(gfile(src / "a.txt"), target)
+    assert not (tmp_path / "copy.txt").exists()

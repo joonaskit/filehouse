@@ -10,7 +10,8 @@ What keeps them safe:
   folder in the destination, and then makes one new item of it (the archive's only
   top-level item, or the folder named after the archive when it has several); an
   archive is written under a temporary name and put in place when it is complete. A
-  name that is taken asks.
+  name that is taken asks. Where the destination cannot rename, what was made is
+  copied into place instead, never onto anything.
 - A path from an archive is used only when `archives.safe_parts` accepts it, and every
   folder on the way to a file is opened without following links, so a link from the
   archive cannot be written through.
@@ -37,6 +38,7 @@ _BLOCK = 64 * 1024
 _FOLDER_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _NEW_FILE_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 _PLACE = Gio.FileCopyFlags.NOFOLLOW_SYMLINKS | Gio.FileCopyFlags.NO_FALLBACK_FOR_MOVE
+_COPY = Gio.FileCopyFlags.NOFOLLOW_SYMLINKS | Gio.FileCopyFlags.ALL_METADATA
 _TEMP_PREFIX, _TEMP_SUFFIX = ".filehouse-", ".part"
 
 _NOT_A_FOLDER = "its place is a link or a file, not a folder, so it was not extracted"
@@ -55,6 +57,7 @@ _REASONS = {
 }
 # Nothing more can be written after these
 _FATAL = (errno.ENOSPC, errno.EDQUOT, errno.EROFS)
+_FATAL_GIO = (Gio.IOErrorEnum.NO_SPACE, Gio.IOErrorEnum.READ_ONLY)
 
 
 def _reason(error):
@@ -435,9 +438,8 @@ class ExtractJob(_ArchiveJob):
                 if self._wrap:
                     os.fchmod(work, 0o777 & ~self._umask)
                 self.result = self._place(source, name, is_dir, ask=stopped is None)
-                if not self._wrap:
-                    # Empty now: what it held is in place
-                    _discard_folder(base, temp, work)
+                # What it held is in place: gone if it was moved, a copy left if copied
+                _discard_folder(base, temp, work)
         except BaseException:
             # A taken name nobody chose a new one for: what was extracted is not given
             _discard_folder(base, temp, work)
@@ -464,12 +466,20 @@ class ExtractJob(_ArchiveJob):
         """Move what was made to `name` in the destination. Never onto something that is
         there: a taken name asks, or with `ask` false, takes a free one."""
         source = Gio.File.new_for_path(path)
+        moves = True
         while True:
             target = self.destination.get_child(name)
             try:
                 # Not cancellable: what is complete is given, not thrown away
-                source.move(target, _PLACE, None, None, None)
+                if moves:
+                    _move(source, target)
+                else:
+                    self._copy_made(source, target, is_dir)
             except GLib.Error as error:
+                if moves and has_code(error, Gio.IOErrorEnum.NOT_SUPPORTED):
+                    # The destination cannot rename (MTP, some WebDAV): copied instead
+                    moves = False
+                    continue
                 if not has_code(error, Gio.IOErrorEnum.EXISTS):
                     raise OperationError.from_glib(error, target, "extract") from error
                 if ask:
@@ -480,6 +490,54 @@ class ExtractJob(_ArchiveJob):
                 continue
             self._root = name
             return target
+
+    def _copy_made(self, source, target, is_dir):
+        """Copy what was made to the new `target`, where it cannot be moved. Raises EXISTS
+        only for `target` itself. Inside it, what cannot be copied is named and left out,
+        and the files counted are the ones copied; no space left stops it."""
+        if not is_dir:
+            _copy_new(source, target)
+            return
+        target.make_directory(None)
+        self._root, self.result = target.get_basename(), target
+        files, folders, pending = 0, [], [(source, target)]
+        try:
+            while pending:
+                folder, copy = pending.pop()
+                folders.append((folder, copy))
+                try:
+                    children = list(
+                        folder.enumerate_children(
+                            "standard::name,standard::type",
+                            Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+                            None,
+                        )
+                    )
+                except GLib.Error as error:
+                    self.errors.append(OperationError.from_glib(error, copy, "extract"))
+                    continue
+                for info in children:
+                    child, made = folder.get_child(info.get_name()), copy.get_child(info.get_name())
+                    try:
+                        if info.get_file_type() == Gio.FileType.DIRECTORY:
+                            made.make_directory(None)
+                            pending.append((child, made))
+                        else:
+                            _copy_new(child, made)
+                            files += 1
+                    except GLib.Error as error:
+                        failure = OperationError.from_glib(error, made, "extract")
+                        if any(has_code(error, code) for code in _FATAL_GIO):
+                            raise failure from error
+                        self.errors.append(failure)
+        finally:
+            self._files_done = files
+            # Deepest first, after what is in them, as when they were extracted
+            for folder, copy in reversed(folders):
+                try:
+                    folder.copy_attributes(copy, _COPY, None)
+                except GLib.Error:
+                    pass
 
     def _shown(self, parts):
         """The path of what an entry became, for messages."""
@@ -547,12 +605,10 @@ class CompressJob(_ArchiveJob):
                 raise OperationError(temp, "compress", "was replaced while it was being written")
             self.result = self._place(temp, name)
         except archives.ArchiveProblem as problem:
-            _discard(temp, descriptor)
             raise OperationError(os.path.join(folder, name), "compress", str(problem)) from problem
-        except BaseException:
-            _discard(temp, descriptor)
-            raise
         finally:
+            # Gone once moved into place; left after a copy, a failure or a cancel
+            _discard(temp, descriptor)
             os.close(descriptor)
         self._complete = True
 
@@ -664,17 +720,43 @@ class CompressJob(_ArchiveJob):
     def _place(self, temp, name):
         """Give the finished archive its name. Never onto something that is there."""
         source = Gio.File.new_for_path(temp)
+        moves = True
         while True:
             target = self.destination.get_child(name)
             try:
                 # Not cancellable: a complete archive is put in place, not thrown away
-                source.move(target, _PLACE, None, None, None)
+                if moves:
+                    _move(source, target)
+                else:
+                    _copy_new(source, target)
             except GLib.Error as error:
+                if moves and has_code(error, Gio.IOErrorEnum.NOT_SUPPORTED):
+                    # The destination cannot rename (MTP, some WebDAV): copied instead
+                    moves = False
+                    continue
                 if not has_code(error, Gio.IOErrorEnum.EXISTS):
                     raise OperationError.from_glib(error, target, "compress") from error
                 name = self._free_name(name, False, locations.file_type(target))
                 continue
             return target
+
+
+def _move(source, target):
+    source.move(target, _PLACE, None, None, None)
+
+
+def _copy_new(source, target):
+    """Copy the file or link `source` to `target`, which must not exist. A partial copy is
+    removed: nothing else could have made it."""
+    try:
+        source.copy(target, _COPY, None, None, None)
+    except GLib.Error as error:
+        if not has_code(error, Gio.IOErrorEnum.EXISTS):
+            try:
+                target.delete(None)
+            except GLib.Error:
+                pass
+        raise
 
 
 def _discard_folder(base, name, descriptor):

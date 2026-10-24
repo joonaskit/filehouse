@@ -29,7 +29,15 @@ def other_device(request, tmp_path, monkeypatch):
     where there is one, and always a folder where renames are made to fail the same way."""
     if request.param == "real":
         return request.getfixturevalue("real_other_device")
-    monkeypatch.setattr(copy, "_rename_item", not_supported)
+    real_rename = copy._rename_item
+
+    def rename(source, dest, flags, cancellable):
+        # Only the move of an item across: the temporary file is renamed beside its destination
+        if source.get_basename().startswith(copy._TEMP_PREFIX):
+            return real_rename(source, dest, flags, cancellable)
+        return not_supported()
+
+    monkeypatch.setattr(copy, "_rename_item", rename)
     path = tmp_path / "other"
     path.mkdir()
     return path

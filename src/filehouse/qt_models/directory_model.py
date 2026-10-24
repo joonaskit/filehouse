@@ -265,6 +265,10 @@ class DirectoryModel(QAbstractTableModel):
             return
         new = []
         for info in batch:
+            if info.name in self._removed_at:
+                # Listed, then deleted or renamed before the batch came. Should it come
+                # back, its own event adds it again
+                continue
             if info.name in self._rows:
                 self._replace(info)
             else:

@@ -19,6 +19,9 @@ _NOFOLLOW = Gio.FileCopyFlags.NOFOLLOW_SYMLINKS
 _RENAME = _NOFOLLOW | Gio.FileCopyFlags.NO_FALLBACK_FOR_MOVE
 _COPY = _NOFOLLOW | Gio.FileCopyFlags.ALL_METADATA
 
+# Folders (by URI) found not to rename, so their files are copied under the real name
+_CANNOT_RENAME = set()
+
 _TEMP_PREFIX = ".filehouse-"
 _TEMP_SUFFIX = ".part"
 
@@ -69,15 +72,24 @@ def transfer_file(step, move, cancellable, on_bytes):
                     raise
                 # Another file system: copy, and remove the source once the copy is complete
 
-        temp = _copy_to_temp(source, dest.get_parent(), cancellable, on_bytes)
-        try:
-            # Not cancellable: a complete copy is put in place, not thrown away
-            temp.move(dest, flags, None, None, None)
-        except GLib.Error as error:
-            _discard(temp)
-            if has_code(error, Gio.IOErrorEnum.EXISTS):
-                raise _exists(dest, error) from None
-            raise
+        folder = dest.get_parent()
+        if folder.get_uri() in _CANNOT_RENAME:
+            _copy_direct(step, cancellable, on_bytes)
+        else:
+            temp = _copy_to_temp(source, folder, cancellable, on_bytes)
+            try:
+                # Not cancellable: a complete copy is put in place, not thrown away
+                _rename_item(temp, dest, flags, None)
+            except GLib.Error as error:
+                _discard(temp)
+                if has_code(error, Gio.IOErrorEnum.EXISTS):
+                    raise _exists(dest, error) from None
+                if not has_code(error, Gio.IOErrorEnum.NOT_SUPPORTED):
+                    raise
+                # This folder cannot rename (MTP, some WebDAV): write under the real name,
+                # here and for the rest of the folder, without the detour
+                _CANNOT_RENAME.add(folder.get_uri())
+                _copy_direct(step, cancellable, on_bytes)
         step.copied = True
     if move:
         source.delete(None)
@@ -162,6 +174,25 @@ def _copy_to_temp(source, folder, cancellable, on_bytes):
             _discard(temp)
             raise
         return temp
+
+
+def _copy_direct(step, cancellable, on_bytes):
+    """Copy under the real name, where a rename into place is not possible. A partial file
+    is removed on failure or cancel only if the copy was what made it: not when replacing."""
+
+    def progress(current, _total, *_data):
+        on_bytes(current)
+
+    dest = step.dest
+    flags = (_COPY | Gio.FileCopyFlags.OVERWRITE) if step.overwrite else _COPY
+    try:
+        _gio_copy(step.source, dest, flags, cancellable, progress)
+    except GLib.Error as error:
+        if has_code(error, Gio.IOErrorEnum.EXISTS):
+            raise _exists(dest, error) from None
+        if not step.overwrite:
+            _discard(dest)
+        raise
 
 
 def _discard(temp):
