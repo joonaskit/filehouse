@@ -7,7 +7,7 @@ from gi.repository import Gio
 from PySide6.QtCore import Qt
 from ui_helpers import shared_threads_held
 
-from filehouse.core.listing import natural_key
+from filehouse.core.listing import ATTRIBUTES, info_from_gio, natural_key
 from filehouse.qt_models.directory_model import (
     MODIFIED,
     NAME,
@@ -285,6 +285,57 @@ def test_proxy_sorts_by_permissions(qtbot, model, tmp_path):
 def deleted(model, folder, name):
     """What the folder's monitor says when `name` is deleted there."""
     model._on_changed(None, folder.get_child(name), None, Gio.FileMonitorEvent.DELETED)
+
+
+def listed(path):
+    """The entry the listing would give for `path`, as it is now."""
+    file = Gio.File.new_for_path(str(path))
+    return info_from_gio(file.query_info(ATTRIBUTES, Gio.FileQueryInfoFlags.NONE, None))
+
+
+def unmonitored(model):
+    """Only the events a test delivers reach the model: none from the folder itself."""
+    model._monitor.disconnect(model._monitor_handler)
+    model._monitor.cancel()
+    model._monitor = None
+
+
+@pytest.mark.parametrize("event", ["deleted", "renamed"])
+def test_a_file_gone_before_its_batch_came_is_not_listed(qtbot, model, tmp_path, event):
+    load(qtbot, model, tmp_path)
+    unmonitored(model)
+    folder = Gio.File.new_for_path(str(tmp_path))
+    (tmp_path / "foo.part").write_text("x")
+    # Listed, and held in a batch the model has not had yet
+    batch = [listed(tmp_path / "foo.part")]
+    if event == "deleted":
+        (tmp_path / "foo.part").unlink()
+        deleted(model, folder, "foo.part")
+    else:
+        (tmp_path / "foo.part").rename(tmp_path / "foo")
+        renamed = Gio.FileMonitorEvent.RENAMED
+        model._on_changed(None, folder.get_child("foo.part"), folder.get_child("foo"), renamed)
+
+    model._on_batch(model._generation, batch)
+
+    assert names(model) == []
+    if event == "renamed":
+        # Its new name is asked about, and listed
+        qtbot.waitUntil(lambda: names(model) == ["foo"], timeout=5000)
+
+
+def test_a_file_that_comes_back_after_going_is_listed(qtbot, model, tmp_path):
+    load(qtbot, model, tmp_path)
+    unmonitored(model)
+    folder = Gio.File.new_for_path(str(tmp_path))
+    deleted(model, folder, "foo.txt")
+    (tmp_path / "foo.txt").write_text("back")
+    batch = [listed(tmp_path / "foo.txt")]
+
+    model._on_changed(None, folder.get_child("foo.txt"), None, Gio.FileMonitorEvent.CREATED)
+    model._on_batch(model._generation, batch)
+
+    qtbot.waitUntil(lambda: names(model) == ["foo.txt"], timeout=5000)
 
 
 def test_rows_are_found_by_name_after_any_removals(qtbot, model, tmp_path):
