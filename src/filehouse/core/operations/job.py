@@ -140,6 +140,11 @@ class Job:
             ]
         self._steps = []
         self._bytes_finished = 0
+        # The steps that are in the totals, which change by the difference a step makes
+        # instead of being counted again from all of the steps
+        self._counted = set()
+        self._files_done = 0
+        self._bytes_total = 0
         self._conflict_default = None
         if kind is JobKind.DUPLICATE:
             self._items = [
@@ -271,7 +276,9 @@ class Job:
         for source, folder, name in self._items:
             self._check_cancelled()
             self._steps += self._plan_item(source, folder, name)
-        self._recount(planned=True)
+        for step in self._steps:
+            self._include(step)
+        self._publish(planned=True)
         self._set_state(JobState.RUNNING)
 
         # Answer what planning found before the long part starts
@@ -293,12 +300,17 @@ class Job:
             expansion = self._attempt(step, self._execute)
             if expansion is not None:
                 self._steps[index : index + 1] = expansion
-                self._recount()
+                self._exclude(step)
+                for new in expansion:
+                    self._include(new)
+                self._publish()
                 continue
             if not step.failed and not step.left_out:
                 step.done = True
                 self._bytes_finished += step.size
-                self._recount()
+                if step in self._counted:
+                    self._files_done += 1
+                self._publish()
             index += 1
 
     def _find_trashed(self):
@@ -482,7 +494,8 @@ class Job:
             step.fresh = True
         elif reply.answer is Answer.SKIP:
             step.left_out = True
-            self._recount()
+            self._exclude_below(step)
+            self._publish()
         else:
             self._cancel_from_answer()
         step.existing = None
@@ -512,7 +525,8 @@ class Job:
             return plan.plan_delete(step.source, self.cancellable)
         if reply.answer is Answer.SKIP:
             step.left_out = True
-            self._recount()
+            self._exclude_below(step)
+            self._publish()
             return None
         self._cancel_from_answer()
 
@@ -555,16 +569,36 @@ class Job:
 
     # Reporting
 
-    def _counted(self):
+    def _counting(self):
+        """The steps in the totals, from all of the steps: for the end, not for each step."""
         return [step for step in self._steps if step.counted and not step.excluded()]
 
-    def _recount(self, planned=None):
-        counted = self._counted()
+    def _include(self, step):
+        if step.counted and step not in self._counted and not step.excluded():
+            self._counted.add(step)
+            self._bytes_total += step.size
+            self._files_done += step.done
+
+    def _exclude(self, step):
+        if step in self._counted:
+            self._counted.remove(step)
+            self._bytes_total -= step.size
+            self._files_done -= step.done
+
+    def _exclude_below(self, step):
+        """Take a step and all that is below it out of the totals."""
+        pending = [step]
+        while pending:
+            step = pending.pop()
+            self._exclude(step)
+            pending.extend(step.children)
+
+    def _publish(self, planned=None):
         self._set_progress(
-            files_done=sum(step.done for step in counted),
-            files_total=len(counted),
+            files_done=self._files_done,
+            files_total=len(self._counted),
             bytes_done=self._bytes_finished,
-            bytes_total=sum(step.size for step in counted),
+            bytes_total=self._bytes_total,
             planned=self.progress.planned if planned is None else planned,
         )
 
@@ -594,7 +628,7 @@ class Job:
             # Unreachable by design, but `done` must never be a guess
             self.errors.append(OperationError("", self.kind.value, "did not finish"))
 
-        counted = self._counted()
+        counted = self._counting()
         done, total = sum(step.done for step in counted), len(counted)
         noun = "file"
         whole_items = self.kind in (JobKind.TRASH, JobKind.RESTORE)

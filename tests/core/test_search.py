@@ -132,6 +132,25 @@ def test_a_folder_that_cannot_be_read_is_passed_over(tmp_path):
         (root / "locked").chmod(0o755)
 
 
+def test_results_are_handed_over_while_hidden_entries_are_passed_over(tmp_path, monkeypatch):
+    hidden = {f".h{n}": "" for n in range(100)}
+    root = make_tree(
+        tmp_path / "root", {"a": {"first.txt": "", "sub": {**hidden, "deep": {"last.txt": ""}}}}
+    )
+    # A clock that moves on each time it is read: time passes as entries are looked at
+    ticks = iter(range(10_000))
+    monkeypatch.setattr(search.time, "monotonic", lambda: next(ticks))
+    batches = []
+
+    search.search_below(gfile(root), "txt", lambda batch: batches.append(batch), batch_seconds=10)
+
+    # Not kept back until the hidden files are all passed over
+    assert [[info.name for info in batch] for batch in batches] == [
+        ["a/first.txt"],
+        ["a/sub/deep/last.txt"],
+    ]
+
+
 def test_a_cancelled_search_stops_and_hands_over_nothing_more(tmp_path):
     from gi.repository import Gio
 

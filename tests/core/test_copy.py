@@ -130,3 +130,20 @@ def test_a_missing_source_fails_and_names_it(tmp_path):
     assert job.error.path == str(tmp_path / "gone")
     assert str(job.error) == "gone: no such file or folder"
     assert read_tree(dst) == {"there": "x"}
+
+
+def test_totals_are_not_counted_again_from_all_steps_after_each_one(tmp_path, monkeypatch):
+    from filehouse.core.operations.plan import Step
+
+    count = 60
+    src = make_tree(tmp_path / "src", {f"f{n}": "x" for n in range(count)})
+    calls = []
+    original = Step.excluded
+    monkeypatch.setattr(Step, "excluded", lambda self: calls.append(1) or original(self))
+
+    job = run_job(JobKind.COPY, [src], make_tree(tmp_path / "dst", {}))
+
+    assert job.state is JobState.DONE
+    assert (job.progress.files_done, job.progress.files_total) == (count, count)
+    # A recount after every step would be about count * count calls
+    assert len(calls) < 5 * count
