@@ -142,6 +142,8 @@ def test_skipping_a_folder_skips_what_is_in_it(tmp_path):
 
     assert job.state is JobState.DONE
     assert job.summary == "Copied 1 file"
+    # What is below the skipped folder is out of the totals too
+    assert (job.progress.files_done, job.progress.files_total) == (1, 1)
     assert prompt.names == ["album"]
     assert read_tree(dst) == {"album": {"both.jpg": "old"}, "z": "z"}
 

@@ -5,7 +5,7 @@ destination is advisory: every step checks again when it runs.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from gi.repository import Gio, GLib
@@ -54,6 +54,11 @@ class Step:
     created: bool = False  # this step made the destination folder
     copied: bool = False  # the copy is complete, only the source is left to remove
     incomplete: bool = False  # something inside failed
+    children: list = field(default_factory=list, repr=False)  # the steps that name it `parent`
+
+    def __post_init__(self):
+        if self.parent is not None:
+            self.parent.children.append(self)
 
     @property
     def dest(self):
