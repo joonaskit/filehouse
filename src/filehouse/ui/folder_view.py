@@ -111,6 +111,14 @@ class _Rows(QStyledItemDelegate):
         option.state &= ~QStyle.StateFlag.State_HasFocus
 
 
+class _Tiles(_Rows):
+    """The tiles of the grid: the name is centred under the icon, short or long."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.displayAlignment = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+
+
 class _Cells(_Rows):
     """The rows of the table: a line at the right edge of each cell, which with the header's
     makes the lines between the columns."""
@@ -214,10 +222,10 @@ class FolderView(QWidget):
         self._grid.setGridSize(
             QSize(style.px(style.dense("grid_width")), style.px(style.dense("grid_height")))
         )
-        self._grid.setSpacing(style.px(4))
+        self._grid.setSpacing(style.px(style.dense("grid_spacing")))
 
         self._tree.setItemDelegate(_Cells(self._tree))
-        self._grid.setItemDelegate(_Rows(self._grid))
+        self._grid.setItemDelegate(_Tiles(self._grid))
         for view in (self._tree, self._grid):
             view.installEventFilter(self)
             view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
