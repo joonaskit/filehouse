@@ -377,6 +377,24 @@ F2 with several entries selected opens `ui/dialogs/rename_many.py` in place of t
 - Afterwards the renamed entries are selected.
 - Not done: a job for a slow drive, trading names through a temporary name, and regular expressions.
 
+### Folder automations (#87)
+
+Rules attached to a folder that act on the files in it: *when a file matches these conditions, do these actions*. Decided in a review of the issue; not built yet. The later steps are #88 (run when a file appears), #89 (subfolders) and #90 (image metadata).
+
+- **Where they run.** In the process that already stays without a window (#38), so there is no service of its own, and the shell only observes: a rule's work is ordinary jobs in `JobModel`, which the island already mirrors. `core/automations.py` has no Qt, so it could move into a service later.
+- **Rules are data, not scripts.** A fixed set of conditions and actions, so a rule can be shown, previewed and checked. There is no "run a command" action.
+- **What a rule touches.** Regular, visible files directly in its folder, in local folders only. Folders, symlinks and hidden files are left alone. A file modified in the last 10 seconds, or with a temporary name (`.part`, `.crdownload`, `.filehouse-*.part`), is skipped and picked up by the next run.
+- **Conditions:** name (glob, contains, regex), extension or content type, size, modification age; all or any. **Actions**, in order on the same file: rename, move, copy, trash. A move or trash ends the processing of that file, and the dialog refuses actions after one. Rename templates have `{name}`, `{ext}` and `{date}` (the modification time until #90), not `{counter}`: it would differ on every run.
+- **Order.** The rules of a folder are an ordered list, top to bottom for each file, with "Stop processing more rules" per rule. A run handles each file once, so the rules of a destination folder do not re-evaluate what the run moved in.
+- **When they run.** By hand ("Run rules now" in the folder's menu, after the same preview the rule dialog shows), at process start and once a day. A coarse timer checks that 24 hours have passed since the last unattended run, so a laptop that slept through the time still catches up. Unattended runs act on every match without asking: rules are stateless, and the safety is the preview shown when a rule is saved, a rule becoming enabled only after it, and undo. Age conditions are checked on these runs and never on a file's arrival. Live watching is #88.
+- **Safety.** Every action is an operations-engine job and the safety rules hold. A taken name always keeps both ("report (2).pdf"), and a rule cannot choose Replace. A missing destination folder is created, which the preview marks as new, and it is undone as a new folder is. Trash only: no permanent delete, and no fallback when the trash is unavailable, only an `OperationError` naming the file. A failed file does not stop the run; identical repeated failures notify once per process.
+- **Undo.** One run is one entry of the history (#16), so Ctrl+Z takes back the whole run and a run of 40 files does not push out the user's own twenty.
+- **Reporting.** Jobs in the panel and the island; a notification (#15) only when the run acted with no window open.
+- **Where they are kept.** `rules.json` beside the settings file, by folder URI like `folders.json` (#43): written under another name and moved into place, checked when read. A rule whose folder is missing is kept and skipped without a message.
+- **Switches.** Each rule has an on/off switch, and Settings has one "Run folder rules" switch, on by default, that pauses all of them. The rule dialog says that rules run only while the process does, and warns when staying in the background is off.
+- **The dialog.** "Rules for this folder…" in the folder's menu: the ordered list, the editor, a preview of what the rules would do to the folder now ("report.pdf → ~/Documents/Invoices") and Run now. Saving is refused for a rule that cannot work: no actions, an invalid regex, a destination that is the rule's own folder or not writable, actions after a move or trash. The reason is shown beside the field. There is no overview of all folders with rules yet.
+- **Tests** for `core/automations.py` run against `tmp_path`: matching, ordering and stop, keep both, a created destination, the temporary names and the 10 seconds, a failure in the middle of a run, and trash with no trash.
+
 ### Columns (#44, `qt_models/columns.py`)
 
 The details view has eleven columns, one for each of `columns.KEYS` (a key's place there is its model column): Name, Permissions, Modified, Size, and Type, Created, Accessed, Owner, Group, and for what is in the trash, Original location and Deleted.
@@ -864,6 +882,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19, built; see "Archives".
 - Video and PDF thumbnails: #20, built; see below.
 - The file chooser portal, to be the Open and Save dialog of other apps: #39, built; see "The Open and Save dialog of other apps".
+- Folder automations, rules that rename and move files: #87, decided but not built; see "Folder automations". Then #88 (watching), #89 (subfolders), #90 (image metadata).
 - Duplicate and Create link (#41), selecting by pattern (#42), renaming several at once (#40), the view of each folder (#43) and the tabs of last time (#49): built; each has a section above.
 
 Also open, though never on this list: packaging as a Flatpak (#7), localization (#10) and tabs (#22). The split view (#12) and tabs are built; see below.
