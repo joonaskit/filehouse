@@ -16,12 +16,18 @@ def group(*actions):
     layout.setContentsMargins(padding, padding, padding, padding)
     layout.setSpacing(style.px(2))
     for item in actions:
-        button = QToolButton()
+        button = icon_button()
         button.setDefaultAction(item)
-        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        button.setIconSize(QSize(style.px(18), style.px(18)))
-        side = style.px(style.dense("control_height"))
-        button.setFixedSize(side, side)
-        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         layout.addWidget(button)
     return frame
+
+
+def icon_button():
+    """An icon button the size of those in a group, for one that is not an action's."""
+    button = QToolButton()
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+    button.setIconSize(QSize(style.px(18), style.px(18)))
+    side = style.px(style.dense("control_height"))
+    button.setFixedSize(side, side)
+    button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    return button

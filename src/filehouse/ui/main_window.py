@@ -25,7 +25,7 @@ from filehouse.qt_models.job_model import JobModel
 from filehouse.qt_models.volumes import Volumes
 from filehouse.qt_models.workers import Background
 from filehouse.ui import clipboard, groups, settings
-from filehouse.ui.actions import Actions
+from filehouse.ui.actions import RULES_ICON, Actions
 from filehouse.ui.context_menus import ContextMenus
 from filehouse.ui.details_pane import DetailsPane
 from filehouse.ui.dialogs.name import ask_name
@@ -410,6 +410,12 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self._navigation_group)
         location = self._group()
         location.layout().addWidget(self._path_bar)
+        # The folder open here has rules (#96): dimmed while none of them would run
+        self._rules_button = groups.icon_button()
+        self._rules_button.setAccessibleName("Rules for this folder")
+        self._rules_button.clicked.connect(self.open_folder_rules)
+        self._rules_button.setVisible(False)
+        location.layout().addWidget(self._rules_button)
         location.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._toolbar_location = toolbar.addWidget(location)
         self._view_group = self._group(
@@ -440,10 +446,20 @@ class MainWindow(QMainWindow):
         """The icon of every action, in the colours of the theme in use."""
         self._actions.draw_icons()
         self._private_button.setIcon(self._actions.private.icon())
+        # Not the action's own icon: this one is dimmed by a colour, and stays clickable
+        self._rules_icons = {
+            running: style.icon(
+                RULES_ICON + "-symbolic",
+                RULES_ICON,
+                colour="textPrimary" if running else "textTertiary",
+            )
+            for running in (True, False)
+        }
 
     def _retheme(self):
         """The theme changed while the window is open: icons are drawn in its colours."""
         self._draw_action_icons()
+        self._update_rules_button()
         for index in range(self._tab_bar.count()):
             button = self._tab_bar.tabButton(index, QTabBar.ButtonPosition.RightSide)
             button.setIcon(style.icon("window-close-symbolic", "window-close"))
@@ -964,6 +980,7 @@ class MainWindow(QMainWindow):
             self._pane, infos, self._other_pane(), self.terminal_folder() is not None
         )
         self._update_favourite_action()
+        self._update_rules_button()
         count = self._proxy.rowCount()
         if self._error:
             text = ""
@@ -991,6 +1008,25 @@ class MainWindow(QMainWindow):
         self._sync_search_field()
         self._update_details(infos)
         self._update_preview(infos)
+
+    def _update_rules_button(self):
+        """Shown while the folder open here has rules, and dimmed, saying why, while
+        none of them would run. It follows the stored rules and the switch in Settings:
+        both send `rules_changed`, which updates the state."""
+        rules = settings.folder_rules(locations.uri(self._location))
+        switched_on = any(rule.enabled for rule in rules)
+        running = switched_on and settings.run_rules()
+        if not rules:
+            tip = ""
+        elif not switched_on:
+            tip = "The rules of this folder are all switched off. Click to see them."
+        elif not settings.run_rules():
+            tip = "Folder rules are paused in Settings. Click to see this folder's rules."
+        else:
+            tip = "This folder has rules that run by themselves. Click to see them."
+        self._rules_button.setVisible(bool(rules))
+        self._rules_button.setIcon(self._rules_icons[running])
+        self._rules_button.setToolTip(tip)
 
     @property
     def preview_is_open(self):

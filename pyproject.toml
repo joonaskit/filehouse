@@ -22,6 +22,9 @@ filehouse = "filehouse.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+filehouse = ["integration/icons/*.svg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 qt_api = "pyside6"

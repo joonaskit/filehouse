@@ -6,6 +6,7 @@ shapes: rounded groups, cards, rows and menus.
 
 import math
 from functools import cache
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
@@ -253,6 +254,9 @@ def apply(app, theme, live=False):
 _ICON_SIZES = (16, 20, 24, 28, 32, 48, 64, 128)
 # A one-colour icon is for a button or a menu entry: the largest it is shown, unscaled
 _GLYPH_LARGEST = 24
+# Glyphs the icon themes in use do not have (Breeze has no lightning bolt), by the
+# name a theme would give one: a theme that has it wins
+_OWN_ICONS = Path(__file__).with_name("icons")
 
 
 def _sizes(largest):
@@ -272,6 +276,10 @@ def _theme_icon(names):
     for name in names:
         if QIcon.hasThemeIcon(name):
             return QIcon.fromTheme(name)
+    for name in names:
+        own = _OWN_ICONS / f"{name}.svg"
+        if own.is_file():
+            return QIcon(str(own))
     return QIcon()
 
 
