@@ -66,6 +66,7 @@ These are requirements, not guidelines. Any change in `core/operations/` needs a
 ## Conventions
 
 - Gio objects that deliver signals (`FileMonitor`, `VolumeMonitor`, D-Bus subscriptions) are created on the main thread so Qt's GLib dispatcher delivers them. Blocking Gio calls (`enumerate_children`, `copy`) run on worker threads.
+- A worker answers through `workers.Outbox`, never by emitting a signal of an object its owner can delete: a window closing mid-emit crashes the process (#94).
 - All D-Bus calls are asynchronous. A slow or absent island must never block the UI or stop a job.
 - Island updates: at most 4 per second per job, final state sent immediately, never `cancelled` before the work has actually stopped.
 - Colours and fonts go through `QPalette` and `QFont` from the theme. The stylesheet is for shapes (rounded groups, cards, rows, menus) and takes every colour, radius and size from `integration/style.py`: no literal colours, and nothing that assumes a dark background. Icons come from `style.icon` and `style.tile`.
