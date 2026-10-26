@@ -260,15 +260,18 @@ def run(args, instance):
     app.aboutToQuit.connect(notifier.flush)
 
     # The rules of folders: now, for what came while the process was not running, and
-    # then once a day. Their work is jobs like any other, shown and told as above
-    RulesRunner(
+    # then once a day, and on what arrives in their folders. Their work is jobs like any
+    # other, shown and told as above
+    rules_runner = RulesRunner(
         jobs,
         settings.all_folder_rules,
         settings.run_rules,
         settings.rules_last_run,
         settings.set_rules_last_run,
         jobs,
-    ).start()
+    )
+    settings.changes.rules_changed.connect(rules_runner.watch)
+    rules_runner.start()
 
     # Asked by a later start of the app, or by another app for "Show in folder"
     instance.on_open = windows.open_paths

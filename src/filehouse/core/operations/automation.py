@@ -37,6 +37,9 @@ class RulesJob(Job):
         self.plan = plan
         self.acted = 0  # files every step of which finished
         self._parts = []  # the undo records of what was done, in order
+        # Where the run put files, renamed or moved or copied: their arrival there is
+        # its own doing, not a file for the rules (#88)
+        self.placed = []
         self._complete = False
 
     @property
@@ -99,6 +102,7 @@ class RulesJob(Job):
             except GLib.Error as error:
                 raise OperationError.from_glib(error, location, "rename") from error
         self._parts.append(undo.renamed([(renamed, location)]))
+        self.placed.append(renamed)
         return renamed
 
     def _make_folder(self, folder):
@@ -142,7 +146,9 @@ class RulesJob(Job):
             raise job.errors[0] if job.errors else OperationError.at(source, kind.value, "failed")
         if kind is JobKind.TRASH:
             return None
-        return _placed(job, source, folder)
+        placed = _placed(job, source, folder)
+        self.placed.append(placed)
+        return placed
 
     def _undo_record(self):
         parts = tuple(part for part in self._parts if part is not None and not part.empty)
@@ -181,6 +187,8 @@ class RulesUndoJob(Job):
         super().__init__(JobKind.RULES, [], on_change=on_change)
         self.record = record
         self.is_undo = True
+        # Where taking back puts files: where they were before the run
+        self.placed = [was for part in record.parts for _now, was in part.pairs if was is not None]
         self._taken_back = 0
         self._complete = False
 

@@ -375,18 +375,23 @@ def candidates(folder, cancellable=None):
     return found
 
 
-def plan_run(folder, rules, now=None, cancellable=None):
+def plan_run(folder, rules, now=None, cancellable=None, names=None):
     """What `rules` would do to the files in `folder` now, each file taken once.
 
     Rules go from the first, each on the name and place the file has by then. A move or
     a trash ends it, since the file has left; so does a rule that stops. A file changed
     in the last `SETTLE_SECONDS`, or named as one still being written, is left for the
-    next run."""
+    next run.
+
+    With `names`, the run is for files that arrived (#88): only those are looked at, and
+    a rule with an age condition is left out, since a copy keeps the age of its source."""
     now = time.time() if now is None else now
     plan = Plan()
     usable = []
     for rule in rules:
         if not rule.enabled:
+            continue
+        if names is not None and has_age(rule):
             continue
         problems = check_rule(rule, folder)
         if problems:
@@ -396,6 +401,8 @@ def plan_run(folder, rules, now=None, cancellable=None):
     if not usable:
         return plan
     for source, facts in candidates(folder, cancellable):
+        if names is not None and facts.name not in names:
+            continue
         steps, current = [], facts
         for rule in usable:
             if not matches(rule, current, now):
@@ -410,6 +417,11 @@ def plan_run(folder, rules, now=None, cancellable=None):
             continue
         plan.files.append(PlannedFile(source, steps))
     return plan
+
+
+def has_age(rule):
+    """Whether `rule` looks at how old a file is: such a rule does not act on arrival."""
+    return any(condition.kind is ConditionKind.AGE for condition in rule.conditions)
 
 
 def _apply(rule, facts, steps):

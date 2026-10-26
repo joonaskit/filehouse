@@ -314,6 +314,28 @@ def test_a_disabled_rule_is_not_run(tmp_path):
     assert plan.files == [] and plan.problems == {}
 
 
+def test_a_run_on_arrival_looks_only_at_what_arrived(tmp_path):
+    folder = folder_with(tmp_path, ["a.pdf", "b.pdf", "c.pdf"])
+    trash = rule(name_is("*.pdf"), actions=[Action(ActionKind.TRASH)])
+
+    plan = auto.plan_run(gfile(folder), [trash], NOW, names={"b.pdf", "gone.pdf"})
+
+    assert names(plan.files) == ["b.pdf"]
+
+
+def test_a_run_on_arrival_leaves_out_rules_that_look_at_age(tmp_path):
+    # A copy keeps the age of its source: an old file can arrive this moment
+    folder = folder_with(tmp_path, ["a.pdf"], age_days=90)
+    old = Condition(ConditionKind.AGE, "older", 30)
+    by_age = rule(name_is("*.pdf"), old, actions=[Action(ActionKind.TRASH)], name="age")
+    by_name = rule(name_is("*.pdf"), actions=[move_to(tmp_path / "out")], name="name")
+
+    plan = auto.plan_run(gfile(folder), [by_age, by_name], NOW, names={"a.pdf"})
+
+    assert [step.rule for step in plan.files[0].steps] == ["name"]
+    assert auto.has_age(by_age) and not auto.has_age(by_name)
+
+
 # Storing
 
 

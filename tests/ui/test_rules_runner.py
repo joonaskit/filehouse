@@ -44,7 +44,7 @@ class Clock:
         return self.now
 
 
-def runner_for(jobs, stored, clock=None, enabled=lambda: True, check_ms=60_000):
+def runner_for(jobs, stored, clock=None, enabled=lambda: True, check_ms=60_000, arrival_ms=50):
     clock = clock or Clock()
 
     def set_last(when):
@@ -57,8 +57,24 @@ def runner_for(jobs, stored, clock=None, enabled=lambda: True, check_ms=60_000):
         lambda: clock.last,
         set_last,
         check_ms=check_ms,
+        arrival_ms=arrival_ms,
         clock=clock,
     )
+
+
+def arrive(tmp_path, folder, name):
+    """Move a file that has settled into `folder`, as a finished download is."""
+    staging = tmp_path / "staging"
+    settled(staging, name)
+    (staging / name).rename(folder / name)
+
+
+def rule_runs(jobs):
+    return [job for job in jobs.jobs if job.kind is JobKind.RULES and not job.is_undo]
+
+
+def all_ended(jobs):
+    return bool(jobs.jobs) and all(job.state.is_final for job in jobs.jobs)
 
 
 def test_rules_run_when_the_process_starts(qtbot, bare_jobs, tmp_path):
@@ -100,7 +116,10 @@ def test_rules_do_not_run_when_they_are_switched_off(qtbot, bare_jobs, tmp_path)
 def test_rules_run_again_once_a_day_has_passed(qtbot, bare_jobs, tmp_path):
     uri = settled(tmp_path / "in")
     clock = Clock()
-    runner = runner_for(bare_jobs, {uri: [pdfs_to(tmp_path / "out")]}, clock, check_ms=20)
+    # Its arrival is not looked at before the day has passed
+    runner = runner_for(
+        bare_jobs, {uri: [pdfs_to(tmp_path / "out")]}, clock, check_ms=20, arrival_ms=60_000
+    )
     runner.start()
     # The run at the start has found nothing before the file comes
     qtbot.waitUntil(lambda: not runner._busy, timeout=TIMEOUT)
@@ -177,3 +196,132 @@ def test_the_switch_and_the_last_run_are_remembered():
     settings.set_rules_last_run(1234.5)
 
     assert settings.run_rules() is False and settings.rules_last_run() == 1234.5
+
+
+# Arrivals (#88)
+
+
+def watching(qtbot, jobs, stored, **options):
+    runner = runner_for(jobs, stored, **options)
+    runner.watch()
+    return runner
+
+
+def test_a_file_that_arrives_is_acted_on_and_nothing_else(qtbot, bare_jobs, tmp_path):
+    uri = settled(tmp_path / "in", "before.pdf")
+    watching(qtbot, bare_jobs, {uri: [pdfs_to(tmp_path / "out")]})
+
+    arrive(tmp_path, tmp_path / "in", "a.pdf")
+
+    qtbot.waitUntil(lambda: ended(bare_jobs), timeout=TIMEOUT)
+    assert bare_jobs.jobs[0].state is JobState.DONE
+    assert os.listdir(tmp_path / "out") == ["a.pdf"]
+    # What was there before is left to the runs at the start, once a day and by hand
+    assert os.listdir(tmp_path / "in") == ["before.pdf"]
+
+
+def test_a_change_to_a_file_already_there_is_no_arrival(qtbot, bare_jobs, tmp_path):
+    uri = settled(tmp_path / "in", "a.pdf")
+    watching(qtbot, bare_jobs, {uri: [pdfs_to(tmp_path / "out")]})
+
+    (tmp_path / "in" / "a.pdf").write_text("changed")
+
+    qtbot.wait(300)
+    assert bare_jobs.jobs == []
+
+
+def test_a_temporary_name_waits_for_its_final_name(qtbot, bare_jobs, tmp_path):
+    uri = settled(tmp_path / "in")
+    watching(
+        qtbot,
+        bare_jobs,
+        {
+            uri: [
+                auto.Rule(
+                    "all",
+                    (auto.Condition(auto.ConditionKind.NAME, "glob", "*"),),
+                    (auto.Action(auto.ActionKind.MOVE, str(tmp_path / "out")),),
+                )
+            ]
+        },
+    )
+
+    arrive(tmp_path, tmp_path / "in", "a.pdf.part")
+    qtbot.wait(300)
+    assert bare_jobs.jobs == []
+
+    (tmp_path / "in" / "a.pdf.part").rename(tmp_path / "in" / "a.pdf")
+    qtbot.waitUntil(lambda: ended(bare_jobs), timeout=TIMEOUT)
+    assert os.listdir(tmp_path / "out") == ["a.pdf"]
+
+
+def test_a_file_still_being_written_is_acted_on_once_it_settles(qtbot, bare_jobs, tmp_path):
+    uri = settled(tmp_path / "in")
+    watching(qtbot, bare_jobs, {uri: [pdfs_to(tmp_path / "out")]})
+
+    (tmp_path / "in" / "a.pdf").write_text("being written")
+    qtbot.wait(300)
+    assert bare_jobs.jobs == []
+
+    # No arrival comes of this: the name was kept to be looked at again
+    os.utime(tmp_path / "in" / "a.pdf", (time.time() - 60, time.time() - 60))
+    qtbot.waitUntil(lambda: ended(bare_jobs), timeout=TIMEOUT)
+    assert os.listdir(tmp_path / "out") == ["a.pdf"]
+
+
+def test_rules_that_move_a_file_back_and_forth_stop(qtbot, bare_jobs, tmp_path):
+    there = settled(tmp_path / "a")
+    back = settled(tmp_path / "b")
+    watching(qtbot, bare_jobs, {there: [pdfs_to(tmp_path / "b")], back: [pdfs_to(tmp_path / "a")]})
+
+    arrive(tmp_path, tmp_path / "a", "x.pdf")
+
+    qtbot.waitUntil(lambda: all_ended(bare_jobs), timeout=TIMEOUT)
+    qtbot.wait(400)
+    assert len(rule_runs(bare_jobs)) == 1
+    assert os.listdir(tmp_path / "b") == ["x.pdf"] and os.listdir(tmp_path / "a") == []
+
+
+def test_a_rename_by_a_rule_is_not_an_arrival(qtbot, bare_jobs, tmp_path):
+    uri = settled(tmp_path / "in")
+    renames = auto.Rule(
+        "stamp",
+        (auto.Condition(auto.ConditionKind.NAME, "glob", "*.pdf"),),
+        (auto.Action(auto.ActionKind.RENAME, "new {name}.{ext}"),),
+    )
+    watching(qtbot, bare_jobs, {uri: [renames]})
+
+    arrive(tmp_path, tmp_path / "in", "a.pdf")
+
+    qtbot.waitUntil(lambda: all_ended(bare_jobs), timeout=TIMEOUT)
+    qtbot.wait(400)
+    assert len(rule_runs(bare_jobs)) == 1
+    assert os.listdir(tmp_path / "in") == ["new a.pdf"]
+
+
+def test_taking_a_run_back_does_not_run_the_rules_again(qtbot, bare_jobs, tmp_path):
+    uri = settled(tmp_path / "in")
+    watching(qtbot, bare_jobs, {uri: [pdfs_to(tmp_path / "out")]})
+    arrive(tmp_path, tmp_path / "in", "a.pdf")
+    qtbot.waitUntil(lambda: all_ended(bare_jobs), timeout=TIMEOUT)
+
+    bare_jobs.undo()
+
+    qtbot.waitUntil(lambda: len(bare_jobs.jobs) == 2 and all_ended(bare_jobs), timeout=TIMEOUT)
+    qtbot.wait(400)
+    assert len(rule_runs(bare_jobs)) == 1
+    assert os.listdir(tmp_path / "in") == ["a.pdf"]
+
+
+def test_folders_are_not_watched_while_rules_are_switched_off(qtbot, bare_jobs, tmp_path):
+    uri = settled(tmp_path / "in")
+    on = [True]
+    runner = watching(qtbot, bare_jobs, {uri: [pdfs_to(tmp_path / "out")]}, enabled=lambda: on[0])
+    assert list(runner._watches) == [uri]
+
+    on[0] = False
+    runner.watch()
+    arrive(tmp_path, tmp_path / "in", "a.pdf")
+
+    qtbot.wait(300)
+    assert runner._watches == {} and bare_jobs.jobs == []

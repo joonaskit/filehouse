@@ -392,7 +392,11 @@ class FolderRulesDialog(QDialog):
 
     @staticmethod
     def _note(stay_running):
-        text = "Rules run when Filehouse starts, once a day while it runs, and when you run them."
+        text = (
+            "Rules run when a file arrives in the folder, when Filehouse starts, once a day "
+            "while it runs, and when you run them. A rule that looks at when a file was "
+            "modified does not run when a file arrives."
+        )
         if not stay_running:
             text += (
                 " Filehouse is set to end when its last window closes, so rules only run "

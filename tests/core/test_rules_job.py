@@ -220,3 +220,28 @@ def test_a_run_with_nothing_to_do_is_done(tmp_path):
     assert job.state is JobState.DONE
     assert job.summary == "Rules acted on 0 files"
     assert job.undo is None
+
+
+def test_a_run_and_its_undo_say_where_they_put_files(tmp_path):
+    # So that their arrival there is not taken for a new file (#88)
+    make_tree(tmp_path, {"in": {"a.pdf": "a", "b.txt": "b"}, "out": {"new a.pdf": "old"}})
+
+    job = run(
+        tmp_path / "in",
+        rule("*.pdf", rename("new {name}.{ext}"), move_to(tmp_path / "out")),
+        rule("*.txt", copy_to(tmp_path / "out")),
+    )
+
+    assert sorted(location.get_path() for location in job.placed) == sorted(
+        str(path)
+        for path in (
+            tmp_path / "in" / "new a.pdf",
+            tmp_path / "out" / "new a (2).pdf",
+            tmp_path / "out" / "b.txt",
+        )
+    )
+    back = take_back(job.undo)
+    assert {location.get_path() for location in back.placed} == {
+        str(tmp_path / "in" / "a.pdf"),
+        str(tmp_path / "in" / "new a.pdf"),
+    }
