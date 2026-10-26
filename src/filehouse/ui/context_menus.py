@@ -115,6 +115,7 @@ class ContextMenus:
             menu.addAction(self._actions.hidden)
             menu.addAction(self._actions.private)
             menu.addSeparator()
+            menu.addActions([self._actions.folder_rules, self._actions.run_rules])
             menu.addAction(self._actions.favourite)
             menu.addActions([self._actions.copy_path, self._actions.terminal])
             self._add_open_in_manager(menu, pane.location)

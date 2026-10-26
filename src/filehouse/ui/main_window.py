@@ -31,6 +31,7 @@ from filehouse.ui.details_pane import DetailsPane
 from filehouse.ui.dialogs.name import ask_name
 from filehouse.ui.dialogs.prompter import Prompter
 from filehouse.ui.dialogs.properties import PropertiesDialog
+from filehouse.ui.dialogs.rules import FolderRulesDialog, RunRulesDialog
 from filehouse.ui.dialogs.select import SelectDialog
 from filehouse.ui.dialogs.settings import SettingsDialog
 from filehouse.ui.file_actions import FileActions
@@ -377,6 +378,8 @@ class MainWindow(QMainWindow):
                 "clear_recent": self.clear_recent,
                 "favourite": self.toggle_favourite,
                 "permissions": lambda: self._menus.show_permissions(),
+                "folder_rules": self.open_folder_rules,
+                "run_rules": self.run_folder_rules,
                 "settings": self.open_settings,
                 "folder_menu": self._show_folder_menu,
                 "search": self.start_search,
@@ -386,6 +389,8 @@ class MainWindow(QMainWindow):
         actions.private.setChecked(not settings.remember_opened())
         actions.pane_toggle.setChecked(settings.details_pane())
         settings.changes.details_pane_changed.connect(self._on_details_pane_changed)
+        # Whether "Run rules now" is offered here
+        settings.changes.rules_changed.connect(self._update_state)
         self._jobs.undo_changed.connect(self._update_undo)
         self._update_undo()
         # Not `triggered`: the sheet's own button and Escape uncheck it too
@@ -1240,6 +1245,20 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         dialog = SettingsDialog(self, self.set_show_hidden, self._clear_recent_from_settings)
         dialog.exec()
+
+    def open_folder_rules(self):
+        """The rules of the folder open here, to change, save and run (#87)."""
+        dialog = FolderRulesDialog(self, self._location, self._jobs, settings.stay_running())
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.open()
+        return dialog
+
+    def run_folder_rules(self):
+        """What the rules of the folder open here would do now, and Run."""
+        dialog = RunRulesDialog(self, self._location, self._jobs)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.open()
+        return dialog
 
     def _clear_recent_from_settings(self):
         if self._recent is None or not ask_to_clear_recent(self):

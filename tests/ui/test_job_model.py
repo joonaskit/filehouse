@@ -234,3 +234,38 @@ def test_a_report_held_back_is_sent_once_its_interval_is_over(qtbot, bare_jobs):
 
     qtbot.waitUntil(lambda: seen == ["one", "two"], timeout=1000)
     jobs._jobs.remove(job)
+
+
+def test_a_run_of_rules_is_one_job_and_one_undo(qtbot, jobs, tmp_path):
+    import time
+
+    from filehouse.core import automations as auto
+
+    (tmp_path / "in").mkdir()
+    for name in ("a.pdf", "b.pdf"):
+        (tmp_path / "in" / name).write_text(name)
+    moving = auto.Rule(
+        "pdfs",
+        (auto.Condition(auto.ConditionKind.NAME, "glob", "*.pdf"),),
+        (auto.Action(auto.ActionKind.MOVE, str(tmp_path / "out")),),
+    )
+    plan = auto.plan_run(gfile(tmp_path / "in"), [moving], time.time() + 60)
+    added = []
+    jobs.job_added.connect(added.append)
+
+    with qtbot.waitSignal(jobs.idle, timeout=5000):
+        job = jobs.run_rules(gfile(tmp_path / "in"), plan)
+        assert job_model.heading(job) == "Running rules on 2 files in in"
+
+    assert added == [job] and job.state is JobState.DONE
+    assert sorted(os.listdir(tmp_path / "out")) == ["a.pdf", "b.pdf"]
+    assert jobs.undo_text() == "folder rules in “in”"
+
+    with qtbot.waitSignal(jobs.idle, timeout=5000):
+        undone = jobs.undo()
+        assert job_model.heading(undone.job) == "Taking back folder rules"
+
+    assert undone.job.state is JobState.DONE
+    assert sorted(os.listdir(tmp_path / "in")) == ["a.pdf", "b.pdf"]
+    assert not (tmp_path / "out").exists()
+    assert jobs.undo_text() is None

@@ -15,7 +15,8 @@ from gi.repository import Gio, GLib
 from PySide6.QtCore import QObject
 
 from filehouse import APP_ID
-from filehouse.core.operations import JobState
+from filehouse.core import locations
+from filehouse.core.operations import JobKind, JobState
 from filehouse.qt_models import job_model
 
 log = logging.getLogger(__name__)
@@ -113,6 +114,9 @@ class NotificationReporter(QObject):
     - With the island, only a job that ran long enough for the user to have looked
       away. A failure is not sent: the island keeps it until it is dismissed.
     - Never a job the user cancelled, or one that never ran.
+    - A run of a folder's rules is told whenever it acted, island or not: nobody started
+      it, so nobody is waiting to see it end (#87). A failure that is the same as the
+      last of the same folder's rules (the same files, the same reasons) is told once.
 
     `window_visible()` says whether any window of the app is on screen, and
     `island_available()` whether the island is showing jobs. `enabled()` says whether the
@@ -139,6 +143,8 @@ class NotificationReporter(QObject):
         self._enabled = enabled
         self._started = {}  # job id -> when it was first seen running
         self._notified = set()
+        # The failures of runs of rules that were told: (folder URI, errors)
+        self._rule_failures = set()
         jobs.job_changed.connect(self._on_job_changed)
         jobs.job_removed.connect(self._on_job_removed)
 
@@ -159,12 +165,25 @@ class NotificationReporter(QObject):
             or not self._enabled()
         ):
             return
+        if job.kind is JobKind.RULES and not job.is_undo:
+            if self._worth_telling_rules(job):
+                self._send(job)
+            return
         if self._island_available():
             if state is JobState.FAILED:
                 return
             if started is None or self._clock() - started < self._seconds():
                 return
         self._send(job)
+
+    def _worth_telling_rules(self, job):
+        if job.state is not JobState.FAILED:
+            return bool(job.acted)
+        failure = (locations.uri(job.destination), tuple(str(error) for error in job.errors))
+        if failure in self._rule_failures:
+            return False
+        self._rule_failures.add(failure)
+        return True
 
     def _seconds(self):
         return self._long() if callable(self._long) else self._long

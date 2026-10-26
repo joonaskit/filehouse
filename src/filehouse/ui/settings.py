@@ -1,6 +1,7 @@
 """What the app remembers between runs: window size, view mode and sort order (the app's,
 and each folder's own), hidden files, the split, the tabs of last time, the details pane,
-the density, the notifications and whether opened files are remembered."""
+the density, the notifications, whether opened files are remembered, and the rules of
+folders."""
 
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QSettings, QSize, Signal
 
 from filehouse import APP_ID
+from filehouse.core import automations
 from filehouse.qt_models import columns
 
 DETAILS, ICONS = "details", "icons"
@@ -27,6 +29,8 @@ class _Changes(QObject):
     views_changed = Signal()
     # The columns of the details view changed
     columns_changed = Signal()
+    # The rules of some folder changed, or whether rules run at all
+    rules_changed = Signal()
 
 
 changes = _Changes()
@@ -289,6 +293,80 @@ def set_stay_running(on):
     changes.stay_running_changed.emit(bool(on))
 
 
+# The rules of folders (#87), by URI: a list of rules each, in order. Kept beside the
+# settings in a file of their own, as the views of folders are, and read once
+_rules = None
+
+
+def _rules_path():
+    return Path(_store().fileName()).with_name("rules.json")
+
+
+def _stored_rules():
+    global _rules
+    if _rules is None:
+        _rules = {}
+        try:
+            stored = json.loads(_rules_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            stored = {}
+        if isinstance(stored, dict):
+            for uri, items in stored.items():
+                rules = automations.rules_from_json(items)
+                if rules:
+                    _rules[str(uri)] = rules
+    return _rules
+
+
+def folder_rules(uri):
+    """The rules of the folder at `uri`, in order: a list that may be empty."""
+    return list(_stored_rules().get(uri, ()))
+
+
+def all_folder_rules():
+    """{uri: rules} of every folder with rules."""
+    return {uri: list(rules) for uri, rules in _stored_rules().items()}
+
+
+def set_folder_rules(uri, rules):
+    stored = _stored_rules()
+    if rules:
+        stored[uri] = list(rules)
+    else:
+        stored.pop(uri, None)
+    path = _rules_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Under another name and moved into place: never half a file
+        temporary = path.with_name(path.name + ".new")
+        data = {uri: automations.rules_to_json(rules) for uri, rules in stored.items()}
+        temporary.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError:
+        # Kept for as long as the process runs, then
+        pass
+    changes.rules_changed.emit()
+
+
+def run_rules():
+    """Whether the rules of folders run at all: one switch that pauses every rule."""
+    return _store().value("rules/run", True, type=bool)
+
+
+def set_run_rules(on):
+    _store().setValue("rules/run", bool(on))
+    changes.rules_changed.emit()
+
+
+def rules_last_run():
+    """When the rules last ran by themselves, by the clock; 0 for never."""
+    return _store().value("rules/last_run", 0.0, type=float)
+
+
+def set_rules_last_run(when):
+    _store().setValue("rules/last_run", float(when))
+
+
 def session():
     """The tabs of the window that was closed last: a list of (URIs of its one or two
     folders, which of them was the active one) and the tab that was in front. None when
@@ -340,10 +418,12 @@ def set_group_collapsed(key, collapsed):
 
 
 def clear():
-    global _folders
+    global _folders, _rules
     _store().clear()
     _folders = None
-    try:
-        _folders_path().unlink()
-    except OSError:
-        pass
+    _rules = None
+    for path in (_folders_path(), _rules_path()):
+        try:
+            path.unlink()
+        except OSError:
+            pass

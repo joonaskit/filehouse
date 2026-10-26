@@ -7,9 +7,9 @@ Every action is an attribute, by the name in `_ACTIONS`: `actions.copy`, `action
 
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 
-from filehouse.core import archives
+from filehouse.core import archives, locations
 from filehouse.integration import style
-from filehouse.ui import clipboard
+from filehouse.ui import clipboard, settings
 from filehouse.ui.file_actions import is_archive
 
 _KEYS = QKeySequence.StandardKey
@@ -88,6 +88,9 @@ _ACTIONS = (
     # The folder open here, or the one a menu is for, in the bar under the toolbar
     ("favourite", "Add to favourites", "bookmark-new", ["Ctrl+D"], None),
     ("permissions", "Permissions", "object-locked", [], None),
+    # The rules of the folder open here (#87), and running them now after a preview
+    ("folder_rules", "Rules for this folder…", "view-filter", [], None),
+    ("run_rules", "Run rules now…", "system-run", [], None),
     ("settings", "Settings", "preferences-system", ["Ctrl+,"], None),
     ("folder_menu", "Folder menu", "view-more-horizontal", [], None),
     ("search", "Search", "edit-find", ["Ctrl+F"], None),
@@ -195,3 +198,9 @@ class Actions:
         for item in (self.select_all, self.select_matching, self.invert):
             item.setEnabled(count > 0)
         self.preview.setEnabled(selected > 0)
+        # Rules are for folders of this computer only (#87)
+        local = not read_only and locations.local_path(pane.location) is not None
+        self.folder_rules.setEnabled(local)
+        self.run_rules.setVisible(
+            local and bool(settings.folder_rules(locations.uri(pane.location)))
+        )

@@ -109,6 +109,7 @@ filehouse/
 │   │   ├── properties.py        details of a file, size of a folder all the way down
 │   │   ├── errors.py            OperationError: which file, which step, readable message
 │   │   ├── archives.py          libarchive: reading and writing archives, which paths are safe
+│   │   ├── automations.py       the rules of folders: check, match, what a run would do (#87)
 │   │   └── operations/
 │   │       ├── job.py           Job, JobState, JobProgress
 │   │       ├── plan.py          expand a request into concrete steps, count bytes
@@ -120,6 +121,7 @@ filehouse/
 │   │       ├── quick.py         new folder, new file, rename and links: immediate, no job
 │   │       ├── rename_many.py   several renames as one: the names, the check, all or none
 │   │       ├── permissions.py   the permission presets, applied as a job (#63)
+│   │       ├── automation.py    a run of a folder's rules as one job, and its undo
 │   │       ├── undo.py          what an action did, kept so that it can be taken back
 │   │       └── queue.py         runs jobs with a concurrency limit
 │   ├── qt_models/
@@ -133,6 +135,7 @@ filehouse/
 │   │   ├── measure.py           folder sizes on a worker thread
 │   │   ├── details.py           one file's details on a worker thread
 │   │   ├── job_model.py         all jobs of the process, fed by worker threads; titles and texts
+│   │   ├── rules_runner.py      the rules of folders at the start and once a day
 │   │   └── workers.py           the thread pool jobs run on, and `Background`: what a window does at once
 │   ├── integration/
 │   │   ├── theme.py             theme.json reader (port of the shell's examples/read_theme.py)
@@ -179,7 +182,7 @@ filehouse/
 │       └── dialogs/             questions (conflict, error, no trash, confirm delete, name
 │                                taken, password) and the prompter that shows them, name
 │                                (rename, new folder), rename_many, select, compress,
-│                                details, properties, settings
+│                                details, properties, settings, rules (#87)
 └── tests/
     ├── core/                    copy, move, trash, cancel, failure, conflicts against tmp dirs
     └── integration/             island reporter against a fake bus, theme reader
@@ -379,7 +382,7 @@ F2 with several entries selected opens `ui/dialogs/rename_many.py` in place of t
 
 ### Folder automations (#87)
 
-Rules attached to a folder that act on the files in it: *when a file matches these conditions, do these actions*. Decided in a review of the issue; not built yet. The later steps are #88 (run when a file appears), #89 (subfolders) and #90 (image metadata).
+Rules attached to a folder that act on the files in it: *when a file matches these conditions, do these actions*. Decided in a review of the issue, and the first step is built: `core/automations.py` (the rules, the check, matching, what a run would do, the JSON), `core/operations/automation.py` (a run and its undo, each one job), `qt_models/rules_runner.py` (the runs at the start and once a day) and `ui/dialogs/rules.py` (the dialog and "Run rules now"). The later steps are #88 (run when a file appears), #89 (subfolders) and #90 (image metadata).
 
 - **Where they run.** In the process that already stays without a window (#38), so there is no service of its own, and the shell only observes: a rule's work is ordinary jobs in `JobModel`, which the island already mirrors. `core/automations.py` has no Qt, so it could move into a service later.
 - **Rules are data, not scripts.** A fixed set of conditions and actions, so a rule can be shown, previewed and checked. There is no "run a command" action.
@@ -387,13 +390,15 @@ Rules attached to a folder that act on the files in it: *when a file matches the
 - **Conditions:** name (glob, contains, regex), extension or content type, size, modification age; all or any. **Actions**, in order on the same file: rename, move, copy, trash. A move or trash ends the processing of that file, and the dialog refuses actions after one. Rename templates have `{name}`, `{ext}` and `{date}` (the modification time until #90), not `{counter}`: it would differ on every run.
 - **Order.** The rules of a folder are an ordered list, top to bottom for each file, with "Stop processing more rules" per rule. A run handles each file once, so the rules of a destination folder do not re-evaluate what the run moved in.
 - **When they run.** By hand ("Run rules now" in the folder's menu, after the same preview the rule dialog shows), at process start and once a day. A coarse timer checks that 24 hours have passed since the last unattended run, so a laptop that slept through the time still catches up. Unattended runs act on every match without asking: rules are stateless, and the safety is the preview shown when a rule is saved, a rule becoming enabled only after it, and undo. Age conditions are checked on these runs and never on a file's arrival. Live watching is #88.
+- **A run is one job** (`RulesJob`, `JobKind.RULES`): one entry in the panel and the island. Each move, copy and trash in it is an ordinary `Job` run inside it on the same thread and cancellable, with "Keep both" answered before it is asked and every failure skipped and reported, so nobody is asked anything. A rename is done in place and gets " (2)" when its name is taken. A step that fails leaves out the steps after it for that file, and the run goes on with the next file. It cannot be retried: the next run finds what is left.
 - **Safety.** Every action is an operations-engine job and the safety rules hold. A taken name always keeps both ("report (2).pdf"), and a rule cannot choose Replace. A missing destination folder is created, which the preview marks as new, and it is undone as a new folder is. Trash only: no permanent delete, and no fallback when the trash is unavailable, only an `OperationError` naming the file. A failed file does not stop the run; identical repeated failures notify once per process.
-- **Undo.** One run is one entry of the history (#16), so Ctrl+Z takes back the whole run and a run of 40 files does not push out the user's own twenty.
-- **Reporting.** Jobs in the panel and the island; a notification (#15) only when the run acted with no window open.
+- **Undo.** One run is one entry of the history (#16), so Ctrl+Z takes back the whole run and a run of 40 files does not push out the user's own twenty. The record (`undo.Kind.RULES`) holds the records of each action in `parts`, and `RulesUndoJob` takes them back last first: moves go back, trashed files are restored, renames are renamed back, and a folder the run made is removed when it is empty (one that holds a copy stays, and that is not a failure). Nobody is asked: what is in the way now is an error naming the file. A copy is not taken back.
+- **Reporting.** Jobs in the panel and the island; a notification (#15) only when the run acted with no window open. It is sent with the island too and however short the run: nobody started it, so nobody is waiting for it.
 - **Where they are kept.** `rules.json` beside the settings file, by folder URI like `folders.json` (#43): written under another name and moved into place, checked when read. A rule whose folder is missing is kept and skipped without a message.
 - **Switches.** Each rule has an on/off switch, and Settings has one "Run folder rules" switch, on by default, that pauses all of them. The rule dialog says that rules run only while the process does, and warns when staying in the background is off.
-- **The dialog.** "Rules for this folder…" in the folder's menu: the ordered list, the editor, a preview of what the rules would do to the folder now ("report.pdf → ~/Documents/Invoices") and Run now. Saving is refused for a rule that cannot work: no actions, an invalid regex, a destination that is the rule's own folder or not writable, actions after a move or trash. The reason is shown beside the field. There is no overview of all folders with rules yet.
-- **Tests** for `core/automations.py` run against `tmp_path`: matching, ordering and stop, keep both, a created destination, the temporary names and the 10 seconds, a failure in the middle of a run, and trash with no trash.
+- **The dialog.** "Rules for this folder…" in the folder's menu: the ordered list, the editor, a preview of what the rules would do to the folder now ("report.pdf → ~/Documents/Invoices") and Run now. Saving is refused for a rule that cannot work: no name, no conditions (a rule with none would act on every file), no actions, an invalid regex or template, a destination that is not an absolute path or `~` (a relative one would mean wherever the process was started), the rule's own folder or not writable, actions after a move or trash. The reasons are shown under the rule's editor, and a rule that cannot work is marked in the list. "Save and run now" saves and runs what the preview shows; "Run rules now…" in the folder's menu, there once the folder has rules, shows the preview of the saved rules with Run. Folder destinations are chosen with Qt's own folder dialog, not the desktop's: with this app as the portal's, that would be this one. There is no overview of all folders with rules yet.
+- **`{date}`** is written "2026-10-25 14.03": a colon is no good in a name.
+- **Tests** run against `tmp_path`: matching, ordering and stop, keep both, a created destination, the temporary names and the 10 seconds, a failure in the middle of a run, cancel, trash with no trash, undo (`tests/core/test_automations.py`, `test_rules_job.py`); the runner, the stored rules and the dialog in `tests/ui`.
 
 ### Columns (#44, `qt_models/columns.py`)
 
@@ -551,7 +556,7 @@ For a job that ends while the process has no window to show it (the user chose "
 
 ### Settings dialog (#23, `ui/dialogs/settings.py`)
 
-A modal dialog, opened with Ctrl+, or the gear button at the right end of the toolbar. A choice is stored as it is made; there is only Close. Sections: **Appearance** (density, which says it applies once every window has been closed), **Folders** (the app's view mode and sort order, for the folders without their own, and whether each folder keeps its own: the open windows follow these from the settings), **New windows** (whether a start opens the tabs of last time; hidden files and the details pane, which also change the window the dialog was opened from; whether the process stays without a window, and whether a login starts it), **Privacy** (the "Don't remember opened files" switch, followed live from the folder menu and the status bar, and Clear recent files…, which asks first) and **Notifications** (on or off, and the seconds a job must run before the island's user is told). The dialog holds no logic of its own: it reads and writes `ui/settings.py` and calls the window for what a window has to do. Not in it: the scale and fonts (the shell's), and anything the shell owns.
+A modal dialog, opened with Ctrl+, or the gear button at the right end of the toolbar. A choice is stored as it is made; there is only Close. Sections: **Appearance** (density, which says it applies once every window has been closed), **Folders** (the app's view mode and sort order, for the folders without their own, and whether each folder keeps its own: the open windows follow these from the settings; and the one switch that pauses the rules of every folder, #87), **New windows** (whether a start opens the tabs of last time; hidden files and the details pane, which also change the window the dialog was opened from; whether the process stays without a window, and whether a login starts it), **Privacy** (the "Don't remember opened files" switch, followed live from the folder menu and the status bar, and Clear recent files…, which asks first) and **Notifications** (on or off, and the seconds a job must run before the island's user is told). The dialog holds no logic of its own: it reads and writes `ui/settings.py` and calls the window for what a window has to do. Not in it: the scale and fonts (the shell's), and anything the shell owns.
 
 ### Preview (`ui/preview.py`, `qt_models/previews.py`)
 
@@ -882,7 +887,7 @@ Each has an issue, where what it takes and what is still to be decided is writte
 - Archives, extracting and compressing, each a job so it reuses the activity mapping: #19, built; see "Archives".
 - Video and PDF thumbnails: #20, built; see below.
 - The file chooser portal, to be the Open and Save dialog of other apps: #39, built; see "The Open and Save dialog of other apps".
-- Folder automations, rules that rename and move files: #87, decided but not built; see "Folder automations". Then #88 (watching), #89 (subfolders), #90 (image metadata).
+- Folder automations, rules that rename and move files: #87, the first step built; see "Folder automations". Then #88 (watching), #89 (subfolders), #90 (image metadata).
 - Duplicate and Create link (#41), selecting by pattern (#42), renaming several at once (#40), the view of each folder (#43) and the tabs of last time (#49): built; each has a section above.
 
 Also open, though never on this list: packaging as a Flatpak (#7), localization (#10) and tabs (#22). The split view (#12) and tabs are built; see below.

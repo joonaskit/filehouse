@@ -35,6 +35,8 @@ class FakeJob:
         self.summary = ""
         self.errors = []
         self.started = True
+        self.is_undo = False
+        self.acted = 0
 
     @property
     def error(self):
@@ -312,3 +314,51 @@ def test_the_threshold_can_be_a_function(setup):
     setup.end(job, JobState.DONE)
 
     assert len(setup.notifier.sent) == 1
+
+
+def rules_job(acted=2, errors=()):
+    job = FakeJob(JobKind.RULES)
+    job.destination = Gio.File.new_for_path("/home/me/Downloads")
+    job.acted = acted
+    job.errors = list(errors)
+    return job
+
+
+def test_a_run_of_rules_is_told_even_with_the_island_and_quickly(setup):
+    setup.island = True
+    job = rules_job()
+    setup.run(job, seconds=0.1)
+    setup.end(job, JobState.DONE, "Rules acted on 2 files")
+
+    assert setup.notifier.sent == [("Rules acted on 2 files", "", "view-filter", False)]
+
+
+def test_a_run_of_rules_that_did_nothing_is_not_told(setup):
+    job = rules_job(acted=0)
+    setup.run(job)
+    setup.end(job, JobState.DONE, "Rules acted on 0 files")
+
+    assert setup.notifier.sent == []
+
+
+def test_a_run_of_rules_is_not_told_while_a_window_is_visible(setup):
+    setup.visible = True
+    job = rules_job()
+    setup.run(job)
+    setup.end(job, JobState.DONE, "Rules acted on 2 files")
+
+    assert setup.notifier.sent == []
+
+
+def test_the_same_failure_of_rules_is_told_once(setup):
+    setup.island = True
+    error = OperationError("/home/me/Downloads/a.pdf", "move", "Permission denied")
+    other = OperationError("/home/me/Downloads/b.pdf", "move", "Permission denied")
+
+    for errors in ([error], [error], [error, other]):
+        job = rules_job(acted=0, errors=errors)
+        setup.run(job)
+        setup.end(job, JobState.FAILED, "Rules acted on 0 of 1 file, 1 failed")
+
+    assert len(setup.notifier.sent) == 2
+    assert all(urgent for *_rest, urgent in setup.notifier.sent)
