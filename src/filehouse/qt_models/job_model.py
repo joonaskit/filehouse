@@ -14,6 +14,7 @@ from PySide6.QtCore import QLocale, QObject, QTimer, Signal
 from filehouse.core import locations
 from filehouse.core.operations import Job, JobKind, JobQueue, JobState, undo
 from filehouse.core.operations.archive import CompressJob, ExtractJob
+from filehouse.core.operations.automation import RulesJob, RulesUndoJob
 from filehouse.core.operations.permissions import PermissionsJob
 from filehouse.qt_models import workers
 from filehouse.qt_models.workers import Background
@@ -35,6 +36,7 @@ ICONS = {
     JobKind.EXTRACT: "archive-extract",
     JobKind.COMPRESS: "archive-insert",
     JobKind.PERMISSIONS: "object-locked",
+    JobKind.RULES: "view-filter",
 }
 
 
@@ -146,10 +148,17 @@ class JobModel(QObject):
         self._add(job, origin)
         return job
 
+    def run_rules(self, folder, plan, origin=None):
+        """Queue doing the `plan` of a folder's rules (`automations.plan_run`), and
+        return the job. Nobody is asked anything while it runs."""
+        job = RulesJob(folder, plan, on_change=self._report)
+        self._add(job, origin)
+        return job
+
     def remember(self, record):
         """Keep an action so that it can be taken back. A job's own is kept when it
         ends; this is for what the windows do at once: a rename, a new folder."""
-        if record is None or not record.pairs:
+        if record is None or record.empty:
             return
         self._history.push(record)
         self.undo_changed.emit()
@@ -177,8 +186,11 @@ class JobModel(QObject):
         if record is None:
             return None
         self.undo_changed.emit()
-        if record.kind in (undo.Kind.MOVE, undo.Kind.TRASH):
-            job = Job.undo_of(record, prompt=self._prompt, on_change=self._report)
+        if record.kind in (undo.Kind.MOVE, undo.Kind.TRASH, undo.Kind.RULES):
+            if record.kind is undo.Kind.RULES:
+                job = RulesUndoJob(record, on_change=self._report)
+            else:
+                job = Job.undo_of(record, prompt=self._prompt, on_change=self._report)
             self._add(job, origin)
             return Undone(record, job=job)
 
@@ -304,6 +316,11 @@ def title(job):
 
 def short_heading(job):
     """What the job is doing, without where to: "Copying 3 items". For where room is short."""
+    if job.kind is JobKind.RULES:
+        if job.is_undo:
+            return "Taking back folder rules"
+        count = len(job.sources)
+        return f"Running rules on {'1 file' if count == 1 else f'{count} files'}"
     count = len(job.sources)
     what = f"“{locations.basename(job.sources[0])}”" if count == 1 else f"{count} items"
     if job.kind is JobKind.TRASH:
@@ -336,6 +353,8 @@ def heading(job):
         return f"{text} back"
     if job.kind in (JobKind.COPY, JobKind.MOVE, JobKind.EXTRACT):
         text += f" to {locations.display_name(job.destination)}"
+    elif job.kind is JobKind.RULES and job.destination is not None:
+        text += f" in {locations.display_name(job.destination)}"
     return text
 
 

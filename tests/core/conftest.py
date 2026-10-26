@@ -1,12 +1,13 @@
 import os
 import shutil
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
-from helpers import not_supported
+from helpers import gfile, not_supported
 
-from filehouse.core.operations import copy
+from filehouse.core.operations import copy, job, trash
 
 
 @pytest.fixture
@@ -60,3 +61,34 @@ def slow_copy(monkeypatch):
                 progress(done, total)
 
     monkeypatch.setattr(copy, "_gio_copy", chunked)
+
+
+@pytest.fixture
+def kept():
+    """What the stand-in trash wrote down: (its name there, where it was, when it came)."""
+    return []
+
+
+@pytest.fixture
+def bin_(tmp_path, monkeypatch, kept):
+    """A folder that stands in for the trash, and keeps what the trash keeps: where
+    each item was and when it came."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+
+    def put(location, _cancellable):
+        name = f"{len(kept)}-{location.get_basename()}"
+        os.rename(location.get_path(), folder / name)
+        kept.append((name, location.get_path(), datetime.now().replace(microsecond=0)))
+
+    def listed(_cancellable):
+        return [
+            (gfile(folder / name), path, when)
+            for name, path, when in kept
+            if (folder / name).exists()
+        ]
+
+    monkeypatch.setattr(trash, "_gio_trash", put)
+    monkeypatch.setattr(trash, "_list", listed)
+    monkeypatch.setattr(job, "_TRASH_SETTLES_SECONDS", 0)
+    return folder

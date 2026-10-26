@@ -149,3 +149,11 @@ def test_the_details_pane_is_in_the_dialog_and_follows_other_changes(dialog):
 
     settings.set_details_pane(True)
     assert dialog.pane.isChecked()
+
+
+def test_the_rules_of_folders_can_be_paused(dialog):
+    assert dialog.rules.isChecked()
+
+    dialog.rules.setChecked(False)
+
+    assert settings.run_rules() is False

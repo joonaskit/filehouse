@@ -73,6 +73,11 @@ class SettingsDialog(QDialog):
         self.per_folder.setChecked(settings.per_folder())
         self.per_folder.toggled.connect(settings.set_per_folder)
 
+        # One switch that pauses the rules of every folder (#87)
+        self.rules = QCheckBox("Run the rules of folders")
+        self.rules.setChecked(settings.run_rules())
+        self.rules.toggled.connect(settings.set_run_rules)
+
         self.restore = QCheckBox("Start with the tabs of last time")
         self.restore.setChecked(settings.restore_tabs())
         self.restore.toggled.connect(settings.set_restore_tabs)
@@ -129,6 +134,13 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.per_folder)
         layout.addWidget(
             self._note("The view and the sort order above are for the folders without their own.")
+        )
+        layout.addWidget(self.rules)
+        layout.addWidget(
+            self._note(
+                "Rules are set in a folder's menu. They run when the app starts and once a "
+                "day while it runs."
+            )
         )
 
         layout.addWidget(self._heading("New windows"))

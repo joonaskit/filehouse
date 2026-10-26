@@ -37,6 +37,7 @@ class JobKind(Enum):
     EXTRACT = "extract"
     COMPRESS = "compress"
     PERMISSIONS = "permissions"
+    RULES = "rules"  # a run of a folder's rules, or the undo of one
 
 
 class JobState(Enum):
@@ -89,6 +90,7 @@ _VERBS = {
     JobKind.EXTRACT: "Extracted",
     JobKind.COMPRESS: "Compressed",
     JobKind.PERMISSIONS: "Changed the permissions of",
+    JobKind.RULES: "Rules acted on",
 }
 
 

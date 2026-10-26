@@ -22,6 +22,7 @@ from filehouse.integration.recent import RecentFiles
 from filehouse.integration.theme_watcher import ThemeWatcher
 from filehouse.qt_models.favourites import Favourites
 from filehouse.qt_models.job_model import JobModel
+from filehouse.qt_models.rules_runner import RulesRunner
 from filehouse.qt_models.workers import Background
 from filehouse.ui import clipboard, main_window, settings
 from filehouse.ui.chooser import Chooser
@@ -257,6 +258,20 @@ def run(args, instance):
     notifier.start()
     # The process may end the moment the last job has: what was sent must be on the bus
     app.aboutToQuit.connect(notifier.flush)
+
+    # The rules of folders: now, for what came while the process was not running, and
+    # then once a day, and on what arrives in their folders. Their work is jobs like any
+    # other, shown and told as above
+    rules_runner = RulesRunner(
+        jobs,
+        settings.all_folder_rules,
+        settings.run_rules,
+        settings.rules_last_run,
+        settings.set_rules_last_run,
+        jobs,
+    )
+    settings.changes.rules_changed.connect(rules_runner.watch)
+    rules_runner.start()
 
     # Asked by a later start of the app, or by another app for "Show in folder"
     instance.on_open = windows.open_paths

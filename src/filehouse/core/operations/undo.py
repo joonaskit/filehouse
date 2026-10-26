@@ -10,6 +10,8 @@ since, and what cannot be put back is said by name.
   they were and when they went there.
 - A rename is renamed back, and a new folder or file is removed if it is still empty:
   at once, like the actions themselves (`rename_back`, `remove_created`).
+- A run of a folder's rules is one record of the records of what it did, taken back
+  last first by a job of its own (`automation.RulesUndoJob`).
 
 Not kept, because they cannot be taken back: a permanent delete, and whatever replaced
 something, since what it replaced is gone.
@@ -35,6 +37,7 @@ class Kind(Enum):
     MOVE = "move"
     TRASH = "trash"
     CREATE = "create"
+    RULES = "rules"  # a run of a folder's rules: its `parts` are the records of each action
 
 
 @dataclass(frozen=True)
@@ -47,9 +50,20 @@ class Record:
     pairs: tuple
     # When the action began, by the clock: what a trashed item is found by
     since: float = 0.0
+    # For a run of rules: the records of what it did, in the order it did them, and the
+    # name of the folder
+    parts: tuple = ()
+    label: str = ""
+
+    @property
+    def empty(self):
+        """Whether there is nothing in it to take back."""
+        return not (self.parts if self.kind is Kind.RULES else self.pairs)
 
     def describe(self):
         """What is taken back, to follow the word "Undo": "move of 3 items"."""
+        if self.kind is Kind.RULES:
+            return f"folder rules in “{self.label}”"
         count = len(self.pairs)
         now, was = self.pairs[0]
         if self.kind is Kind.CREATE:
@@ -82,7 +96,7 @@ class History:
         self._records = []
 
     def push(self, record):
-        if record is None or not record.pairs:
+        if record is None or record.empty:
             return
         self._records.append(record)
         del self._records[: -self._limit]
