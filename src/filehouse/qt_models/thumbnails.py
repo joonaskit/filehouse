@@ -33,6 +33,8 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QImage, QImageReader
 
+from filehouse.qt_models.workers import Outbox
+
 # The spec's "normal" size
 SIZE = 128
 # Decoding a huge image for a small picture is not worth the wait
@@ -286,11 +288,6 @@ def _store(image, uri, mtime, size, full):
         pass
 
 
-class _Signals(QObject):
-    # A token from the asker, and the image: null when there is no thumbnail to show
-    ready = Signal(object, QImage)
-
-
 # A pool of its own: a few programs at a time, and never all the threads of the app
 _external_pool = QThreadPool()
 _external_pool.setMaxThreadCount(_EXTERNAL_AT_ONCE)
@@ -309,12 +306,12 @@ class _Task(QRunnable):
     """Looks in the cache, then makes the thumbnail if Qt can. What only a thumbnailer
     can make is handed over to the pool for those."""
 
-    def __init__(self, token, uri, path, mtime, size, content_type, signals, wanted):
+    def __init__(self, token, uri, path, mtime, size, content_type, outbox, wanted):
         super().__init__()
         self._arguments = (uri, path, mtime, size)
         self._content_type = content_type
         self._token = token
-        self._signals = signals
+        self._outbox = outbox
         self._wanted = (wanted, wanted.round)
 
     def run(self):
@@ -330,20 +327,20 @@ class _Task(QRunnable):
                 if thumbnailer is not None:
                     _external_pool.start(
                         _ExternalTask(
-                            self._token, thumbnailer, self._arguments, self._signals, self._wanted
+                            self._token, thumbnailer, self._arguments, self._outbox, self._wanted
                         )
                     )
                     return
-        _answer(self._signals, self._token, image)
+        _answer(self._outbox, self._token, image)
 
 
 class _ExternalTask(QRunnable):
-    def __init__(self, token, thumbnailer, arguments, signals, wanted):
+    def __init__(self, token, thumbnailer, arguments, outbox, wanted):
         super().__init__()
         self._thumbnailer = thumbnailer
         self._arguments = arguments
         self._token = token
-        self._signals = signals
+        self._outbox = outbox
         self._wanted = wanted
 
     def run(self):
@@ -351,7 +348,7 @@ class _ExternalTask(QRunnable):
             return
         uri, path, mtime, size = self._arguments
         image = make_with_thumbnailer(self._thumbnailer, uri, path, mtime, size)
-        _answer(self._signals, self._token, image)
+        _answer(self._outbox, self._token, image)
 
 
 def _still_wanted(wanted):
@@ -359,12 +356,9 @@ def _still_wanted(wanted):
     return holder.round == round_
 
 
-def _answer(signals, token, image):
-    try:
-        signals.ready.emit(token, image or QImage())
-    except RuntimeError:
-        # The asker is gone
-        pass
+def _answer(outbox, token, image):
+    # The image is null when there is no thumbnail to show
+    outbox.send("ready", token, image or QImage())
 
 
 class Thumbnailer(QObject):
@@ -374,13 +368,12 @@ class Thumbnailer(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._signals = _Signals(self)
-        self._signals.ready.connect(self.ready)
+        self._outbox = Outbox(self)
         self._wanted = _Wanted()
 
     def request(self, token, uri, path, mtime, size, content_type):
         QThreadPool.globalInstance().start(
-            _Task(token, uri, path, mtime, size, content_type, self._signals, self._wanted)
+            _Task(token, uri, path, mtime, size, content_type, self._outbox, self._wanted)
         )
 
     def forget(self):

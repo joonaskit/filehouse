@@ -1,6 +1,7 @@
 """The rules of a folder from the window: the dialog with its preview, and "Run rules
 now" (#87)."""
 
+import dataclasses
 import os
 import time
 
@@ -224,3 +225,48 @@ def test_the_drop_downs_of_a_condition_are_never_squeezed(qtbot, jobs, tmp_path)
     metrics = row.mode.fontMetrics()
     longest = max(metrics.horizontalAdvance(row.mode.itemText(i)) for i in range(row.mode.count()))
     assert row.mode.width() > longest
+
+
+def test_the_path_bar_shows_when_the_folder_has_rules(qtbot, open_window, tmp_path):
+    folder = settled(tmp_path / "in")
+    uri = gfile(folder).get_uri()
+    window = open_window(folder)
+    button = window._rules_button
+
+    def lit():
+        return button.icon().cacheKey() == window._rules_icons[True].cacheKey()
+
+    assert not button.isVisibleTo(window)
+
+    rule = pdfs_to(tmp_path / "out")
+    settings.set_folder_rules(uri, [rule])
+    assert button.isVisibleTo(window) and lit()
+
+    settings.set_run_rules(False)
+    assert button.isVisibleTo(window) and not lit()
+    assert "paused in Settings" in button.toolTip()
+
+    settings.set_run_rules(True)
+    settings.set_folder_rules(uri, [dataclasses.replace(rule, enabled=False)])
+    assert button.isVisibleTo(window) and not lit()
+    assert "switched off" in button.toolTip()
+
+    settings.set_folder_rules(uri, [])
+    assert not button.isVisibleTo(window)
+
+
+def test_the_rules_indicator_follows_the_folder_and_opens_its_rules(qtbot, open_window, tmp_path):
+    folder = settled(tmp_path / "in")
+    other = settled(tmp_path / "other")
+    settings.set_folder_rules(gfile(folder).get_uri(), [pdfs_to(tmp_path / "out")])
+    window = open_window(other)
+    button = window._rules_button
+
+    assert not button.isVisibleTo(window)
+    window.navigate(gfile(folder))
+    qtbot.waitUntil(lambda: button.isVisibleTo(window), timeout=TIMEOUT)
+
+    button.click()
+    (dialog,) = window.findChildren(FolderRulesDialog)
+    assert dialog.list.count() == 1
+    dialog.reject()

@@ -110,6 +110,16 @@ def test_a_disabled_icon_is_drawn_in_the_faint_text_colour(qtbot):
     assert not same_colour(disabled, style.palette_color("red"))
 
 
+def test_a_glyph_no_icon_theme_has_comes_with_the_app(qtbot, monkeypatch):
+    # The lightning bolt of folder rules: Breeze has none (#95)
+    monkeypatch.setattr(QIcon, "hasThemeIcon", lambda name: False)
+
+    bolt = style.icon("lightning-symbolic", "lightning")
+
+    assert not bolt.isNull()
+    assert style.icon("no-such-icon-anywhere").isNull()
+
+
 def sides(icon):
     return sorted({size.width() for size in icon.availableSizes()})
 

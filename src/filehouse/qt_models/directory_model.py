@@ -9,7 +9,6 @@ from PySide6.QtCore import (
     QLocale,
     QMimeData,
     QModelIndex,
-    QObject,
     QRunnable,
     QSortFilterProxyModel,
     Qt,
@@ -35,6 +34,7 @@ from filehouse.core.listing import (
 from filehouse.integration import style
 from filehouse.qt_models import columns, dates, thumbnails
 from filehouse.qt_models.icons import icon_for_content_type
+from filehouse.qt_models.workers import Outbox
 
 # One column for each of `columns.KEYS`, in that order
 NAME, PERMISSIONS, MODIFIED, SIZE, TYPE, CREATED, ACCESSED, OWNER, GROUP, ORIGINAL, DELETED = range(
@@ -73,93 +73,71 @@ _listing_pool.setMaxThreadCount(4)
 InfoRole = Qt.ItemDataRole.UserRole
 
 
-class _ListingSignals(QObject):
-    # Each carries the generation it belongs to, so results for a folder
-    # the model has already left are dropped
-    batch = Signal(int, object)
-    finished = Signal(int)
-    failed = Signal(int, str)
-    counted = Signal(int, object)  # {file name: Count, or None for a folder that can't be read}
-    counts_done = Signal(int)
-    found = Signal(int, object)  # a batch of the results of a search
-    search_finished = Signal(int, bool)  # whether it stopped at the limit
-
-
 class _SearchTask(QRunnable):
-    def __init__(self, generation, location, text, show_hidden, cancellable, signals):
+    def __init__(self, generation, location, text, show_hidden, cancellable, outbox):
         super().__init__()
         self._arguments = (generation, location, text, show_hidden, cancellable)
-        self._signals = signals
+        self._outbox = outbox
 
     def run(self):
         generation, location, text, show_hidden, cancellable = self._arguments
-        try:
-            truncated = search.search_below(
-                location,
-                text,
-                lambda batch: self._signals.found.emit(generation, batch),
-                cancellable,
-                show_hidden,
-            )
-            self._signals.search_finished.emit(generation, truncated)
-        except RuntimeError:
-            # The model was destroyed while this was still searching
-            pass
+        truncated = search.search_below(
+            location,
+            text,
+            lambda batch: self._outbox.send("_on_found", generation, batch),
+            cancellable,
+            show_hidden,
+        )
+        self._outbox.send("_on_search_finished", generation, truncated)
 
 
 class _ListingTask(QRunnable):
-    def __init__(self, generation, location, cancellable, signals):
+    def __init__(self, generation, location, cancellable, outbox):
         super().__init__()
         self._generation = generation
         self._location = location
         self._cancellable = cancellable
-        self._signals = signals
+        self._outbox = outbox
 
     def run(self):
         try:
             list_directory(
                 self._location,
-                lambda batch: self._signals.batch.emit(self._generation, batch),
+                lambda batch: self._outbox.send("_on_batch", self._generation, batch),
                 self._cancellable,
             )
-            self._signals.finished.emit(self._generation)
+            self._outbox.send("_on_finished", self._generation)
         except ListingError as error:
-            self._signals.failed.emit(self._generation, str(error))
-        except RuntimeError:
-            # The model was destroyed while this was still listing
-            pass
+            self._outbox.send("_on_failed", self._generation, str(error))
 
 
 class _CountTask(QRunnable):
     """Counts what is in each of the folders `names`, one after the other."""
 
-    def __init__(self, generation, location, names, cancellable, signals):
+    def __init__(self, generation, location, names, cancellable, outbox):
         super().__init__()
         self._generation = generation
         self._location = location
         self._names = names
         self._cancellable = cancellable
-        self._signals = signals
+        self._outbox = outbox
 
     def run(self):
-        try:
-            counts = {}
-            reported = time.monotonic()
-            for name in self._names:
-                if self._cancellable.is_cancelled():
-                    return
-                counts[name] = count_children(self._location.get_child(name), self._cancellable)
-                # A few at a time: one signal per folder would flood the UI thread
-                if time.monotonic() - reported >= _COUNT_REPORT_S:
-                    self._signals.counted.emit(self._generation, counts)
-                    counts = {}
-                    reported = time.monotonic()
-            if counts:
-                self._signals.counted.emit(self._generation, counts)
-            self._signals.counts_done.emit(self._generation)
-        except RuntimeError:
-            # The model was destroyed while this was still counting
-            pass
+        counts = {}
+        reported = time.monotonic()
+        for name in self._names:
+            if self._cancellable.is_cancelled():
+                return
+            counts[name] = count_children(self._location.get_child(name), self._cancellable)
+            # A few at a time: one answer per folder would flood the UI thread.
+            # {file name: Count, or None for a folder that can't be read}
+            if time.monotonic() - reported >= _COUNT_REPORT_S:
+                self._outbox.send("_on_counted", self._generation, counts)
+                counts = {}
+                reported = time.monotonic()
+        if counts:
+            self._outbox.send("_on_counted", self._generation, counts)
+        self._outbox.send("_on_counts_done", self._generation)
 
 
 class DirectoryModel(QAbstractTableModel):
@@ -209,14 +187,9 @@ class DirectoryModel(QAbstractTableModel):
         self._count_timer.setSingleShot(True)
         self._count_timer.setInterval(_COUNT_DELAY_MS)
         self._count_timer.timeout.connect(self._start_count)
-        self._signals = _ListingSignals(self)
-        self._signals.batch.connect(self._on_batch)
-        self._signals.finished.connect(self._on_finished)
-        self._signals.failed.connect(self._on_failed)
-        self._signals.counted.connect(self._on_counted)
-        self._signals.counts_done.connect(self._on_counts_done)
-        self._signals.found.connect(self._on_found)
-        self._signals.search_finished.connect(self._on_search_finished)
+        # How the listing, counts and searches answer. Each answer carries the generation
+        # it belongs to, so results for a folder the model has already left are dropped
+        self._outbox = Outbox(self)
 
     # Loading
 
@@ -239,7 +212,7 @@ class DirectoryModel(QAbstractTableModel):
         # Entries seen twice are merged by name.
         self._start_monitor()
         _listing_pool.start(
-            _ListingTask(self._generation, location, self._cancellable, self._signals)
+            _ListingTask(self._generation, location, self._cancellable, self._outbox)
         )
 
     def close(self):
@@ -315,7 +288,7 @@ class DirectoryModel(QAbstractTableModel):
                     text,
                     show_hidden,
                     self._search_cancellable,
-                    self._signals,
+                    self._outbox,
                 )
             )
         self.search_changed.emit()
@@ -504,7 +477,7 @@ class DirectoryModel(QAbstractTableModel):
             return
         self._counting = True
         QThreadPool.globalInstance().start(
-            _CountTask(self._generation, self._location, names, self._cancellable, self._signals)
+            _CountTask(self._generation, self._location, names, self._cancellable, self._outbox)
         )
 
     def _on_counted(self, generation, counts):

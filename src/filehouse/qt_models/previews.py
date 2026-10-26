@@ -16,6 +16,7 @@ except ImportError:  # Qt without its PDF module: the first page, if Qt's image 
 
 from filehouse.qt_models import thumbnails
 from filehouse.qt_models.icons import kind_of
+from filehouse.qt_models.workers import Outbox
 
 # The longest side of what is loaded. A larger picture is scaled while decoding, which
 # is much cheaper than decoding it whole
@@ -123,33 +124,23 @@ def load_page(path, page):
         document.close()
 
 
-class _Signals(QObject):
-    ready = Signal(object, QImage)
-    page_ready = Signal(object, QImage, int, int)
-    text_ready = Signal(object, object, bool)
-
-
 class _Task(QRunnable):
-    def __init__(self, token, path, content_type, size, page, signals):
+    def __init__(self, token, path, content_type, size, page, outbox):
         super().__init__()
         self._arguments = (token, path, content_type, size, page)
-        self._signals = signals
+        self._outbox = outbox
 
     def run(self):
         token, path, content_type, size, page = self._arguments
-        try:
-            if has_pages(content_type) and size <= MAX_BYTES:
-                self._signals.page_ready.emit(token, *load_page(path, page))
-            elif can_preview_picture(content_type, size):
-                self._signals.ready.emit(token, load(path, content_type))
-            else:
-                text = read_text(path)
-                self._signals.text_ready.emit(
-                    token, None if text is None else text[0], text is not None and text[1]
-                )
-        except RuntimeError:
-            # The asker is gone
-            pass
+        if has_pages(content_type) and size <= MAX_BYTES:
+            self._outbox.send("page_ready", token, *load_page(path, page))
+        elif can_preview_picture(content_type, size):
+            self._outbox.send("ready", token, load(path, content_type))
+        else:
+            text = read_text(path)
+            self._outbox.send(
+                "text_ready", token, None if text is None else text[0], text is not None and text[1]
+            )
 
 
 class PreviewLoader(QObject):
@@ -164,12 +155,9 @@ class PreviewLoader(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._signals = _Signals(self)
-        self._signals.ready.connect(self.ready)
-        self._signals.page_ready.connect(self.page_ready)
-        self._signals.text_ready.connect(self.text_ready)
+        self._outbox = Outbox(self)
 
     def request(self, token, path, content_type, size, page=0):
         QThreadPool.globalInstance().start(
-            _Task(token, path, content_type, size, page, self._signals)
+            _Task(token, path, content_type, size, page, self._outbox)
         )

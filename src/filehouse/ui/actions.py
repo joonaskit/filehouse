@@ -14,6 +14,9 @@ from filehouse.ui.file_actions import is_archive
 
 _KEYS = QKeySequence.StandardKey
 
+# No icon theme in use has a bolt: style.icon falls back to the app's own
+RULES_ICON = "lightning"
+
 # (name, text, icon, keys, colour). The keys are the strings of QKeySequence, or a
 # standard key for the platform's whole list of them
 _ACTIONS = (
@@ -88,8 +91,9 @@ _ACTIONS = (
     # The folder open here, or the one a menu is for, in the bar under the toolbar
     ("favourite", "Add to favourites", "bookmark-new", ["Ctrl+D"], None),
     ("permissions", "Permissions", "object-locked", [], None),
-    # The rules of the folder open here (#87), and running them now after a preview
-    ("folder_rules", "Rules for this folder…", "view-filter", [], None),
+    # The rules of the folder open here (#87), and running them now after a preview.
+    # A bolt: something happens here by itself. The folder's indicator has it too
+    ("folder_rules", "Rules for this folder…", RULES_ICON, [], None),
     ("run_rules", "Run rules now…", "system-run", [], None),
     ("settings", "Settings", "preferences-system", ["Ctrl+,"], None),
     ("folder_menu", "Folder menu", "view-more-horizontal", [], None),
