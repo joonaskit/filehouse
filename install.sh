@@ -25,9 +25,11 @@ services_dir="$HOME/.local/share/dbus-1/services"
 portals_dir="$HOME/.local/share/xdg-desktop-portal/portals"
 portal_conf_dir="${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal"
 
-# PySide6 and PyGObject must come from the distribution (see CLAUDE.md).
+# PySide6 and PyGObject must come from the distribution (see CLAUDE.md). The libarchive
+# binding is optional to the app, which leaves archives out of its menu without it, but
+# not to an install: nothing in the app says it is missing.
 missing=()
-for pkg in python3-pyside6 python3-gobject; do
+for pkg in python3-pyside6 python3-gobject python3-libarchive-c; do
     rpm -q --quiet "$pkg" || missing+=("$pkg")
 done
 if ((${#missing[@]})); then

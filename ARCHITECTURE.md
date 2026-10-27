@@ -49,7 +49,7 @@ These shape the operations engine more than anything else:
 | Archives | **libarchive**, through `libarchive-c` (optional) | Reads nearly every format (zip, tar and its compressions, 7z, rar, cpio) and writes zip and tar in our own job, so progress, cancel and the path checks are ours. Python's `zipfile` and `tarfile` would need no dependency but read no 7z or rar; handing off to Ark would give up the job model |
 | Tests | pytest (core), pytest-qt (a few UI tests) | The core has no UI and can be tested against temporary folders |
 
-On Fedora: `dnf install python3-pyside6 python3-gobject`, and `python3-libarchive-c` for archives (without it the app runs and offers nothing for them). For development, a venv created with `--system-site-packages` sees both.
+On Fedora: `dnf install python3-pyside6 python3-gobject`, and `python3-libarchive-c` for archives (without it the app runs and offers nothing for them; `install.sh` installs all three). For development, a venv created with `--system-site-packages` sees both.
 
 **Decided: Qt Widgets.** Qt Quick would make it easier to match the shell's look and animations, at the cost of building the views by hand.
 
