@@ -28,6 +28,8 @@ BASE_FONT_PX = 13
 # distance from the tab's right edge
 TAB_GAP = 4
 TAB_CLOSE_INSET = 8
+# Between a segmented choice's well and its buttons (the settings' Dark or Light)
+SEGMENT_PADDING = 3
 
 # How much of a tile its glyph fills, and how strong the tile's own colour is
 _GLYPH_SHARE = 0.56
@@ -495,6 +497,41 @@ def _stylesheet():
         QTabBar::tab:selected {{
             background: {card}; border-color: {card_border}; color: {colors["textPrimary"]};
         }}
+
+        /* The settings' tabs: pills over a rounded card, as the menus' items. Not the
+           window's tabs, which are cards themselves */
+        #settingsTabs::pane {{
+            border: 1px solid {card_border}; border-radius: {large}px; background: {card};
+            top: -1px;
+        }}
+        #settingsTabs > QTabBar::tab {{
+            padding: {tab_padding}px {px(14)}px; margin: 0 {px(2)}px {px(6)}px 0;
+            border: none; border-radius: {radius_within("medium", control)}px;
+            background: transparent; color: {colors["textSecondary"]};
+        }}
+        #settingsTabs > QTabBar::tab:hover {{ background: {hover}; }}
+        #settingsTabs > QTabBar::tab:selected {{
+            background: {selected}; color: {colors["textPrimary"]};
+        }}
+        #settingsPage {{ background: transparent; }}
+        #heading {{
+            color: {colors["textSecondary"]}; font-size: {small_font}px; font-weight: 600;
+        }}
+
+        /* One of a few choices, as the shell has them: buttons in a rounded well, the
+           one chosen raised. The well's corners are its buttons' and the padding, so
+           the two are round about one centre */
+        #segments {{
+            background: {overlay(0.05)};
+            border-radius: {radius_within("medium", control) + px(SEGMENT_PADDING)}px;
+        }}
+        #segments QPushButton {{
+            border: none; background: transparent;
+            border-radius: {radius_within("medium", control)}px;
+            padding: {px(5)}px {px(12)}px;
+        }}
+        #segments QPushButton:hover {{ background: {hover}; }}
+        #segments QPushButton:checked {{ background: {overlay(0.12)}; font-weight: 600; }}
 
         #sidebar {{
             padding: {px(8)}px; background: {card}; border: 1px solid {card_border};
