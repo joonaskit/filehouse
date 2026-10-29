@@ -25,9 +25,11 @@ services_dir="$HOME/.local/share/dbus-1/services"
 portals_dir="$HOME/.local/share/xdg-desktop-portal/portals"
 portal_conf_dir="${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal"
 
-# PySide6 and PyGObject must come from the distribution (see CLAUDE.md).
+# PySide6 and PyGObject must come from the distribution (see CLAUDE.md). The libarchive
+# binding is optional to the app, which leaves archives out of its menu without it, but
+# not to an install: nothing in the app says it is missing.
 missing=()
-for pkg in python3-pyside6 python3-gobject; do
+for pkg in python3-pyside6 python3-gobject python3-libarchive-c; do
     rpm -q --quiet "$pkg" || missing+=("$pkg")
 done
 if ((${#missing[@]})); then
@@ -44,8 +46,19 @@ else
     .venv/bin/python -m pip install -r requirements.txt
 fi
 
-.venv/bin/python -c "import gi, PySide6" ||
+# A venv with system site packages also reads the user's own (~/.local/lib), before the
+# system's, so a PySide6 another app had installed with `pip install --user` would be
+# the one used, and with it KDE's libraries, built for the system's Qt, do not load (no
+# glass blur, no dialog attached to another app's window). The app's command runs
+# without the user's site packages: `-s` on its first line, which pip has just written.
+sed -i '1s|^\(#!/[^ ]*/python[0-9.]*\)$|\1 -s|' .venv/bin/filehouse
+
+.venv/bin/python -s -c "import gi, PySide6" ||
     { echo "gi or PySide6 is not importable from the venv" >&2; exit 1; }
+case "$(.venv/bin/python -s -c 'import PySide6; print(PySide6.__file__)')" in
+    /usr/*) ;;
+    *) echo "PySide6 in the venv is not the system's (see CLAUDE.md)" >&2; exit 1 ;;
+esac
 
 mkdir -p "$bin_dir"
 ln -sf "$PWD/.venv/bin/filehouse" "$bin_dir/filehouse"

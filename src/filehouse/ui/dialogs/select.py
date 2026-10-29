@@ -18,6 +18,7 @@ class SelectDialog(QDialog):
 
     def __init__(self, parent, count, apply):
         super().__init__(parent)
+        style.translucent(self)
         self._count = count
         self._apply = apply
         self.setWindowTitle("Select matching")

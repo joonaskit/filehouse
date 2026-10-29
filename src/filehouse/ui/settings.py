@@ -1,7 +1,7 @@
 """What the app remembers between runs: window size, view mode and sort order (the app's,
 and each folder's own), hidden files, the split, the tabs of last time, the details pane,
-the density, the notifications, whether opened files are remembered, and the rules of
-folders."""
+the density, the look chosen by hand, the notifications, whether opened files are
+remembered, and the rules of folders."""
 
 import json
 import os
@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, QSettings, QSize, Signal
 
 from filehouse import APP_ID
 from filehouse.core import automations
+from filehouse.integration import appearance
 from filehouse.qt_models import columns
 
 DETAILS, ICONS = "details", "icons"
@@ -235,6 +236,51 @@ def density():
 
 def set_density(density):
     _store().setValue("view/density", density)
+
+
+def follow_shell():
+    """Whether the look is the shell's (its theme file), or the one chosen by hand. On at
+    first; without the shell the look chosen by hand is used whatever this says (#30)."""
+    return _store().value("appearance/follow_shell", True) in (True, "true")
+
+
+def set_follow_shell(on):
+    _store().setValue("appearance/follow_shell", bool(on))
+
+
+def look():
+    """The look chosen by hand (an appearance.Look): dark, blue and the default corners
+    until one is chosen."""
+    store = _store()
+    return appearance.Look(
+        store.value("appearance/scheme", "dark"),
+        store.value("appearance/accent", "blue"),
+        store.value("appearance/corners", "default"),
+    )
+
+
+def set_look(chosen):
+    store = _store()
+    store.setValue("appearance/scheme", chosen.scheme)
+    store.setValue("appearance/accent", chosen.accent)
+    store.setValue("appearance/corners", chosen.corners)
+
+
+def glass():
+    """Whether the app is in the glass style; solid until it is chosen."""
+    return _store().value("appearance/style", "solid") == "glass"
+
+
+def set_glass(on):
+    _store().setValue("appearance/style", "glass" if on else "solid")
+
+
+def chosen_look(shell=None):
+    """The look to lay over the shell's theme: None to follow the shell, which is only
+    while it is there (`shell`: whether it is, found when not given) and followed."""
+    if shell is None:
+        shell = appearance.shell_found()
+    return None if shell and follow_shell() else look()
 
 
 def notify():

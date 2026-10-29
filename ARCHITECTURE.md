@@ -49,7 +49,7 @@ These shape the operations engine more than anything else:
 | Archives | **libarchive**, through `libarchive-c` (optional) | Reads nearly every format (zip, tar and its compressions, 7z, rar, cpio) and writes zip and tar in our own job, so progress, cancel and the path checks are ours. Python's `zipfile` and `tarfile` would need no dependency but read no 7z or rar; handing off to Ark would give up the job model |
 | Tests | pytest (core), pytest-qt (a few UI tests) | The core has no UI and can be tested against temporary folders |
 
-On Fedora: `dnf install python3-pyside6 python3-gobject`, and `python3-libarchive-c` for archives (without it the app runs and offers nothing for them). For development, a venv created with `--system-site-packages` sees both.
+On Fedora: `dnf install python3-pyside6 python3-gobject`, and `python3-libarchive-c` for archives (without it the app runs and offers nothing for them; `install.sh` installs all three). For development, a venv created with `--system-site-packages` sees both.
 
 **Decided: Qt Widgets.** Qt Quick would make it easier to match the shell's look and animations, at the cost of building the views by hand.
 
@@ -145,6 +145,8 @@ filehouse/
 │   │   ├── portal.py            the file chooser portal's backend: other apps' Open and Save
 │   │   ├── parent_window.py     a dialog as the child of another app's window
 │   │   ├── theme_watcher.py     follows the theme file while the app runs
+│   │   ├── appearance.py        the look chosen by hand over the shell's theme (#30)
+│   │   ├── blur.py              KWin's blur behind a window, for the glass style
 │   │   ├── motion.py            how long things take to move, at the desktop's animation speed
 │   │   ├── autostart.py         the entry that starts the app with the session
 │   │   ├── places.py            the places file Dolphin keeps (user-places.xbel), edited in place
@@ -162,6 +164,7 @@ filehouse/
 │       ├── pane.py              one folder: model, sort proxy, list, history, selection
 │       ├── chooser.py           the dialog other apps open and save with
 │       ├── groups.py            the rounded groups of a toolbar
+│       ├── glass.py             the light on a card of glass: its rim and band
 │       ├── preview.py           the window Space opens: a larger look at the selection
 │       ├── media.py             plays video and audio in the preview (QtMultimedia, optional)
 │       ├── tab.py               one or two panes and the active one
@@ -179,6 +182,7 @@ filehouse/
 │       ├── details_pane.py      what is selected, beside the list
 │       ├── clipboard.py         cut, copy and paste of files as `text/uri-list`
 │       ├── settings.py          what is remembered between runs
+│       ├── choices.py           the settings' segmented choices and accent dots
 │       └── dialogs/             questions (conflict, error, no trash, confirm delete, name
 │                                taken, password) and the prompter that shows them, name
 │                                (rename, new folder), rename_many, select, compress,
@@ -564,7 +568,30 @@ For a job that ends while the process has no window to show it (the user chose "
 
 ### Settings dialog (#23, `ui/dialogs/settings.py`)
 
-A modal dialog, opened with Ctrl+, or the gear button at the right end of the toolbar. A choice is stored as it is made; there is only Close. Sections: **Appearance** (density, which says it applies once every window has been closed), **Folders** (the app's view mode and sort order, for the folders without their own, and whether each folder keeps its own: the open windows follow these from the settings; and the one switch that pauses the rules of every folder, #87), **New windows** (whether a start opens the tabs of last time; hidden files and the details pane, which also change the window the dialog was opened from; whether the process stays without a window, and whether a login starts it), **Privacy** (the "Don't remember opened files" switch, followed live from the folder menu and the status bar, and Clear recent files…, which asks first) and **Notifications** (on or off, and the seconds a job must run before the island's user is told). The dialog holds no logic of its own: it reads and writes `ui/settings.py` and calls the window for what a window has to do. Not in it: the scale and fonts (the shell's), and anything the shell owns.
+A modal dialog, opened with Ctrl+, or the gear button at the right end of the toolbar. A choice is stored as it is made; there is only Close. It had grown to one long column of five sections, so it is in tabs, the same way and the same look as Lumina's settings window: pills over a rounded card, a small grey heading over each group of choices, a grey note under a choice only where it needs one.
+
+- **Appearance:** the theme (below) and the density, which says it applies once every window has been closed.
+- **Folders:** the app's view mode and sort order, for the folders without their own, and whether each folder keeps its own (the open windows follow these from the settings); hidden files and the details pane, which also change the window the dialog was opened from; and the one switch that pauses the rules of every folder (#87).
+- **General:** whether a start opens the tabs of last time; whether the process stays without a window, and whether a login starts it; notifications (on or off, and the seconds a job must run before the island's user is told); and recent files (the "Don't remember opened files" switch, followed live from the folder menu and the status bar, and Clear recent files…, which asks first).
+
+The dialog holds no logic of its own: it reads and writes `ui/settings.py` and calls the window for what a window has to do.
+
+**The look without the shell (#30).** The Appearance tab chooses the scheme (Dark or Light, as segments in a rounded well), the accent (a row of the palette's eight colours as dots) and the corners (Square, Tight, Default, Round). These are the shell's own choices with the shell's own values (`integration/appearance.py`, the same module as Lumina's): a `Look` is laid over the theme `theme.py` read, setting the scheme's colours, the accent and `onAccent` from the palette, and the radii the shell's 6, 10 and 14 times the corners' scale. So the app chosen by hand looks as the shell would with the same choices. The answers to the issue's questions:
+
+1. **Free choices, not presets,** but each from the shell's few named values, so there is nothing to type and no theme editor.
+2. **The light scheme is in scope.** It is the shell's paper colours; the window's layers are `surface` plus some text colour, so the cards follow.
+3. **With the shell,** "Follow the shell's look" (on at first) keeps it as it was: the file is followed live, the choices show the shell's look greyed, and turning it off starts from that look, so nothing changes until a choice is made. Without the shell's file the checkbox is hidden and the choices are used whatever it says. A stale file counts as the shell's: turning the checkbox off is the way past it.
+4. **Stored in `filehouse.conf`** (`appearance/follow_shell`, `appearance/scheme`, `appearance/accent`, `appearance/corners`; `settings.chosen_look()` is the look to lay over the theme, or None to follow). A name not known is the default's.
+
+The look applies at once, like the shell's changes (#13): `appearance.apply` with `live`, and the theme watcher lays the chosen look over every file it reads (`ThemeWatcher(adjust=…)`), so a change of the shell's does not undo it. A start, and a start over after every window has closed, applies it too. **Not chosen here:** the fonts and the scales, which stay the shell's or the built-in defaults; a choice of them is left in #30.
+
+**Glass.** The Style choice under the look is Solid or Glass, the shell's two styles (its `docs/GLASS.md`): frosted glass, white on light and smoked on dark, with the desktop blurred behind the window. It is the app's own choice, stored as `appearance/style` (`settings.glass()`), and it stays enabled while the shell's look is followed: the shell does not export its style in `theme.json`, so following it cannot decide this. `appearance.theme_with(base, look, glass)` puts `"style"` in the theme, and on dark glass makes `textSecondary` and `textTertiary` a step brighter, as the shell does. The values are the shell's (`services/Theme.qml`), copied into `style.py` as the scheme colours are into `appearance.py`.
+
+- **The layers.** On glass `style.layer` is translucent: the window is the shell's menu glass (`glassFillStrong`, at its default 80%), the cards and the raised controls the shell's white tints (`cardSurface`, `cardSurfaceHover`), and the cards' border is its hairline. A card's background has the sheen of `GlassSurface` as a gradient, and `ui/glass.py` draws the rim and band over its edge (`glass.light`): the sidebar, the details card, the toolbar's groups, the preview sheet and the menus. The palette stays opaque (each layer as it shows over the window), since it paints what has no glass under it: tooltips, the list of a combo box.
+- **Windows that can be glass.** A window is made with an alpha channel or without one, once: set after it exists, the window is black. So every window the app makes calls `style.translucent(self)` as it is made, in both styles, and a switch of style applies at once. Such a window has no stylesheet background (Qt paints that twice in a translucent window, once for the window and once as the widget's, which made 80% glass 96%): an event filter fills it with `layer("window")`, opaque in the solid style. The `QMessageBox`es and other dialogs Qt makes are not translucent and stay as they are, on the opaque palette.
+- **The blur** (`integration/blur.py`) is `KWindowEffects::enableBlurBehind` from KWindowSystem, called through `ctypes` as `parent_window.py` calls it: there is no Python binding. A window is blurred all over, a menu inside its rounded corners, when shown or resized; a change of style turns it on or off for the windows that are open. `blur.available()` asks `isEffectAvailable` once: it says no until the compositor's reply has been read, so the events are let through once for it (about 2 ms). Without the library, the call or a compositor that blurs, the glass is more solid, the shell's opacity moved 60% of the way to opaque, and grey rather than white on light, as the shell has it without `BackgroundEffect`; the setting says so.
+- **Not covered:** the shell's two opacity sliders (the app uses its default for menus, 80%); the title bar, which is the window decoration's; Qt's own dialogs, as above.
+- **Needs the system's Qt.** KWindowSystem is built against the system's Qt, and the library does not load in a process that runs a PyPI PySide6 (`version Qt_6.11_PRIVATE_API not found`): there is no blur then, and no dialog attached to another app's window either.
 
 ### Preview (`ui/preview.py`, `qt_models/previews.py`)
 
@@ -825,7 +852,7 @@ The theme's `background` and `surfaceRaised` are no longer used. Because every l
 
 **Done.** How it was built:
 
-- **The width** is 800 pixels, unscaled (`NARROW_BELOW` in `ui/main_window.py`), and the layout follows the window's width with no setting to force one (open question 4, decided). A window can't be made narrower than 460 by 360, which is what the narrow toolbar needs.
+- **The width** is 800 pixels, unscaled (`NARROW_BELOW` in `ui/main_window.py`), and the layout follows the window's width with no setting to force one (open question 4, decided). A window can't be made narrower than 500 by 360, which is what the narrow toolbar needs with its stylesheet: at 460 the settings button went into the toolbar's overflow menu.
 - **One window, two arrangements.** Nothing is rebuilt on the switch: the same list, model and selection stay, and each part is told to change its form. That is why the selection and the scroll position survive it.
   - `Sidebar.set_rail`: icons only, at a fixed width, names as tooltips, a line where the "Devices" heading was.
   - `PathBar.set_short`: "… › parent › folder". The "…" opens a menu of the folders above.

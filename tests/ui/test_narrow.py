@@ -88,7 +88,7 @@ def test_the_window_does_not_get_narrower_than_its_toolbar(qtbot, window):
 
     window.resize(100, 100)
 
-    assert window.width() >= style.px(460) and window.height() >= style.px(360)
+    assert window.width() >= style.px(500) and window.height() >= style.px(360)
     toolbar = window.findChild(QToolBar)
     qtbot.waitUntil(
         lambda: button(window, window._actions.folder_menu).isVisible(), timeout=TIMEOUT

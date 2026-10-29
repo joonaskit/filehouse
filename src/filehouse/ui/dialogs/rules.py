@@ -282,6 +282,7 @@ class FolderRulesDialog(QDialog):
 
     def __init__(self, parent, folder, jobs, stay_running=True):
         super().__init__(parent)
+        style.translucent(self)
         self._folder = folder
         self._jobs = jobs
         self._uri = locations.uri(folder)
@@ -601,6 +602,7 @@ class RunRulesDialog(QDialog):
 
     def __init__(self, parent, folder, jobs):
         super().__init__(parent)
+        style.translucent(self)
         self._folder = folder
         self._jobs = jobs
         self._plan = None
