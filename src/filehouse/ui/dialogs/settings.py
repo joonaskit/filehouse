@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from filehouse.integration import appearance, autostart, style, theme
+from filehouse.integration import appearance, autostart, blur, style, theme
 from filehouse.ui import settings
 from filehouse.ui.choices import AccentDots, Segments
 
@@ -43,6 +43,7 @@ class SettingsDialog(QDialog):
 
     def __init__(self, parent, set_show_hidden, clear_recent):
         super().__init__(parent)
+        style.translucent(self)
         self.setWindowTitle("Settings")
         self.setMinimumWidth(style.px(480))
 
@@ -105,6 +106,18 @@ class SettingsDialog(QDialog):
         self._show_look()
         # While following the shell, what it changes shows here
         style.themed.changed.connect(self._show_look)
+
+        # The app's own, followed or not: the shell does not tell its style
+        self.glass = Segments(appearance.STYLES)
+        self.glass.set_value("glass" if settings.glass() else "solid")
+        self.glass.chosen.connect(self._on_glass_chosen)
+        glass = self._form()
+        glass.addRow("Style", self.glass)
+        layout.addLayout(glass)
+        note = "Frosted glass, with the desktop blurred behind, as the shell's glass style."
+        if not blur.available():
+            note += " Without the desktop's blur it is drawn more solid."
+        layout.addWidget(self._note(note))
 
         self.density = QComboBox()
         for key, text in _DENSITIES:
@@ -282,8 +295,14 @@ class SettingsDialog(QDialog):
         )
         self._apply_look()
 
+    def _on_glass_chosen(self, key):
+        settings.set_glass(key == "glass")
+        self._apply_look()
+
     def _apply_look(self):
-        appearance.apply(QApplication.instance(), settings.chosen_look(self._shell))
+        appearance.apply(
+            QApplication.instance(), settings.chosen_look(self._shell), settings.glass()
+        )
 
     def _on_stay_toggled(self, on):
         settings.set_stay_running(on)

@@ -8,19 +8,22 @@ import math
 from functools import cache
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
     QFontDatabase,
     QIcon,
     QPainter,
+    QPainterPath,
     QPalette,
     QPixmap,
+    QRegion,
 )
 from PySide6.QtWidgets import QApplication, QStyle
 
 from filehouse import APP_ID
+from filehouse.integration import blur
 from filehouse.integration import theme as theme_reader
 
 BASE_FONT_PX = 13
@@ -59,6 +62,8 @@ _CLASS_FONTS = (
 
 # The theme in use. Complete defaults until apply() runs, so sizes work in tests.
 _theme = theme_reader.merge(theme_reader.DEFAULTS, {})
+# Whether the glass has the desktop blurred behind it: asked as a theme is applied
+_blurred = False
 # Goes up each time a theme is applied
 generation = 0
 
@@ -162,12 +167,112 @@ _CARD_BORDER = 0.06
 
 def layer(name):
     """The colour of one of the window's layers: "window", the "card"s on it (sidebar,
-    details, toolbar groups, menus) or the "raised" controls on a card."""
+    details, toolbar groups, menus) or the "raised" controls on a card. On glass they
+    are translucent: the window is the glass, the others white tints that let it through."""
+    if glass():
+        return _glass(name)
     base, text, share = color("surface"), color("textPrimary"), _LAYERS[name]
     return QColor(
         round(base.red() + (text.red() - base.red()) * share),
         round(base.green() + (text.green() - base.green()) * share),
         round(base.blue() + (text.blue() - base.blue()) * share),
+    )
+
+
+# The glass style (the shell's `docs/GLASS.md`): frosted glass, white on light and
+# smoked on dark, with the desktop blurred behind it. The values are the shell's
+# (`services/Theme.qml`), as `appearance.py` has its schemes: the window is its menus'
+# glass, at their opacity, and the light on the glass is its `GlassSurface`'s.
+_GLASS_OPACITY = 0.8
+# Without a blur behind, the glass is more solid, and a neutral grey on light, so the
+# text stays readable over a sharp background
+_GLASS_FILL = {
+    ("light", True): (0.975, 0.975, 0.98),
+    ("light", False): (0.91, 0.91, 0.92),
+    ("dark", True): (0.10, 0.10, 0.12),
+    ("dark", False): (0.09, 0.09, 0.11),
+}
+# White at these opacities, light and dark: much fainter on dark, where it would glare
+_GLASS_WHITE = {
+    "card": (0.5, 0.07),
+    "raised": (0.78, 0.13),
+    # A sheen lit from above, fading out before the middle
+    "sheen": (0.38, 0.035),
+    "sheenLow": (0.06, 0.02),
+    # The rim, brightest along the top, and the softer band inside it
+    "rimTop": (0.95, 0.3),
+    "rimSide": (0.22, 0.06),
+    "rimBottom": (0.6, 0.14),
+    "bandTop": (0.3, 0.06),
+    "bandBottom": (0.18, 0.04),
+}
+
+
+def glass():
+    """Whether the glass style is in use (chosen in the settings, `appearance`)."""
+    return _theme.get("style") == "glass"
+
+
+def _light_scheme():
+    return _theme.get("scheme") == "light"
+
+
+def _glass(name):
+    """A colour of the glass: a layer, or the light on it (`_GLASS_WHITE`)."""
+    light = _light_scheme()
+    if name == "window":
+        alpha = _GLASS_OPACITY if _blurred else _GLASS_OPACITY + (1 - _GLASS_OPACITY) * 0.6
+        return QColor.fromRgbF(*_GLASS_FILL[("light" if light else "dark", _blurred)], alpha)
+    if name == "hairline":
+        # What parts the glass from the background: dark on light, light on dark
+        return QColor.fromRgbF(0, 0, 0, 0.09) if light else QColor.fromRgbF(1, 1, 1, 0.1)
+    on_light, on_dark = _GLASS_WHITE[name]
+    return QColor.fromRgbF(1, 1, 1, on_light if light else on_dark)
+
+
+def glass_light():
+    """The light on a body of glass, as colours to paint with: the sheen's top and
+    bottom, the rim's top, sides and bottom, and the band's top and bottom."""
+    names = ("sheen", "sheenLow", "rimTop", "rimSide", "rimBottom", "bandTop", "bandBottom")
+    return {name: _glass(name) for name in names}
+
+
+def _over(top, bottom):
+    """`top` painted over `bottom`."""
+    alpha = top.alphaF() + bottom.alphaF() * (1 - top.alphaF())
+    if alpha <= 0:
+        return QColor(0, 0, 0, 0)
+
+    def mix(a, b):
+        return (a * top.alphaF() + b * bottom.alphaF() * (1 - top.alphaF())) / alpha
+
+    return QColor.fromRgbF(
+        mix(top.redF(), bottom.redF()),
+        mix(top.greenF(), bottom.greenF()),
+        mix(top.blueF(), bottom.blueF()),
+        alpha,
+    )
+
+
+def _solid(name):
+    """A layer as it shows over the window, and the window over the theme's surface:
+    opaque, for what is drawn with no glass under it (the palette's tooltips and the
+    popups of a combo box)."""
+    window = _over(layer("window"), color("surface"))
+    return window if name == "window" else _over(layer(name), window)
+
+
+def _css(colour):
+    return _rgba(colour, round(colour.alphaF(), 3))
+
+
+def _sheen(fill):
+    """A stylesheet background of `fill` with the glass's sheen over it."""
+    light = glass_light()
+    top, low = (_css(_over(light[name], fill)) for name in ("sheen", "sheenLow"))
+    return (
+        f"qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 {top}, "
+        f"stop: 0.45 {_css(fill)}, stop: 1 {low})"
     )
 
 
@@ -223,12 +328,13 @@ def apply(app, theme, live=False):
     radii change at once, but the scales and the fonts stay as they are, because sizes
     and fonts are fixed in the widgets when they are made. Returns whether anything
     changed; `themed.changed` is emitted when it did."""
-    global _theme, generation
+    global _theme, _blurred, generation
     if live:
         theme = {**theme, "scale": _theme["scale"], "fonts": _theme["fonts"]}
         if theme == _theme:
             return False
     _theme = theme
+    _blurred = glass() and blur.available()
     generation += 1
     app.setPalette(_palette())
     font = _font()
@@ -241,9 +347,56 @@ def apply(app, theme, live=False):
     for name in _CLASS_FONTS:
         app.setFont(font, name)
     app.styleHints().setShowShortcutsInContextMenus(True)
+    for widget in app.topLevelWidgets():
+        if widget.property("translucent") and widget.isVisible():
+            _blur_behind(widget)
     if live:
         themed.changed.emit()
     return True
+
+
+def translucent(widget, rounded=False):
+    """Make a window that can be glass: call before it is first shown, since a window
+    is made opaque or not once. It is filled with the window's layer (opaque in the
+    solid style), and on glass the desktop is blurred behind it: all of it, or with
+    `rounded` inside the corners of a menu, which draws its own background."""
+    widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    widget.setProperty("translucent", True)
+    widget.setProperty("rounded", rounded)
+    widget.installEventFilter(_blur_follower())
+
+
+class _BlurFollower(QObject):
+    """Fills a translucent window, and blurs behind it as it is shown or resized while
+    on glass."""
+
+    def eventFilter(self, watched, event):
+        kind = event.type()
+        if kind in (QEvent.Type.Show, QEvent.Type.Resize) and watched.isVisible():
+            _blur_behind(watched)
+        elif kind == QEvent.Type.Paint and not watched.property("rounded"):
+            # Before the window paints and its children do. Not a stylesheet background,
+            # which Qt paints twice in a translucent window: once for the window, once
+            # for the widget
+            painter = QPainter(watched)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            painter.fillRect(event.rect(), layer("window"))
+            painter.end()
+        return False
+
+
+@cache
+def _blur_follower():
+    return _BlurFollower(QApplication.instance())
+
+
+def _blur_behind(widget):
+    if not widget.property("rounded"):
+        blur.behind(widget, _blurred)
+        return
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(widget.rect()), radius("large"), radius("large"))
+    blur.behind(widget, _blurred, QRegion(path.toFillPolygon().toPolygon()))
 
 
 # Icons
@@ -393,7 +546,7 @@ def _palette():
         QPalette.ColorRole.ToolTipBase: "raised",
     }
     for role, name in layers.items():
-        palette.setColor(role, layer(name))
+        palette.setColor(role, _solid(name))
     for role in (
         QPalette.ColorRole.WindowText,
         QPalette.ColorRole.Text,
@@ -431,20 +584,25 @@ def _stylesheet():
     small, medium, large = radius("small"), radius("medium"), radius("large")
     hover, pressed, divider = overlay(0.08), overlay(0.14), overlay(_DIVIDER)
     selected = tint("accent", 0.22)
-    window, card, raised = (layer(name).name() for name in ("window", "card", "raised"))
+    window, card, raised = (_css(layer(name)) for name in ("window", "card", "raised"))
     card_border = overlay(_CARD_BORDER)
+    # What is drawn on a card, and what a card is drawn with: on glass, lit from above
+    card_fill, bar, menu, menu_border = card, window, card, divider
+    if glass():
+        card_border = menu_border = _css(_glass("hairline"))
+        card_fill, bar, menu = _sheen(layer("card")), "transparent", _sheen(layer("window"))
     small_font = theme_reader.font_scaled(_theme, 11)
     control, group = dense("control_height"), dense("group_padding")
     tab_padding, menu_padding = px(dense("tab_padding")), px(dense("menu_padding"))
     return f"""
         QToolBar {{
             border: none; spacing: {px(8)}px; padding: {px(8)}px;
-            background: {window};
+            background: {bar};
         }}
 
         /* The rounded groups in the toolbar, the sidebar and the details card */
         #group, #card {{
-            background: {card}; border: 1px solid {card_border}; border-radius: {large}px;
+            background: {card_fill}; border: 1px solid {card_border}; border-radius: {large}px;
         }}
         #group {{ border-radius: {radius_within("large", control + 2 * group)}px; }}
         #group QToolButton {{
@@ -501,7 +659,7 @@ def _stylesheet():
         /* The settings' tabs: pills over a rounded card, as the menus' items. Not the
            window's tabs, which are cards themselves */
         #settingsTabs::pane {{
-            border: 1px solid {card_border}; border-radius: {large}px; background: {card};
+            border: 1px solid {card_border}; border-radius: {large}px; background: {card_fill};
             top: -1px;
         }}
         #settingsTabs > QTabBar::tab {{
@@ -534,7 +692,7 @@ def _stylesheet():
         #segments QPushButton:checked {{ background: {overlay(0.12)}; font-weight: 600; }}
 
         #sidebar {{
-            padding: {px(8)}px; background: {card}; border: 1px solid {card_border};
+            padding: {px(8)}px; background: {card_fill}; border: 1px solid {card_border};
             border-radius: {large}px;
         }}
         QListWidget#sidebar::item {{ padding: 0 {px(6)}px; border-radius: {medium}px; }}
@@ -567,9 +725,11 @@ def _stylesheet():
         #card QPushButton:pressed {{ background: {pressed}; }}
 
         QMenu {{
-            background: {card}; border: 1px solid {divider};
+            background: {_css(_solid("card"))}; border: 1px solid {divider};
             border-radius: {large}px; padding: {px(6)}px;
         }}
+        /* A menu with its corners shown, and on glass the desktop blurred behind it */
+        QMenu[translucent="true"] {{ background: {menu}; border-color: {menu_border}; }}
         QMenu::item {{
             padding: {menu_padding}px {px(14)}px; border-radius: {medium}px; margin: 0 {px(2)}px;
         }}

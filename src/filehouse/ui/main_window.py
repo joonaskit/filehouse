@@ -151,6 +151,7 @@ class MainWindow(QMainWindow):
         `session` is what `session_to_open` gave: the tabs to open, `location` being
         the first of them."""
         super().__init__()
+        style.translucent(self)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(style.app_icon())
         self.setMinimumSize(style.px(_MINIMUM_SIZE[0]), style.px(_MINIMUM_SIZE[1]))

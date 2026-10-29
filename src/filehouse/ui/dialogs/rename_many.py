@@ -43,6 +43,7 @@ class RenameManyDialog(QDialog):
 
     def __init__(self, parent, items, renamed, background):
         super().__init__(parent)
+        style.translucent(self)
         self._items = list(items)
         self._renamed = renamed
         self._background = background

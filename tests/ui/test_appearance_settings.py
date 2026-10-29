@@ -38,7 +38,7 @@ def restore_theme(qapp):
 
 
 def open_dialog(qtbot, qapp):
-    appearance.apply(qapp, settings.chosen_look(), live=False)
+    appearance.apply(qapp, settings.chosen_look(), settings.glass(), live=False)
     dialog = SettingsDialog(None, print, print)
     qtbot.addWidget(dialog)
     return dialog
@@ -131,3 +131,24 @@ def test_a_closed_dialog_no_longer_follows_the_theme(qtbot, qapp):
     # Would raise in _show_look on a dialog that is gone, were it still connected
     appearance.apply(qapp, Look(accent="red"))
     assert accent(qapp) == "#ff453a"
+
+
+def test_glass_is_chosen_here_applies_at_once_and_stays_while_following(qtbot, qapp, shell):
+    dialog = open_dialog(qtbot, qapp)
+    assert dialog.glass.value() == "solid" and not style.glass()
+    # The shell does not tell its style: the choice is the app's, followed or not
+    assert dialog.glass.isEnabled() and not dialog.scheme.isEnabled()
+
+    dialog.glass.button("glass").click()
+    assert settings.glass() and style.glass()
+    # Still the shell's look
+    assert accent(qapp) == "#30d158"
+
+    dialog.glass.button("solid").click()
+    assert not settings.glass() and not style.glass()
+
+
+def test_glass_is_remembered(qtbot, qapp):
+    settings.set_glass(True)
+    dialog = open_dialog(qtbot, qapp)
+    assert dialog.glass.value() == "glass"

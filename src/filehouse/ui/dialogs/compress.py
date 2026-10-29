@@ -20,6 +20,7 @@ class CompressDialog(QDialog):
 
     def __init__(self, parent, what, formats, name, apply):
         super().__init__(parent)
+        style.translucent(self)
         self._formats = formats
         self._suggest = name
         self._apply = apply

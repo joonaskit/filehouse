@@ -146,6 +146,7 @@ filehouse/
 │   │   ├── parent_window.py     a dialog as the child of another app's window
 │   │   ├── theme_watcher.py     follows the theme file while the app runs
 │   │   ├── appearance.py        the look chosen by hand over the shell's theme (#30)
+│   │   ├── blur.py              KWin's blur behind a window, for the glass style
 │   │   ├── motion.py            how long things take to move, at the desktop's animation speed
 │   │   ├── autostart.py         the entry that starts the app with the session
 │   │   ├── places.py            the places file Dolphin keeps (user-places.xbel), edited in place
@@ -163,6 +164,7 @@ filehouse/
 │       ├── pane.py              one folder: model, sort proxy, list, history, selection
 │       ├── chooser.py           the dialog other apps open and save with
 │       ├── groups.py            the rounded groups of a toolbar
+│       ├── glass.py             the light on a card of glass: its rim and band
 │       ├── preview.py           the window Space opens: a larger look at the selection
 │       ├── media.py             plays video and audio in the preview (QtMultimedia, optional)
 │       ├── tab.py               one or two panes and the active one
@@ -582,6 +584,14 @@ The dialog holds no logic of its own: it reads and writes `ui/settings.py` and c
 4. **Stored in `filehouse.conf`** (`appearance/follow_shell`, `appearance/scheme`, `appearance/accent`, `appearance/corners`; `settings.chosen_look()` is the look to lay over the theme, or None to follow). A name not known is the default's.
 
 The look applies at once, like the shell's changes (#13): `appearance.apply` with `live`, and the theme watcher lays the chosen look over every file it reads (`ThemeWatcher(adjust=…)`), so a change of the shell's does not undo it. A start, and a start over after every window has closed, applies it too. **Not chosen here:** the fonts and the scales, which stay the shell's or the built-in defaults; a choice of them is left in #30.
+
+**Glass.** The Style choice under the look is Solid or Glass, the shell's two styles (its `docs/GLASS.md`): frosted glass, white on light and smoked on dark, with the desktop blurred behind the window. It is the app's own choice, stored as `appearance/style` (`settings.glass()`), and it stays enabled while the shell's look is followed: the shell does not export its style in `theme.json`, so following it cannot decide this. `appearance.theme_with(base, look, glass)` puts `"style"` in the theme, and on dark glass makes `textSecondary` and `textTertiary` a step brighter, as the shell does. The values are the shell's (`services/Theme.qml`), copied into `style.py` as the scheme colours are into `appearance.py`.
+
+- **The layers.** On glass `style.layer` is translucent: the window is the shell's menu glass (`glassFillStrong`, at its default 80%), the cards and the raised controls the shell's white tints (`cardSurface`, `cardSurfaceHover`), and the cards' border is its hairline. A card's background has the sheen of `GlassSurface` as a gradient, and `ui/glass.py` draws the rim and band over its edge (`glass.light`): the sidebar, the details card, the toolbar's groups, the preview sheet and the menus. The palette stays opaque (each layer as it shows over the window), since it paints what has no glass under it: tooltips, the list of a combo box.
+- **Windows that can be glass.** A window is made with an alpha channel or without one, once: set after it exists, the window is black. So every window the app makes calls `style.translucent(self)` as it is made, in both styles, and a switch of style applies at once. Such a window has no stylesheet background (Qt paints that twice in a translucent window, once for the window and once as the widget's, which made 80% glass 96%): an event filter fills it with `layer("window")`, opaque in the solid style. The `QMessageBox`es and other dialogs Qt makes are not translucent and stay as they are, on the opaque palette.
+- **The blur** (`integration/blur.py`) is `KWindowEffects::enableBlurBehind` from KWindowSystem, called through `ctypes` as `parent_window.py` calls it: there is no Python binding. A window is blurred all over, a menu inside its rounded corners, when shown or resized; a change of style turns it on or off for the windows that are open. `blur.available()` asks `isEffectAvailable` once: it says no until the compositor's reply has been read, so the events are let through once for it (about 2 ms). Without the library, the call or a compositor that blurs, the glass is more solid, the shell's opacity moved 60% of the way to opaque, and grey rather than white on light, as the shell has it without `BackgroundEffect`; the setting says so.
+- **Not covered:** the shell's two opacity sliders (the app uses its default for menus, 80%); the title bar, which is the window decoration's; Qt's own dialogs, as above.
+- **Needs the system's Qt.** KWindowSystem is built against the system's Qt, and the library does not load in a process that runs a PyPI PySide6 (`version Qt_6.11_PRIVATE_API not found`): there is no blur then, and no dialog attached to another app's window either.
 
 ### Preview (`ui/preview.py`, `qt_models/previews.py`)
 

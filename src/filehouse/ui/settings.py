@@ -266,6 +266,15 @@ def set_look(chosen):
     store.setValue("appearance/corners", chosen.corners)
 
 
+def glass():
+    """Whether the app is in the glass style; solid until it is chosen."""
+    return _store().value("appearance/style", "solid") == "glass"
+
+
+def set_glass(on):
+    _store().setValue("appearance/style", "glass" if on else "solid")
+
+
 def chosen_look(shell=None):
     """The look to lay over the shell's theme: None to follow the shell, which is only
     while it is there (`shell`: whether it is, found when not given) and followed."""

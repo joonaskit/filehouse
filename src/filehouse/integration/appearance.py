@@ -4,7 +4,9 @@ the app chosen by hand looks as the shell would with the same choices (#30). The
 as Lumina's.
 
 `theme.py` reads the shell's file. A `Look` is laid over what it read; the fonts and
-the scales stay the shell's, or the built-in defaults without it.
+the scales stay the shell's, or the built-in defaults without it. The glass style is
+the app's own choice, beside the look: the shell does not export its style, so it is
+chosen here whether the look follows the shell or not.
 """
 
 import copy
@@ -16,6 +18,8 @@ from PySide6.QtGui import QColor
 from filehouse.integration import style, theme
 
 SCHEMES = (("dark", "Dark"), ("light", "Light"))
+# The shell's styles (`docs/GLASS.md` in its repo), on either scheme
+STYLES = (("solid", "Solid"), ("glass", "Glass"))
 # The shell's accents, in its order; the colours are the theme's palette, by name
 ACCENTS = (
     ("blue", "Blue"),
@@ -35,6 +39,9 @@ CORNERS = (
     ("round", "Round", 1.5),
 )
 _RADII = {"small": 6, "medium": 10, "large": 14}
+# On dark glass the quieter text is a step brighter, since the grey behind it shows
+# through (the shell's `textSecondary` and `textTertiary` on glass)
+_DARK_GLASS_TEXT = {"textSecondary": "#b4b4b9", "textTertiary": "#88888d"}
 
 # The shell's colours for each scheme, as it exports them: the island's background,
 # the cards and their hover, and the text
@@ -95,12 +102,19 @@ def look_of(made):
     return Look(made.get("scheme", "dark"), accents[0] if accents else "blue", corners)
 
 
-def theme_with(base, look):
-    """`base`, a theme as `theme.load_theme` gives it, with `look` over it: or `base` as
-    it is for no look (following the shell)."""
-    if look is None:
-        return base
+def theme_with(base, look, glass=False):
+    """`base`, a theme as `theme.load_theme` gives it, with `look` over it (none when
+    following the shell), in the glass style or not."""
     made = copy.deepcopy(base)
+    made["style"] = "glass" if glass else "solid"
+    if look is not None:
+        _lay(made, look)
+    if glass and made.get("scheme") != "light":
+        made["colors"].update(_DARK_GLASS_TEXT)
+    return made
+
+
+def _lay(made, look):
     made["scheme"] = look.scheme
     made["colors"].update(_SCHEME_COLORS[look.scheme])
     accent = made["colors"]["palette"][look.accent]
@@ -109,14 +123,13 @@ def theme_with(base, look):
     scale = next(scale for name, _label, scale in CORNERS if name == look.corners)
     # As the shell rounds them (Math.round): half up
     made["radius"] = {name: int(size * scale + 0.5) for name, size in _RADII.items()}
-    return made
 
 
-def apply(app, look, live=True):
+def apply(app, look, glass=False, live=True):
     """Style `app` with the shell's theme as it is now and `look` over it (None: the
-    shell's). Live, as the shell's changes are: the colours and the corners change at
-    once, the fonts and the scales stay."""
-    return style.apply(app, theme_with(theme.load_theme(), look), live=live)
+    shell's), glass or not. Live, as the shell's changes are: the colours, the corners
+    and the style change at once, the fonts and the scales stay."""
+    return style.apply(app, theme_with(theme.load_theme(), look, glass), live=live)
 
 
 def _on(accent):

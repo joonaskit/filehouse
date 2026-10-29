@@ -249,8 +249,6 @@ class FolderView(QWidget):
         self._message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._message.setWordWrap(True)
         self._message.setEnabled(False)
-        self._message.setAutoFillBackground(True)
-        self._message.setBackgroundRole(self._tree.viewport().backgroundRole())
 
         self._stack = QStackedLayout(self)
         self._stack.setContentsMargins(0, 0, 0, 0)

@@ -175,7 +175,7 @@ class Windows:
         if self._stale and not self.windows and not self.dialogs:
             self._stale = False
             style.set_density(settings.density())
-            appearance.apply(self._app, settings.chosen_look(), live=False)
+            appearance.apply(self._app, settings.chosen_look(), settings.glass(), live=False)
 
     def quit_when_done(self, close=False):
         """`filehouse --quit`: not to stay any more. At once with nothing open, and
@@ -220,13 +220,13 @@ def run(args, instance):
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     style.set_density(settings.density())
-    appearance.apply(app, settings.chosen_look(), live=False)
+    appearance.apply(app, settings.chosen_look(), settings.glass(), live=False)
     # The shell's accent colour or corner roundness changed: follow it without a restart,
     # under the look chosen by hand if there is one
     ThemeWatcher(
         app,
         parent=app,
-        adjust=lambda read: appearance.theme_with(read, settings.chosen_look()),
+        adjust=lambda read: appearance.theme_with(read, settings.chosen_look(), settings.glass()),
     )
 
     # One set of jobs for the process: every window shows them, and so will the island

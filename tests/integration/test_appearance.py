@@ -17,7 +17,21 @@ def shell_theme(**fields):
 
 def test_no_look_is_the_shells_theme_as_it_is():
     base = shell_theme(colors={"accent": "#30d158"})
-    assert appearance.theme_with(base, None) is base
+    assert appearance.theme_with(base, None) == {**base, "style": "solid"}
+    assert "style" not in base
+
+
+def test_glass_is_chosen_beside_the_look_and_brightens_the_quiet_text_on_dark():
+    base = shell_theme(colors={"accent": "#30d158"})
+    made = appearance.theme_with(base, None, glass=True)
+    assert made["style"] == "glass"
+    # Still the shell's look
+    assert made["colors"]["accent"] == "#30d158"
+    assert made["colors"]["textSecondary"] == "#b4b4b9"
+    assert made["colors"]["textTertiary"] == "#88888d"
+    # On light the text stays as the scheme has it
+    light = appearance.theme_with(base, Look("light"), glass=True)
+    assert light["colors"]["textSecondary"] == "#575147"
 
 
 def test_the_light_scheme_has_the_shells_paper_colours():
