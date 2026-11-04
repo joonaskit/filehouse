@@ -14,7 +14,7 @@ from shiboken6 import isValid
 
 from filehouse import APP_ID
 from filehouse.core import locations
-from filehouse.integration import style, theme
+from filehouse.integration import appearance, style
 from filehouse.integration.island import IslandClient, IslandReporter
 from filehouse.integration.notifications import NotificationReporter, Notifier
 from filehouse.integration.portal import FileChooserPortal
@@ -175,7 +175,7 @@ class Windows:
         if self._stale and not self.windows and not self.dialogs:
             self._stale = False
             style.set_density(settings.density())
-            style.apply(self._app, theme.load_theme())
+            appearance.apply(self._app, settings.chosen_look(), settings.glass(), live=False)
 
     def quit_when_done(self, close=False):
         """`filehouse --quit`: not to stay any more. At once with nothing open, and
@@ -220,9 +220,14 @@ def run(args, instance):
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     style.set_density(settings.density())
-    style.apply(app, theme.load_theme())
-    # The shell's accent colour or corner roundness changed: follow it without a restart
-    ThemeWatcher(app, parent=app)
+    appearance.apply(app, settings.chosen_look(), settings.glass(), live=False)
+    # The shell's accent colour or corner roundness changed: follow it without a restart,
+    # under the look chosen by hand if there is one
+    ThemeWatcher(
+        app,
+        parent=app,
+        adjust=lambda read: appearance.theme_with(read, settings.chosen_look(), settings.glass()),
+    )
 
     # One set of jobs for the process: every window shows them, and so will the island
     jobs = JobModel(app)

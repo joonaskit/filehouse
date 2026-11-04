@@ -95,6 +95,7 @@ class Chooser(QDialog):
         """`request` is the portal's `Request`; `favourites` the process's list of
         favourite folders, shown in the sidebar when there is one."""
         super().__init__(parent)
+        style.translucent(self)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(style.app_icon())
         self.setMinimumSize(style.px(_MINIMUM_SIZE[0]), style.px(_MINIMUM_SIZE[1]))

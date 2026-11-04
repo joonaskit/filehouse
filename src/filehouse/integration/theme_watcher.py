@@ -4,6 +4,9 @@ The shell replaces `theme.json` atomically, so a watch on the file alone is lost
 at the first change: the directory is watched too, or its parent while the shell
 has never run and the directory isn't there. A change is read after a short while,
 since a write can arrive as several events.
+
+`adjust` is given each theme read and returns the one to apply: the look chosen by
+hand laid over it (`appearance.theme_with`).
 """
 
 import json
@@ -17,9 +20,10 @@ _SETTLE_MS = 200
 
 
 class ThemeWatcher(QObject):
-    def __init__(self, app, path=None, settle_ms=_SETTLE_MS, parent=None):
+    def __init__(self, app, path=None, settle_ms=_SETTLE_MS, parent=None, adjust=None):
         super().__init__(parent)
         self._app = app
+        self._adjust = adjust or (lambda read: read)
         self._path = os.fspath(path or theme.theme_path())
         self._watcher = QFileSystemWatcher(self)
         self._watcher.directoryChanged.connect(self._on_changed)
@@ -57,4 +61,4 @@ class ThemeWatcher(QObject):
                 json.load(f)
         except (OSError, ValueError):
             return
-        style.apply(self._app, theme.load_theme(self._path), live=True)
+        style.apply(self._app, self._adjust(theme.load_theme(self._path)), live=True)

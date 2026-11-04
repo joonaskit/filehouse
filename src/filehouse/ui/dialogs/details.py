@@ -8,6 +8,7 @@ from filehouse.integration import style
 class ErrorDetails(QDialog):
     def __init__(self, job, parent=None):
         super().__init__(parent)
+        style.translucent(self)
         self.setWindowTitle("What went wrong")
         self.resize(style.px(560), style.px(320))
 

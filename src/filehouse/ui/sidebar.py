@@ -20,7 +20,7 @@ from filehouse.core import locations
 from filehouse.integration import style
 from filehouse.qt_models.favourites import Favourite
 from filehouse.qt_models.workers import Background
-from filehouse.ui import clipboard, menus, settings
+from filehouse.ui import clipboard, glass, menus, settings
 from filehouse.ui.folder_view import history_step
 
 _EntryRole = Qt.ItemDataRole.UserRole
@@ -164,6 +164,7 @@ class Sidebar(QListWidget):
         `favourites` the Favourites to show in a group of their own, if any."""
         super().__init__(parent)
         self.setObjectName("sidebar")
+        glass.light(self)
         # The app's own font, and set here: left alone, the desktop gives a list a font of
         # its own (a size in points) when the window is first shown, and what is read from
         # it before and after, such as the size of a heading, is not the same

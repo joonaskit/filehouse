@@ -30,7 +30,7 @@ pytest tests/ui            # runs offscreen (set in tests/conftest.py)
 
 Every push runs `ruff` and `pytest` on GitHub (`.github/workflows/tests.yml`), in a Fedora container and as an ordinary user: as root the tests of what happens when a file cannot be read or written are skipped. It installs `python3-libarchive-c`, so the archive tests run there even where they are skipped locally.
 
-Do not `pip install PySide6` into the venv: mixing a PyPI Qt with the system PyGObject risks losing the shared GLib event loop the design depends on.
+Do not `pip install PySide6` into the venv: mixing a PyPI Qt with the system PyGObject risks losing the shared GLib event loop the design depends on. A venv with system site packages also reads the user's own (`~/.local/lib`), ahead of the system's, so a PySide6 another app installed with `pip install --user` wins there too, and KDE's libraries (blur, `parent_window.py`) no longer load. `install.sh` puts `-s` on the app's command for that; for the tests, run with `PYTHONNOUSERSITE=1`.
 
 ## Naming
 

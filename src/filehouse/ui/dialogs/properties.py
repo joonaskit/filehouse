@@ -13,6 +13,7 @@ class PropertiesDialog(QDialog):
     def __init__(self, selected, parent=None):
         """`selected` is one location or more."""
         super().__init__(parent)
+        style.translucent(self)
         self._locale = QLocale()
         self._form = QFormLayout()
         self._form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)

@@ -4,6 +4,7 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QToolButton
 
 from filehouse.integration import style
+from filehouse.ui import glass
 
 
 def group(*actions):
@@ -11,6 +12,8 @@ def group(*actions):
     layout."""
     frame = QFrame()
     frame.setObjectName("group")
+    control = style.dense("control_height") + 2 * style.dense("group_padding")
+    glass.light(frame, lambda: style.radius_within("large", control))
     layout = QHBoxLayout(frame)
     padding = style.px(style.dense("group_padding"))
     layout.setContentsMargins(padding, padding, padding, padding)

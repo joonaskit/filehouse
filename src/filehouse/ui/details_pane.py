@@ -26,6 +26,7 @@ from filehouse.qt_models import dates, thumbnails
 from filehouse.qt_models.details import Reading
 from filehouse.qt_models.icons import icon_for_content_type
 from filehouse.qt_models.measure import Measurement
+from filehouse.ui import glass
 
 _ICON = 64
 _COMPACT_ICON = 40
@@ -81,6 +82,7 @@ class DetailsPane(QFrame):
         to close it, and no Open button."""
         super().__init__(parent)
         self.setObjectName("card")
+        glass.light(self)
         self.setMinimumWidth(style.px(220))
         self._compact = compact
         self._locale = QLocale()

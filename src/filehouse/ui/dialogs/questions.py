@@ -38,6 +38,7 @@ class PasswordBox(QDialog):
 
     def __init__(self, question, parent=None):
         super().__init__(parent)
+        style.translucent(self)
         self.question = question
         name = locations.basename(question.location)
         self.setWindowTitle("Password needed")

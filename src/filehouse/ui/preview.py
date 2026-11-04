@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from filehouse.integration import style
 from filehouse.qt_models import dates, previews
 from filehouse.qt_models.icons import icon_for_content_type
-from filehouse.ui import media
+from filehouse.ui import glass, media
 
 # How much of the main window's size the preview opens with
 _SHARE = 0.8
@@ -262,6 +262,7 @@ class PreviewWindow(QWidget):
             super().__init__(parent)
         else:
             super().__init__(parent, Qt.WindowType.Tool)
+            style.translucent(self)
             self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
             self.setWindowTitle("Preview")
         self._sheet = sheet
@@ -324,6 +325,7 @@ class PreviewWindow(QWidget):
         if sheet:
             self.setObjectName("card")
             self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            glass.light(self)
             self.close_button = QToolButton()
             self.close_button.setIcon(style.icon("window-close-symbolic", "window-close"))
             self.close_button.setToolTip("Close")

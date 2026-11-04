@@ -59,7 +59,7 @@ _COPIED_MS = 2500
 # rail of icons, the actions in a bar at the bottom, the details as a sheet
 NARROW_BELOW = 800
 # The least the narrow layout needs, unscaled: its toolbar side by side, a few rows
-_MINIMUM_SIZE = (460, 360)
+_MINIMUM_SIZE = (500, 360)
 DETAILS, ICONS = settings.DETAILS, settings.ICONS
 
 KEEP_RUNNING, CANCEL_ALL, STAY_OPEN = range(3)
@@ -151,6 +151,7 @@ class MainWindow(QMainWindow):
         `session` is what `session_to_open` gave: the tabs to open, `location` being
         the first of them."""
         super().__init__()
+        style.translucent(self)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowIcon(style.app_icon())
         self.setMinimumSize(style.px(_MINIMUM_SIZE[0]), style.px(_MINIMUM_SIZE[1]))

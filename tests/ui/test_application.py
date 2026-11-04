@@ -48,7 +48,8 @@ class Look:
     def set_density(self, density):
         self.read.append(density)
 
-    def apply(self, app, theme):
+    def apply(self, app, look, glass=False, live=True):
+        # The shell's theme with the look chosen by hand over it
         self.read.append("theme")
 
 
@@ -56,6 +57,7 @@ class Look:
 def look(monkeypatch):
     look = Look()
     monkeypatch.setattr(application, "style", look)
+    monkeypatch.setattr(application, "appearance", look)
     return look
 
 

@@ -18,6 +18,7 @@ class NameDialog(QDialog):
 
     def __init__(self, parent, title, label, name, apply, select_to=None):
         super().__init__(parent)
+        style.translucent(self)
         self._apply = apply
         self.busy = False
         self.setWindowTitle(title)
